@@ -122,33 +122,39 @@ is inert on every host and the second is schedulable.
 | 2c. The variable | `just fleet apply <spoke> [--yes]` | `~23 add, ~23 destroy` per spoke | **Yes** |
 
 Stage 2c reads as alarming and is not: per spoke it replaces ONE real resource,
-`module.agent.aws_instance.agent`, and 22 dependent `aws_ec2_tag` resources that
-follow the new ENI and root volume. Confirm in the plan that
-`module.hub.aws_instance.hub` says `Refreshing state` and nothing more, and that
-the mailbox EBS volume is untouched -- it outlives the instance by design.
+`module.agent.aws_instance.agent`. The rest are dependent `aws_ec2_tag` entries
+following the new ENI and root volume -- two `for_each` resources over the
+root's effective `default_tags`, so the count is `2 x <number of default tags>`
+(22 with today's eleven tags, and it moves when `org_tags` does). Confirm in the
+plan that `module.hub.aws_instance.hub` says `Refreshing state` and nothing
+more, and that the mailbox EBS volume is untouched -- it outlives the instance
+by design.
 
-**A cross-account value does not reach a spoke by rendering alone.** The
-hub-hosting root gets it by Terraform reference; every other spoke renders
-`= var.<name>` against a variable that defaults to `""`, and nothing populates
-it, exactly like `dist_bucket`. Append it to each non-hub spoke's gitignored
-`terraform.tfvars` BEFORE stage 2c:
+**A cross-account value must come from the manifest, never a hand-edited
+tfvars.** The hub-hosting root gets such a value by Terraform reference; every
+other spoke renders `= var.<name>` against a variable defaulting to `""`,
+exactly like `dist_bucket`. It is tempting to append the line to each spoke's
+`terraform.tfvars` -- do not. `renderTfvars` REGENERATES that file and preserves
+only the minted `coms_auth_token`, so the next `just fleet render` deletes it,
+and `just fleet deploy` renders before it applies. Put the value in
+`deploy/fleet.yaml` under `defaults` and let render emit it:
 
-```bash
-for s in <non-hub spokes>; do
-  printf '<var> = "<value>"\n' >> deploy/accounts/$s/terraform.tfvars
-done
+```yaml
+defaults:
+  monitor_report_email: true
+  monitor_report_sns_topic_arn: "arn:aws:sns:<region>:<hub-account>:pi-coms-monitor-reports"
 ```
 
-Skipping that produces a green apply, a healthy host, and a silently disabled
+Miss it and you get a green apply, a healthy host, and a silently disabled
 feature: the userdata carries `VAR=''`, the bootstrap correctly skips an empty
 value, and nothing anywhere reports a problem. Verify on the host rather than
 trusting the apply:
 
 ```bash
-grep PI_MONITOR_<VAR> /home/piagent/.coms-env   # absent means the tfvar was missed
+grep PI_MONITOR_<VAR> /home/piagent/.coms-env   # absent means the value never reached userdata
 ```
 
-Do stage 2c on one **dev** spoke first. That is where the missing tfvar above
+Do stage 2c on one **dev** spoke first. That is where the empty variable above
 was caught, at the cost of one dev instance instead of six production ones.
 
 ## Code distribution: the fleet bundle

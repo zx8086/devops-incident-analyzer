@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { parseManifest } from "../scripts/fleet/manifest.ts";
-import { hasToken, renderRoot, withToken } from "../scripts/fleet/render.ts";
+import { hasToken, renderRoot, renderTfvars, withToken } from "../scripts/fleet/render.ts";
 
 const EXAMPLE = readFileSync(path.join(import.meta.dir, "..", "deploy", "fleet.example.yaml"), "utf-8");
 const manifest = parseManifest(EXAMPLE);
@@ -252,6 +252,53 @@ describe("fleet root renderer (SIO-1653)", () => {
 		if (!hubRoot) throw new Error("the example manifest has no hosts_hub spoke");
 		const hub = renderRoot(tagged, hubRoot)["main.tf"];
 		expect(hub).toContain('name = "pi-coms-monitor-reports"');
+	});
+
+	// SIO-1821 follow-up (Greptile P1, verified): renderTfvars REGENERATES the
+	// file and preserves only coms_auth_token, so a hand-appended line is
+	// silently deleted by the next render -- and `just fleet deploy` renders
+	// before it applies. The ARN therefore has to come from the manifest.
+	test("the report topic arn is rendered into tfvars, not hand-added", () => {
+		const text = EXAMPLE.replace(
+			/^(defaults:\n)/m,
+			'$1  monitor_report_email: true\n  monitor_report_sns_topic_arn: "arn:aws:sns:eu-central-1:111111111111:pi-coms-monitor-reports"\n',
+		);
+		const tagged = parseManifest(text);
+		for (const name of Object.keys(tagged.spokes)) {
+			const tfvars = renderRoot(tagged, name)["terraform.tfvars"];
+			if (tagged.spokes[name]?.hosts_hub) {
+				// The hub root gets it by Terraform reference; a tfvar would be dead weight.
+				expect(tfvars).not.toContain("monitor_report_sns_topic_arn");
+			} else {
+				expect(tfvars).toContain(
+					'monitor_report_sns_topic_arn = "arn:aws:sns:eu-central-1:111111111111:pi-coms-monitor-reports"',
+				);
+			}
+		}
+	});
+
+	test("re-rendering keeps the topic arn (the hand-edit failure mode)", () => {
+		const text = EXAMPLE.replace(
+			/^(defaults:\n)/m,
+			'$1  monitor_report_email: true\n  monitor_report_sns_topic_arn: "arn:aws:sns:eu-central-1:111111111111:pi-coms-monitor-reports"\n',
+		);
+		const tagged = parseManifest(text);
+		const spoke = Object.keys(tagged.spokes).find((n) => !tagged.spokes[n]?.hosts_hub);
+		if (!spoke) throw new Error("no non-hub spoke in the example manifest");
+		const first = renderRoot(tagged, spoke)["terraform.tfvars"];
+		const second = renderTfvars(tagged, spoke, first);
+		expect(second).toContain("monitor_report_sns_topic_arn");
+		// And the minted token still survives, as before.
+		const withToken = first.replace(/coms_auth_token = "[^"]*"/, 'coms_auth_token = "MINTED"');
+		expect(renderTfvars(tagged, spoke, withToken)).toContain('coms_auth_token = "MINTED"');
+	});
+
+	test("no topic arn in the manifest renders no tfvar line", () => {
+		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
+		const tagged = parseManifest(text);
+		for (const name of Object.keys(tagged.spokes)) {
+			expect(renderRoot(tagged, name)["terraform.tfvars"]).not.toContain("monitor_report_sns_topic_arn");
+		}
 	});
 
 	test("org_tags may not override a pi-coms tag", () => {

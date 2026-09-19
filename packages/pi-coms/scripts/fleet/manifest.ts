@@ -138,6 +138,16 @@ export const FleetManifestSchema = z.object({
 		// reporting gap rather than a per-spoke preference. Absent renders
 		// nothing, so an unset manifest produces exactly today's roots.
 		monitor_report_email: z.boolean().optional(),
+		// SIO-1821: the topic's ARN, which is CROSS-ACCOUNT -- the hub-hosting
+		// root gets it by Terraform reference, every other spoke needs the value.
+		// It lives here rather than being hand-added to each spoke's tfvars
+		// because renderTfvars REGENERATES that file (preserving only the minted
+		// token), so a hand-added line is deleted by the next render -- and
+		// `just fleet deploy` renders before it applies.
+		monitor_report_sns_topic_arn: z
+			.string()
+			.regex(/^arn:aws[a-z-]*:sns:[a-z0-9-]+:\d{12}:[\w-]+$/, "must be an SNS TOPIC arn, not a subscription arn")
+			.optional(),
 		org_tags: OrgTagsSchema.optional(),
 	}),
 	spokes: z.record(z.string().regex(/^[a-z0-9-]+$/), SpokeSchema),
