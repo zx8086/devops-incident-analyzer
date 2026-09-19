@@ -242,13 +242,23 @@ resource "aws_sns_topic_policy" "monitor_reports" {
       // swallows the resulting 403, so the feature would look enabled and
       // deliver no email at all.
       //
-      // Both conditions must hold: inside this AWS Organization AND a role whose
-      // name ends -agent. aws:PrincipalArn resolves an assumed-role session to
-      // the ROLE arn, never the session arn, so matching sts::...:assumed-role/
-      // would never fire. ArnLike is the operator AWS recommends for ARNs.
+      // Both conditions must hold: inside this AWS Organization AND the role the
+      // monitor actually publishes as.
+      //
+      // That role is DevOpsAgentReadOnly, NOT the *-agent instance role. The
+      // bootstrap sets AWS_PROFILE=devops-readonly whenever READONLY_ROLE_ARN is
+      // present, so the whole piagent workload -- agent, monitor, CLI -- assumes
+      // it, and the sns:Publish grant is on that role's pi-coms-extensions
+      // policy. The dist bucket above guards a different principal (the instance
+      // role writing checkpoints), so its "*-agent" pattern is right there and
+      // wrong here; copying it rejected every intended publisher.
+      //
+      // aws:PrincipalArn resolves an assumed-role session to the ROLE arn, never
+      // the session arn, so matching sts::...:assumed-role/ would never fire.
+      // ArnLike is the operator AWS recommends for ARNs.
       Condition = {
         StringEquals = { "aws:PrincipalOrgID" = var.org_id }
-        ArnLike      = { "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent" }
+        ArnLike      = { "aws:PrincipalArn" = "arn:aws:iam::*:role/DevOpsAgentReadOnly" }
       }
     }]
   })

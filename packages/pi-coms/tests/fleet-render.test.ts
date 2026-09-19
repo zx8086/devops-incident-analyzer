@@ -213,7 +213,22 @@ describe("fleet root renderer (SIO-1653)", () => {
 		// any principal in the org publish, and the ARN pattern alone would let
 		// another org's matching role in.
 		expect(code).toContain('"aws:PrincipalOrgID" = var.org_id');
-		expect(code).toContain('"aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent"');
+
+		// The condition must match the role the monitor ACTUALLY publishes as.
+		// The bootstrap sets AWS_PROFILE=devops-readonly whenever
+		// READONLY_ROLE_ARN is present, so the whole piagent workload assumes
+		// DevOpsAgentReadOnly -- which is also where the sns:Publish grant lives.
+		// The first version reused the dist bucket's "*-agent" pattern, which
+		// guards the INSTANCE role writing checkpoints: right there, and wrong
+		// here, because it rejects every intended publisher. Asserted by matching
+		// the rendered pattern against real role names rather than by string
+		// equality, so it fails if the pattern stops covering the real role.
+		const arnLike = /"aws:PrincipalArn" = "([^"]+)"/.exec(code)?.[1];
+		expect(arnLike).toBeDefined();
+		const toRe = (p: string) => new RegExp(`^${p.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`);
+		expect(toRe(arnLike as string).test("arn:aws:iam::123456789012:role/DevOpsAgentReadOnly")).toBe(true);
+		// And must not silently widen to every role in the org.
+		expect(toRe(arnLike as string).test("arn:aws:iam::123456789012:role/SomeOtherRole")).toBe(false);
 	});
 
 	// The topic name must never carry an account id or address: committed roots
