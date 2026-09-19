@@ -87,3 +87,97 @@ describe("checkCost", () => {
 		expect(state.latestCost()).toEqual({ date: "2026-08-29", usd: 5 });
 	});
 });
+
+// SIO-1819: per-service attribution. The shapes below are the REAL
+// GetCostAndUsage response with GroupBy SERVICE, captured from
+// eu-shared-services-prd on 2026-09-19 -- including the one detail that makes
+// this change dangerous.
+describe("checkCost with GroupBy SERVICE", () => {
+	// THE TRAP: when GroupBy is set, AWS returns `Total: {}` and puts every
+	// figure in Groups. Reading Total.UnblendedCost.Amount (as the pre-SIO-1819
+	// code did) would record 0.00 for every day and silently destroy the
+	// baseline. Verified against the live API, not assumed.
+	function groupedClient(daily: { date: string; services: Record<string, number> }[]) {
+		return {
+			async send(cmd: { constructor: { name: string } }) {
+				if (cmd.constructor.name !== "GetCostAndUsageCommand") throw new Error("unexpected");
+				return {
+					ResultsByTime: daily.map((d) => ({
+						TimePeriod: { Start: d.date },
+						Estimated: true,
+						Total: {}, // <- empty when grouped, exactly as AWS returns it
+						Groups: Object.entries(d.services).map(([svc, usd]) => ({
+							Keys: [svc],
+							Metrics: { UnblendedCost: { Amount: String(usd), Unit: "USD" } },
+						})),
+					})),
+				};
+			},
+		};
+	}
+
+	// Real service names from the live response: Bedrock bills per MODEL, so
+	// there is no service literally called "Bedrock" to match on.
+	const SONNET = "Claude Sonnet 4.6 (Amazon Bedrock Edition)";
+	const VPC = "Amazon Virtual Private Cloud";
+
+	function groupedDays(baseline: number, yesterdayServices: Record<string, number>) {
+		const out: { date: string; services: Record<string, number> }[] = [];
+		for (let d = 15; d >= 2; d--) {
+			const dt = new Date(NOW.getTime() - d * 86_400_000).toISOString().slice(0, 10);
+			out.push({ date: dt, services: { [VPC]: baseline } });
+		}
+		out.push({ date: "2026-08-29", services: yesterdayServices });
+		return out;
+	}
+
+	test("a grouped response still records the correct daily TOTAL", async () => {
+		const state = new MonitorState(":memory:");
+		await checkCost(groupedClient(groupedDays(10, { [VPC]: 4, [SONNET]: 6 })), state, { now: NOW });
+		// 4 + 6, not 0 from the empty Total.
+		expect(state.latestCost()).toEqual({ date: "2026-08-29", usd: 10 });
+	});
+
+	test("the finding names the top contributing service and its share", async () => {
+		const state = new MonitorState(":memory:");
+		const out = await checkCost(groupedClient(groupedDays(1000, { [VPC]: 100, [SONNET]: 1001 })), state, { now: NOW });
+		expect(out).toHaveLength(1);
+		expect(out[0].summary).toContain(SONNET);
+		const ev = out[0].evidence as { topService?: { name: string; usd: number }; byService?: Record<string, number> };
+		expect(ev.topService?.name).toBe(SONNET);
+		expect(ev.topService?.usd).toBe(1001);
+		expect(ev.byService?.[VPC]).toBe(100);
+	});
+
+	// The attribution question that prompted the ticket: is a spend rise the
+	// monitor investigating, or the workload?
+	test("Bedrock model spend is attributable even though no service is named 'Bedrock'", async () => {
+		const state = new MonitorState(":memory:");
+		const out = await checkCost(groupedClient(groupedDays(1000, { [VPC]: 900, [SONNET]: 300 })), state, { now: NOW });
+		const ev = out[0].evidence as { bedrockUsd?: number };
+		expect(ev.bedrockUsd).toBe(300);
+	});
+
+	test("bedrockUsd is 0, not undefined, on a day with no model spend", async () => {
+		const state = new MonitorState(":memory:");
+		const out = await checkCost(groupedClient(groupedDays(1000, { [VPC]: 1200 })), state, { now: NOW });
+		expect((out[0].evidence as { bedrockUsd?: number }).bedrockUsd).toBe(0);
+	});
+
+	// Thresholds are unchanged by this ticket (option (a) in the issue).
+	test("grouping does not change when the check fires", async () => {
+		const quiet = new MonitorState(":memory:");
+		expect(await checkCost(groupedClient(groupedDays(1000, { [VPC]: 1099 })), quiet, { now: NOW })).toHaveLength(0);
+		const loud = new MonitorState(":memory:");
+		expect(await checkCost(groupedClient(groupedDays(1000, { [VPC]: 1101 })), loud, { now: NOW })).toHaveLength(1);
+	});
+
+	// An ungrouped response must keep working: a monitor may run against an
+	// older cached shape, and the baseline rows written before this change have
+	// no per-service data at all.
+	test("an ungrouped response (Total only, no Groups) still records the total", async () => {
+		const state = new MonitorState(":memory:");
+		await checkCost(fakeClient(days(10, 13)), state, { now: NOW, pct: 20, abs: 1 });
+		expect(state.latestCost()).toEqual({ date: "2026-08-29", usd: 13 });
+	});
+});

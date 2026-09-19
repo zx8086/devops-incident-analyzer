@@ -81,6 +81,33 @@ export function summariseLogSample(sample: string, max = SAMPLE_EXCERPT): string
 	return `${oneLine.slice(0, max - 3).trimEnd()}...`;
 }
 
+// SIO-1820: one incident used to become many findings. Measured live
+// (eu-shared-services-prd, 2026-09-19): CloudWatch delivers a Java stack trace
+// as SEPARATE events, one line each -- 0 of 8 sampled events were multi-line.
+// So the leading log line, the exception line, each `at` frame, the suppressed
+// FluxOnAssembly block and the `Caused by:` line arrive as six events and, at
+// 120 normalized characters apiece, became six signatures.
+//
+// A per-event function cannot fix that: when it sees an `at` frame it has no
+// `Caused by:` line to key on. The grouping therefore happens across events,
+// in collapseTraceEvents below; these two helpers classify one line.
+
+// A pure continuation line of a trace: a stack frame, a suppressed/caused
+// header, or Reactor's checkpoint decoration. Carries no identity of its own.
+const TRACE_CONTINUATION = /^[ \t]*(?:at\s|\.{3}\s*\d+\s+more\b|Suppressed:|Caused by:|\*__checkpoint\b)/;
+// A line naming an exception type is an identity line even without a prefix.
+const EXCEPTION_TYPE = /[\w.$]*(?:Exception|Error|Throwable)\b/;
+
+export function isTraceContinuation(message: string): boolean {
+	return TRACE_CONTINUATION.test(message);
+}
+
+// The deepest `Caused by:` is the root cause; Java prints it last.
+export function causedByText(message: string): string | null {
+	const m = /^[ \t]*Caused by:[ \t]*(.+)$/.exec(message);
+	return m ? m[1].trim() : null;
+}
+
 export function logSignature(message: string): string {
 	const normalized = message
 		.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<ts>")
@@ -97,6 +124,49 @@ export function logSignature(message: string): string {
 		.replace(/\d+/g, "<n>")
 		.slice(0, 120);
 	return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+}
+
+// SIO-1820: fold a group's events into incidents. A continuation line belongs
+// to the most recent identity line IN ITS OWN STREAM -- concurrent requests
+// interleave their traces in a shared group, so a global "previous event" would
+// staple one request's frames onto another's exception.
+//
+// A `Caused by:` line is a continuation AND the best identity available: it
+// upgrades the incident's signature to the root cause, which is what makes two
+// occurrences of the same fault dedup even when their leading lines differ.
+//
+// A continuation with no preceding identity (the window opened mid-trace) keeps
+// its own signature rather than being dropped: losing it would under-report.
+export type TraceEvent = { timestamp: number; message: string; logStreamName?: string };
+export type CollapsedEvent = { signature: string; message: string; timestamp: number; frames: number };
+
+export function collapseTraceEvents(events: TraceEvent[], sign: (m: string) => string): CollapsedEvent[] {
+	const out: CollapsedEvent[] = [];
+	// Per stream: which incident the next continuation line belongs to.
+	const open = new Map<string, CollapsedEvent>();
+	for (const e of events) {
+		const message = e.message ?? "";
+		const stream = e.logStreamName ?? "";
+		const current = open.get(stream);
+		if (isTraceContinuation(message) && current) {
+			current.frames++;
+			current.timestamp = Math.max(current.timestamp, e.timestamp);
+			// The deepest cause wins: re-signing on `Caused by:` is what collapses
+			// "404 from POST /prices" and "502 from POST /prices" onto the one
+			// ConnectException underneath them.
+			const cause = causedByText(message);
+			if (cause) current.signature = sign(cause);
+			continue;
+		}
+		const incident: CollapsedEvent = { signature: sign(message), message, timestamp: e.timestamp, frames: 1 };
+		out.push(incident);
+		// Only a line that can head a trace opens one. A plain one-line ERROR
+		// with no exception type is complete in itself, and letting it adopt the
+		// next frame would merge unrelated events.
+		if (EXCEPTION_TYPE.test(message)) open.set(stream, incident);
+		else open.delete(stream);
+	}
+	return out;
 }
 
 export type CheckLogsOpts = {
@@ -176,12 +246,21 @@ export async function checkLogs(client: AwsClient, state: MonitorState, opts: Ch
 				)) as FilterLogEventsCommandOutput;
 				pages++;
 				// FilteredLogEvent marks both fields optional; every real event carries them.
-				for (const e of (resp.events ?? []) as { timestamp: number; message: string }[]) {
-					const sig = logSignature(e.message ?? "");
-					const cur = bySig.get(sig) ?? { count: 0, sample: (e.message ?? "").slice(0, 300), lastTs: e.timestamp };
+				// SIO-1820: fold each page's events into incidents first, so a stack
+				// trace's separate one-line events count as ONE occurrence signed by
+				// its root cause instead of one finding per frame. Per page, which is
+				// where a trace lives: FilterLogEvents returns events in time order
+				// and a trace is written in one burst.
+				const events = (resp.events ?? []) as TraceEvent[];
+				for (const inc of collapseTraceEvents(events, logSignature)) {
+					const cur = bySig.get(inc.signature) ?? {
+						count: 0,
+						sample: inc.message.slice(0, 300),
+						lastTs: inc.timestamp,
+					};
 					cur.count++;
-					cur.lastTs = Math.max(cur.lastTs, e.timestamp);
-					bySig.set(sig, cur);
+					cur.lastTs = Math.max(cur.lastTs, inc.timestamp);
+					bySig.set(inc.signature, cur);
 				}
 				token = resp.nextToken;
 			} while (token && pages < maxPages);

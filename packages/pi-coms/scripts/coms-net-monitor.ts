@@ -19,6 +19,7 @@ import { HealthClient } from "@aws-sdk/client-health";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { RDSClient } from "@aws-sdk/client-rds";
 import { S3Client } from "@aws-sdk/client-s3";
+import { SNSClient } from "@aws-sdk/client-sns";
 import { SQSClient } from "@aws-sdk/client-sqs";
 import { STSClient } from "@aws-sdk/client-sts";
 import { SupportClient } from "@aws-sdk/client-support";
@@ -80,12 +81,17 @@ import {
 	parseDiagnoses,
 	suppressionReviewFromJournal,
 } from "./monitor/report.ts";
+import { publishReportToSns, snsTopicFromEnv } from "./monitor/report-email.ts";
 import { MonitorState } from "./monitor/state.ts";
 
 const ACCOUNT_ID = process.env.AWS_ACCOUNT_ID ?? "unknown";
 const MONITOR_NAME = process.env.PI_MONITOR_NAME ?? `monitor-aws-${ACCOUNT_ID}`;
 const REPORT_TO = process.env.PI_MONITOR_REPORT_TO ?? "laptop";
 const REPORT_TTL_MS = Number(process.env.PI_MONITOR_REPORT_TTL_MS ?? 1_209_600_000);
+// SIO-1821: fan the digest and the suppression review out to an email
+// subscription as well. Unset (the default) disables it entirely, so this
+// changes nothing on a host that has not been given a topic.
+const REPORT_SNS_TOPIC_ARN = snsTopicFromEnv(process.env.PI_MONITOR_REPORT_SNS_TOPIC_ARN);
 const CHECK_CRON = process.env.PI_MONITOR_CHECK_CRON ?? "*/15 * * * *";
 // Minute 7 deliberately: never a */15 boundary, so the hourly guard cannot
 // collide with the check guard (see the midnight-collision note below).
@@ -536,6 +542,18 @@ function main(): void {
 		await coms.send(REPORT_TO, text, { ttl_ms: REPORT_TTL_MS, expectReply: false });
 	};
 
+	// SIO-1821: the mailbox FIRST and the email second, deliberately in that
+	// order. The mailbox is the system of record (durable, 14-day TTL, retried
+	// via queueUnsent); SNS is fire-and-forget with no retention of its own, so
+	// it is best-effort and publishReportToSns never throws. Only the digest and
+	// the suppression review use this -- incident reports can be frequent, and
+	// email is a poor paging channel.
+	const sns = REPORT_SNS_TOPIC_ARN ? new SNSClient({}) : null;
+	const reportAndEmail = async (text: string): Promise<void> => {
+		await report(text);
+		if (sns) await publishReportToSns(sns, REPORT_SNS_TOPIC_ARN, text);
+	};
+
 	const fifteenDeps: CycleDeps = {
 		gate,
 		checks: [
@@ -653,7 +671,7 @@ function main(): void {
 	const suppressionReview = async (): Promise<void> => {
 		const text = buildSuppressionReview();
 		try {
-			await report(text);
+			await reportAndEmail(text);
 		} catch (e) {
 			state.queueUnsent(REPORT_TO, text, REPORT_TTL_MS);
 			log(`suppression review send failed, queued: ${errorMessage(e)}`);
@@ -692,7 +710,7 @@ function main(): void {
 		// The digest ships even when quiet; a missing digest is the dead-man signal.
 		const text = await buildDigest();
 		try {
-			await report(text);
+			await reportAndEmail(text);
 		} catch (e) {
 			state.queueUnsent(REPORT_TO, text, REPORT_TTL_MS);
 			log(`digest send failed, queued: ${errorMessage(e)}`);

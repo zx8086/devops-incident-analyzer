@@ -34,7 +34,11 @@ export type AgentLister = { listAgents: () => Promise<AgentCard[]> };
 // smuggle anything, whereas an escaping rule is one missed case from failing.
 // The class is also the part with diagnostic value; the operator reads the full
 // message from the hub (`/v1/agents`) or the host, which the gotchas entry says.
-export type RunErrorClass = "access-denied" | "throttled" | "timeout" | "other" | "unknown";
+// SIO-1817: `malformed-history` is the class the spoke repairs itself (see
+// shouldRepairHistory in extensions/turnReply.ts). It is reported rather than
+// hidden: a spoke that needed a repair is a spoke that lost a turn, and a
+// repair that keeps recurring is a bug in whatever writes the history.
+export type RunErrorClass = "access-denied" | "throttled" | "timeout" | "malformed-history" | "other" | "unknown";
 
 // `model` is spoke-reported too and the hub stores any string it is sent
 // (`typeof body.model === "string"` is the only gate), so it rides the same
@@ -55,6 +59,14 @@ export function classifyRunError(message: string | undefined): RunErrorClass {
 	if (m.includes("accessdenied") || m.includes("not authorized") || m.includes("403")) return "access-denied";
 	if (m.includes("throttl") || m.includes("too many requests") || m.includes("429")) return "throttled";
 	if (m.includes("timed out") || m.includes("timeout")) return "timeout";
+	// SIO-1817, checked last so the access/throttle/timeout classes keep winning:
+	// a stuck toolUse/toolResult pair in the persisted session. Kept in step with
+	// isMalformedHistory (extensions/turnReply.ts) rather than imported -- the
+	// monitor and the Pi extension are separate runtimes and the extension's
+	// imports are aliased by Pi's loader.
+	if ((m.includes("toolresult") || m.includes("tooluse")) && (m.includes("validation") || m.includes("exceeds"))) {
+		return "malformed-history";
+	}
 	return "other";
 }
 

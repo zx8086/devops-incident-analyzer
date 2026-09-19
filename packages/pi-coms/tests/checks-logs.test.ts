@@ -1,6 +1,12 @@
 // tests/checks-logs.test.ts
 import { describe, expect, test } from "bun:test";
-import { checkLogs, logSignature, logsWindow, summariseLogSample } from "../scripts/monitor/checks/logs.ts";
+import {
+	checkLogs,
+	collapseTraceEvents,
+	logSignature,
+	logsWindow,
+	summariseLogSample,
+} from "../scripts/monitor/checks/logs.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
 
 // What the fakes read off a command: its class name and the filter inputs.
@@ -320,5 +326,115 @@ describe("logsWindow", () => {
 	test("a position ahead of the window end never produces an inverted window", () => {
 		const w = logsWindow(now, now, opts);
 		expect(w.start).toBe(w.end);
+	});
+});
+
+// SIO-1820. Measured live (eu-shared-services-prd, 2026-09-19): CloudWatch
+// delivers a Java trace as SEPARATE one-line events -- 0 of 8 sampled events
+// were multi-line. So each frame arrived as its own event and, at 120
+// normalized characters apiece, became its own finding. The grouping has to
+// happen ACROSS events, which is what collapseTraceEvents does.
+describe("collapseTraceEvents (SIO-1820)", () => {
+	// One Reactor/WebClient trace exactly as CloudWatch delivers it: one line
+	// per event, same log stream, ascending timestamps.
+	const TRACE = [
+		"2026-09-18T10:00:01.123Z ERROR [catalog] o.s.w.r.f.c.ExchangeFunctions - [3f2a1b] HTTP POST /v2/prices failed",
+		"org.springframework.web.reactive.function.client.WebClientResponseException$NotFound: 404 Not Found from POST https://prices/v2/prices",
+		"\tat org.springframework.web.reactive.function.client.WebClientResponseException.create(WebClientResponseException.java:322)",
+		"\tSuppressed: reactor.core.publisher.FluxOnAssembly$OnAssemblyException: Error has been observed at the following site(s):",
+		"\t\t*__checkpoint - 502 BAD_GATEWAY from POST https://prices/v2/prices [DefaultWebClient]",
+		"Caused by: java.net.ConnectException: Connection refused: prices-svc/10.3.4.5:8443",
+	];
+	const evs = (msgs: string[], stream = "s1", t0 = 1_000) =>
+		msgs.map((message, i) => ({ timestamp: t0 + i, message, logStreamName: stream }));
+
+	test("a whole trace collapses to ONE incident", () => {
+		const out = collapseTraceEvents(evs(TRACE), logSignature);
+		// The leading plain ERROR line is its own event and carries no exception
+		// type, so it stays separate; the trace proper is one incident.
+		const traceOnly = collapseTraceEvents(evs(TRACE.slice(1)), logSignature);
+		expect(traceOnly).toHaveLength(1);
+		expect(traceOnly[0].frames).toBe(5);
+		expect(out.length).toBeLessThan(TRACE.length);
+	});
+
+	test("the incident is signed by its ROOT CAUSE, not its first line", () => {
+		const out = collapseTraceEvents(evs(TRACE.slice(1)), logSignature);
+		expect(out[0].signature).toBe(
+			logSignature("java.net.ConnectException: Connection refused: prices-svc/10.3.4.5:8443"),
+		);
+	});
+
+	// The payoff: two occurrences whose leading exception differs (404 vs 502)
+	// but whose root cause is identical now dedup to one signature.
+	test("two occurrences of one fault with different leading lines dedup", () => {
+		const a = collapseTraceEvents(evs(TRACE.slice(1), "s1"), logSignature);
+		const b = collapseTraceEvents(
+			evs(
+				[
+					"org.springframework.web.reactive.function.client.WebClientResponseException$BadGateway: 502 Bad Gateway from POST https://prices/v2/prices",
+					"\tat org.springframework.web.reactive.function.client.WebClientResponseException.create(WebClientResponseException.java:999)",
+					"Caused by: java.net.ConnectException: Connection refused: prices-svc/10.3.4.9:8443",
+				],
+				"s2",
+			),
+			logSignature,
+		);
+		expect(a[0].signature).toBe(b[0].signature);
+	});
+
+	test("a DIFFERENT root cause stays a different incident", () => {
+		const npe = collapseTraceEvents(
+			evs(["java.lang.IllegalStateException: boom", "Caused by: java.lang.NullPointerException: s is null"], "s3"),
+			logSignature,
+		);
+		const conn = collapseTraceEvents(evs(TRACE.slice(1), "s4"), logSignature);
+		expect(npe[0].signature).not.toBe(conn[0].signature);
+	});
+
+	// Concurrent requests interleave in a shared group: frames must attach to
+	// their OWN stream's exception, never to whichever event came last.
+	test("interleaved traces from two streams do not cross-contaminate", () => {
+		const mixed = [
+			{ timestamp: 1, message: "java.lang.IllegalStateException: alpha", logStreamName: "a" },
+			{ timestamp: 2, message: "java.lang.IllegalStateException: beta", logStreamName: "b" },
+			{ timestamp: 3, message: "Caused by: java.net.ConnectException: alpha-cause", logStreamName: "a" },
+			{ timestamp: 4, message: "Caused by: java.lang.NullPointerException: beta-cause", logStreamName: "b" },
+		];
+		const out = collapseTraceEvents(mixed, logSignature);
+		expect(out).toHaveLength(2);
+		expect(out[0].signature).toBe(logSignature("java.net.ConnectException: alpha-cause"));
+		expect(out[1].signature).toBe(logSignature("java.lang.NullPointerException: beta-cause"));
+	});
+
+	test("a plain one-line ERROR does not adopt the next unrelated event", () => {
+		const out = collapseTraceEvents(
+			evs(["ERROR disk almost full on /var", "ERROR queue depth exceeded on orders"]),
+			logSignature,
+		);
+		expect(out).toHaveLength(2);
+	});
+
+	// The window can open mid-trace; an orphan frame must still be reported.
+	test("a continuation with no preceding identity is kept, not dropped", () => {
+		const out = collapseTraceEvents(evs(["\tat com.example.Foo.bar(Foo.java:1)"]), logSignature);
+		expect(out).toHaveLength(1);
+		expect(out[0].frames).toBe(1);
+	});
+
+	test("events with no stream name still group (single-stream groups)", () => {
+		const out = collapseTraceEvents(
+			[
+				{ timestamp: 1, message: "java.lang.IllegalStateException: x" },
+				{ timestamp: 2, message: "Caused by: java.net.ConnectException: y" },
+			],
+			logSignature,
+		);
+		expect(out).toHaveLength(1);
+	});
+
+	// SIO-1820 constraint: the excerpt stays untrusted text.
+	test("a trace cannot forge a digest line through the excerpt", () => {
+		expect(summariseLogSample(TRACE.join("\n"), 200)).not.toContain("\n");
 	});
 });
