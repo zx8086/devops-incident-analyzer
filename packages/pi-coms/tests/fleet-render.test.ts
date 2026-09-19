@@ -157,6 +157,17 @@ describe("fleet root renderer (SIO-1653)", () => {
 		}
 	});
 
+	// The optional blocks are template interpolations, and an interpolation on its
+	// own line contributes a newline even when it renders "". That made every
+	// committed root gain a blank line on the next `just fleet render` -- churn in
+	// eight generated files for a flag nobody had turned on.
+	test("the OFF case introduces no blank-line churn", () => {
+		for (const name of Object.keys(manifest.spokes)) {
+			const main = renderRoot(manifest, name)["main.tf"];
+			expect(main).not.toContain("\n\n\n");
+		}
+	});
+
 	test("monitor_report_email renders the topic in EVERY hub root, and a tfvar elsewhere", () => {
 		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
 		const tagged = parseManifest(text);
