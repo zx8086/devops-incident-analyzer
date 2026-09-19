@@ -102,6 +102,55 @@ replaces instances**. Always read the "forces replacement" lines of a plan.
 Per-host configuration that must not churn instances belongs in the
 bootstrap, not in terraform/userdata (for example `PI_MONITOR_REPORT_TO`).
 
+### Shipping a feature that needs a new userdata variable (SIO-1821)
+
+A feature gated on a new `PI_MONITOR_*` variable is **two deploys, not one**,
+because the code and the variable travel by different routes. The code rides
+the bundle (publish + rollout, no instance touched); the variable rides
+userdata, and adding one replaces the agent instance in every account. Merging
+them into a single step is what turns a code change into a fleet replacement
+nobody planned for.
+
+Write the gate so an unset variable disables the feature. Then the first stage
+is inert on every host and the second is schedulable.
+
+| Stage | Command | Plan | Replaces? |
+|---|---|---|---|
+| 1. Code | `just fleet publish` + `just fleet rollout` | -- | No |
+| 2a. New resources | `terraform apply -target=<resource>` | `N to add, 0 to destroy` | No |
+| 2b. IAM grant | `terraform apply -target=module.agent.aws_iam_policy.pi_coms_extensions` | `0 to add, 1 to change, 0 to destroy` | No |
+| 2c. The variable | `just fleet apply <spoke> [--yes]` | `~23 add, ~23 destroy` per spoke | **Yes** |
+
+Stage 2c reads as alarming and is not: per spoke it replaces ONE real resource,
+`module.agent.aws_instance.agent`, and 22 dependent `aws_ec2_tag` resources that
+follow the new ENI and root volume. Confirm in the plan that
+`module.hub.aws_instance.hub` says `Refreshing state` and nothing more, and that
+the mailbox EBS volume is untouched -- it outlives the instance by design.
+
+**A cross-account value does not reach a spoke by rendering alone.** The
+hub-hosting root gets it by Terraform reference; every other spoke renders
+`= var.<name>` against a variable that defaults to `""`, and nothing populates
+it, exactly like `dist_bucket`. Append it to each non-hub spoke's gitignored
+`terraform.tfvars` BEFORE stage 2c:
+
+```bash
+for s in <non-hub spokes>; do
+  printf '<var> = "<value>"\n' >> deploy/accounts/$s/terraform.tfvars
+done
+```
+
+Skipping that produces a green apply, a healthy host, and a silently disabled
+feature: the userdata carries `VAR=''`, the bootstrap correctly skips an empty
+value, and nothing anywhere reports a problem. Verify on the host rather than
+trusting the apply:
+
+```bash
+grep PI_MONITOR_<VAR> /home/piagent/.coms-env   # absent means the tfvar was missed
+```
+
+Do stage 2c on one **dev** spoke first. That is where the missing tfvar above
+was caught, at the cost of one dev instance instead of six production ones.
+
 ## Code distribution: the fleet bundle
 
 Development stays on GitHub; fleet hosts never talk to it. `main` is
