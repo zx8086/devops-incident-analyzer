@@ -62,6 +62,25 @@ export function turnFailure(turn: FinalAssistant): string | null {
 export interface RunHealth {
 	consecutive_run_errors: number;
 	last_run_error?: string;
+	// SIO-1817: how many times in a row the SAME error text has come back. A
+	// varying error is a flaky provider; an identical one repeating is a stuck
+	// input, and only the second is repairable from here.
+	repeated_error_count?: number;
+}
+
+// SIO-1817: a malformed toolUse/toolResult pair in the persisted session. The
+// provider rejects the whole request before any model work, so every turn fails
+// identically at the same message offset until the history is rewritten
+// (eu-oit-prd 2026-09-18: 9 failures at `messages.22`, zero successes in 22 h,
+// cleared only by deleting the session directory by hand).
+//
+// Matched on the pairing vocabulary rather than the offset, which varies, and
+// deliberately NARROW: this predicate decides whether the spoke rewrites its own
+// history, so an access or throttle failure must never match it.
+export function isMalformedHistory(message: string | undefined): boolean {
+	const m = (message ?? "").toLowerCase();
+	if (!m.includes("toolresult") && !m.includes("tooluse")) return false;
+	return m.includes("validation") || m.includes("exceeds") || m.includes("corresponding");
 }
 
 // Only a PROVIDER failure counts. The other failure modes `turnFailure` reports
@@ -73,13 +92,34 @@ export interface RunHealth {
 // signal that cries wolf is worse than none.
 export function nextRunHealth(prev: RunHealth, turn: FinalAssistant): RunHealth {
 	if (turn.stopReason === "error") {
+		const message = turn.errorMessage?.trim() || "no details";
+		// SIO-1817: the repeat counter is what separates a stuck input from a
+		// flaky provider. Compared on the whole message: the offset it names is
+		// part of the identity, so a DIFFERENT malformed pair restarts the count
+		// rather than inheriting a repair that was already tried.
 		return {
 			consecutive_run_errors: prev.consecutive_run_errors + 1,
-			last_run_error: turn.errorMessage?.trim() || "no details",
+			last_run_error: message,
+			repeated_error_count: prev.last_run_error === message ? (prev.repeated_error_count ?? 1) + 1 : 1,
 		};
 	}
 	if (turn.stopReason === "aborted") return prev;
 	return { consecutive_run_errors: 0 };
+}
+
+// SIO-1817: how many identical failures before the spoke rewrites its own
+// history. Three for the same reason SIO-1681 chose three: one or two can be a
+// transient the next turn rides through, and a repair is not free -- compaction
+// costs a model call and loses conversational detail.
+export const REPAIR_AFTER_REPEATS = 3;
+
+// Both halves must hold: the error is one a history rewrite can actually fix,
+// AND it has repeated identically. A repeated ACCESS failure is the case this
+// must refuse -- compaction cannot grant a permission, and a spoke silently
+// compacting in a loop would bury the 403 that SIO-1681 exists to surface.
+export function shouldRepairHistory(health: RunHealth): boolean {
+	if (!isMalformedHistory(health.last_run_error)) return false;
+	return (health.repeated_error_count ?? 0) >= REPAIR_AFTER_REPEATS;
 }
 
 // SIO-1804: a schema-bound reply that would not parse used to be answered with the fixed

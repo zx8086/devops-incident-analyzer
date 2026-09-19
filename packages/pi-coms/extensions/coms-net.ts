@@ -20,6 +20,7 @@ import {
 	nextRunHealth,
 	outboundHops,
 	type RunHealth,
+	shouldRepairHistory,
 } from "./turnReply.ts";
 
 const COMS_NET_DIR = path.join(os.homedir(), ".pi", "coms-net");
@@ -2025,6 +2026,36 @@ export default function (pi: ExtensionAPI) {
 			lastRunFinal = null;
 		}
 		void postTurnReplies();
+		// SIO-1817: a stuck toolUse/toolResult pair fails every turn identically
+		// until the history is rewritten, and nothing downstream can fix it -- the
+		// monitor has no model and the hub is a relay, so before this it took a
+		// human deleting the session directory (eu-oit-prd, 22 h of silence).
+		// Compaction rewrites the history, which is exactly the repair, and it is
+		// already the proven mechanism here (SIO-1673).
+		//
+		// Checked BEFORE the schema/token gate below on purpose: a poisoned session
+		// is usually nowhere near the compaction threshold, so gating this on size
+		// would leave it stuck for exactly the reason it is stuck.
+		if (shouldRepairHistory(runHealth)) {
+			const ctx = currentCtx;
+			if (ctx) {
+				try {
+					pi.appendEntry("coms-net-log", {
+						event: "history_repair",
+						ts: nowIso(),
+						consecutive_run_errors: runHealth.consecutive_run_errors,
+						repeated_error_count: runHealth.repeated_error_count,
+					});
+				} catch {}
+				// The counters reset here, not on the next success: the repair must
+				// not re-fire on every subsequent turn while the retry is in flight.
+				// A genuinely unfixed session simply repeats the three failures and
+				// repairs again, which is bounded and visible in the audit log.
+				runHealth = { consecutive_run_errors: 0 };
+				ctx.compact({ onError: (err) => audit("history_repair_failed", { reason: safeError(err) }) });
+				return;
+			}
+		}
 		if (!answeredSchemaPrompt) return;
 		answeredSchemaPrompt = false;
 		const ctx = currentCtx;

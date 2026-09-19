@@ -568,7 +568,19 @@ resource "aws_iam_policy" "pi_coms_extensions" {
           "arn:aws:bedrock:*::foundation-model/anthropic.*",
           "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/eu.anthropic.*",
         ]
-      }] : []
+      }] : [],
+      // SIO-1821: the ONE topic this monitor mails its digest to, and nothing
+      // else. Scoped to the exact ARN rather than sns:* on purpose -- this is a
+      // deliberately read-only role, and the estate already has four SNS topics
+      // belonging to other teams whose default policies would accept a publish
+      // from any principal in the account. Absent when the variable is empty,
+      // so a host with no topic keeps the role it has today.
+      var.monitor_report_sns_topic_arn == "" ? [] : [{
+        Sid      = "MonitorReportPublish"
+        Effect   = "Allow"
+        Action   = ["sns:Publish"]
+        Resource = [var.monitor_report_sns_topic_arn]
+      }]
     )
   })
 }
@@ -683,6 +695,7 @@ resource "aws_instance" "agent" {
     coms_project         = var.coms_project
     monitor_tz           = var.monitor_tz
     monitor_daily_cron   = var.monitor_daily_cron
+    monitor_report_sns   = var.monitor_report_sns_topic_arn
     pi_model             = var.pi_model
     pi_provider          = var.pi_provider
     ssh_public_key       = var.ssh_public_key
