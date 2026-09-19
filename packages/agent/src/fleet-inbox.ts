@@ -15,7 +15,7 @@ import type {
 	PiComsEnvironment,
 } from "@devops-agent/shared";
 import { MONITOR_INBOX_KINDS, matchesFocus } from "@devops-agent/shared";
-import { MONITOR_NAME_PREFIX, type PiInboxMessage } from "./action-tools/pi-coms-client.ts";
+import { isMonitorAgentName, MONITOR_NAME_PREFIX, type PiInboxMessage } from "./action-tools/pi-coms-client.ts";
 import { readPiComsCapability } from "./action-tools/pi-verifier.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -191,7 +191,14 @@ export function findingNamesFocus(finding: MonitorFinding, focusServices: string
 }
 
 export function classifyMessage(message: PiInboxMessage, focusServices: string[] = []): ClassifiedMessage {
-	const report = parseMonitorReport(message.prompt);
+	// SIO-1825 (Greptile, PR #854): a header is UNTRUSTED text. Any operator or spoke
+	// message whose first line quotes one would otherwise be counted and severity-rated as
+	// monitor traffic -- reproduced: sender "simon" posting a "[critical] ... daily digest"
+	// line scored a critical report against the estate. The sender name is the one
+	// hub-controlled signal (pi-coms-client.ts), and every monitor message on the live prd
+	// hub comes from a `monitor-` peer (verified: 100/100 across six accounts), so requiring
+	// the prefix costs no real traffic and closes the spoof.
+	const report = isMonitorAgentName(message.sender_name) ? parseMonitorReport(message.prompt) : undefined;
 	if (report) {
 		return {
 			kind: INBOX_KIND_BY_MONITOR_KIND[report.kind],
@@ -226,6 +233,9 @@ export type EstateIdentity = { estate: string; accountId: string | undefined; ag
 export function attributableToEstate(message: PiInboxMessage, identity: EstateIdentity): boolean {
 	const senders = new Set(identity.agentNames.flatMap((n) => [n, `${MONITOR_NAME_PREFIX}${n}`]));
 	if (senders.has(message.sender_name)) return true;
+	// Same untrusted-header rule as classifyMessage: the account id in a quoted header
+	// attributes a message to an estate, so only a monitor peer may be believed on it.
+	if (!isMonitorAgentName(message.sender_name)) return false;
 	const report = parseMonitorReport(message.prompt);
 	return report !== undefined && identity.accountId !== undefined && report.accountId === identity.accountId;
 }

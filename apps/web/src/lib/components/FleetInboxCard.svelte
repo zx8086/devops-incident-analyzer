@@ -97,8 +97,15 @@ function when(iso: string): string {
   {/if}
 
   {#each digest.estates as estate (estate.estate)}
-    {@const lead = scoped ? estate.entries.filter((e) => e.focus) : estate.entries}
-    {@const rest = scoped ? estate.entries.filter((e) => !e.focus) : []}
+    <!-- SIO-1825 (Greptile, PR #854): a digest and a suppression review carry no findings,
+         so `focus` is always false for them. Keying the lead on focus alone therefore buried
+         every daily dead-man signal -- DEGRADED and PAUSED included -- in the collapsed
+         "other services" section on EVERY scoped run, which is the normal case. They are
+         account-level by nature, not about one service, so they lead alongside the focus
+         reports; only incident reports about OTHER services collapse. -->
+    {@const accountLevel = (e: FleetInboxEntry) => e.kind === "daily-digest" || e.kind === "suppression-review"}
+    {@const lead = scoped ? estate.entries.filter((e) => e.focus || accountLevel(e)) : estate.entries}
+    {@const rest = scoped ? estate.entries.filter((e) => !e.focus && !accountLevel(e)) : []}
     <section class="mb-3 last:mb-0">
       <div class="flex flex-wrap items-center gap-2 text-xs">
         <span class="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded border {envBadge[estate.environment] ?? 'bg-gray-100 text-gray-600 border-gray-200'}">{estate.environment}</span>

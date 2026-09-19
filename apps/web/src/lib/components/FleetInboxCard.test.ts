@@ -114,6 +114,51 @@ describe("FleetInboxCard", () => {
 		expect(body.indexOf("OTHER-EXCERPT")).toBeGreaterThan(body.indexOf("<details"));
 	});
 
+	// Greptile, PR #854: a digest and a suppression review carry no findings, so `focus` is
+	// always false for them. Keyed on focus alone, every daily dead-man signal -- DEGRADED
+	// and PAUSED included -- was folded into "other services" on EVERY scoped run.
+	test("a scoped digest keeps account-level messages out of the fold", () => {
+		const base = digest.estates[0] as FleetInboxDigest["estates"][number];
+		const report = base.entries[0] as (typeof base.entries)[number];
+		const scopedDigest: FleetInboxDigest = {
+			...digest,
+			focusServices: ["feed-service"],
+			estates: [
+				{
+					...base,
+					counts: {
+						total: 3,
+						focus: 1,
+						critical: 1,
+						warn: 0,
+						incidentReports: 2,
+						dailyDigests: 1,
+						suppressionReviews: 0,
+					},
+					entries: [
+						{ ...report, msgId: "FOCUS", focus: true, excerpt: "FOCUS-EXCERPT" },
+						{
+							...report,
+							msgId: "DIGEST",
+							kind: "daily-digest",
+							focus: false,
+							findingCount: null,
+							findings: [],
+							excerpt: "DEGRADED-DIGEST-EXCERPT",
+						},
+						{ ...report, msgId: "OTHER", focus: false, excerpt: "OTHER-EXCERPT" },
+					],
+				},
+			],
+		};
+		const { body } = render(FleetInboxCard, { props: { digest: scopedDigest } });
+		expect(body).toContain("daily digest");
+		// The digest leads beside the focus report; only the unrelated incident report folds.
+		expect(body.indexOf("DEGRADED-DIGEST-EXCERPT")).toBeLessThan(body.indexOf("<details"));
+		expect(body.indexOf("OTHER-EXCERPT")).toBeGreaterThan(body.indexOf("<details"));
+		expect(body).toContain("1 report(s) about other services in this account");
+	});
+
 	// Greptile, PR #846: counts cover every report while details are capped; the card says so.
 	test("a capped digest says how much of it is shown", () => {
 		const base = digest.estates[0] as FleetInboxDigest["estates"][number];

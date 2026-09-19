@@ -281,6 +281,35 @@ describe("parseMonitorReport and classifyMessage", () => {
 			expect(attributableToEstate(foreign, { ...identity, accountId: "999999999999" })).toBe(false);
 		});
 
+		// Greptile, PR #854: a header is untrusted text. Widening the parser to three kinds
+		// widened what a quoted header can claim, so the sender name -- the one hub-controlled
+		// signal -- gates it. Reproduced before the fix: sender "simon" posting a
+		// "[critical] aws-... daily digest" line scored a critical report against the estate.
+		test.each([
+			["an operator", "simon"],
+			["a spoke agent", "eu-oit-prd"],
+			["the analyzer itself", "incident-analyzer-89d64578"],
+		])("a monitor header quoted by %s is not monitor traffic", (_label, sender) => {
+			const quoted = message({ sender_name: sender, prompt: DIGEST });
+			expect(classifyMessage(quoted).kind).not.toBe("daily-digest");
+			expect(classifyMessage(quoted).severity).toBeNull();
+			const estate = buildEstateDigest({
+				estate: "eu-oit-prd",
+				environment: "prd",
+				inboxes: ["ops"],
+				messages: [{ inbox: "ops", message: quoted }],
+				error: null,
+			});
+			expect(estate.counts.total).toBe(0);
+		});
+
+		test("a quoted account header does not attribute a non-monitor message to an estate", () => {
+			const quoted = message({ sender_name: "simon", prompt: DIGEST });
+			expect(
+				attributableToEstate(quoted, { estate: "eu-oit-prd", accountId: "111122223333", agentNames: ["eu-oit-prd"] }),
+			).toBe(false);
+		});
+
 		// The untrusted-body invariant (SIO-1660) must hold for the new kinds too.
 		test("no digest body text reaches the prompt summary", () => {
 			const estate = buildEstateDigest({
