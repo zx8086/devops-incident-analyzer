@@ -22,9 +22,32 @@ export interface SnsLike {
 	send(cmd: unknown): Promise<unknown>;
 }
 
-// SNS hard limits.
+// SNS hard limits. The message cap is 256 KiB of UTF-8 BYTES, not characters:
+// a digest carrying non-ASCII (a resource name, an operator's reason, a log
+// excerpt) can sit inside the character count and still be rejected -- 200k
+// "é" is 200k characters and 400k bytes. Measured, not assumed.
 const MAX_SUBJECT = 100;
-const MAX_MESSAGE = 262_144;
+const MAX_MESSAGE_BYTES = 262_144;
+
+const encoder = new TextEncoder();
+
+// Truncate to a byte budget without splitting a code point. TextDecoder's
+// fatal:false replaces a trailing partial sequence with U+FFFD, so the cut is
+// walked back until the re-encoded result fits instead.
+export function truncateUtf8(text: string, maxBytes: number): string {
+	if (encoder.encode(text).length <= maxBytes) return text;
+	let lo = 0;
+	let hi = text.length;
+	while (lo < hi) {
+		const mid = Math.ceil((lo + hi) / 2);
+		if (encoder.encode(text.slice(0, mid)).length <= maxBytes) lo = mid;
+		else hi = mid - 1;
+	}
+	// A lone high surrogate left at the boundary would encode as U+FFFD.
+	const cut = text.slice(0, lo);
+	const last = cut.charCodeAt(cut.length - 1);
+	return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
 
 // An SNS TOPIC arn specifically: five colon-separated fields after "arn:aws:sns".
 // A subscription ARN has a sixth and would be accepted by a looser check, then
@@ -53,7 +76,11 @@ export function subjectFor(text: string): string {
 export async function publishReportToSns(sns: SnsLike, topicArn: string | null, text: string): Promise<void> {
 	if (!topicArn) return;
 	const marker = "\n\n[truncated: report exceeds the SNS message limit; full text is in the hub mailbox]";
-	const message = text.length <= MAX_MESSAGE ? text : text.slice(0, MAX_MESSAGE - marker.length) + marker;
+	const markerBytes = encoder.encode(marker).length;
+	const message =
+		encoder.encode(text).length <= MAX_MESSAGE_BYTES
+			? text
+			: truncateUtf8(text, MAX_MESSAGE_BYTES - markerBytes) + marker;
 	try {
 		await sns.send(new PublishCommand({ TopicArn: topicArn, Subject: subjectFor(text), Message: message }));
 	} catch {

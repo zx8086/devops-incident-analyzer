@@ -66,29 +66,45 @@ export async function checkCost(
 
 	const end = now.toISOString().slice(0, 10); // exclusive
 	const start = new Date(now.getTime() - 15 * 86_400_000).toISOString().slice(0, 10);
-	const resp = (await client.send(
-		new GetCostAndUsageCommand({
-			TimePeriod: { Start: start, End: end },
-			Granularity: "DAILY",
-			Metrics: ["UnblendedCost"],
-			// SIO-1819: attribution only. This does not change when the check
-			// fires -- it changes what the finding can SAY when it does.
-			GroupBy: [{ Type: "DIMENSION", Key: "SERVICE" }],
-		}),
-	)) as GetCostAndUsageCommandOutput;
-
-	// Only yesterday's split is needed for the finding; the rest of the window
-	// feeds the baseline as a plain total. Keyed on the DATE rather than taking
-	// the last row: the window's ordering is the API's to choose.
+	// GetCostAndUsage pages. Measured live on eu-shared-services-prd (15 days,
+	// ~30 service groups/day) it returns no NextPageToken today -- confirmed with
+	// the raw CLI and --no-paginate -- but an account with more services will
+	// page, and BOTH failure modes are silent: a day split across pages records
+	// an understated total (flattening the baseline), and a final page that never
+	// arrives makes the `latest.date !== yesterday` guard suppress the alert
+	// entirely. Accumulate every page, then record once per date.
 	const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
-	let yesterdayByService: Record<string, number> = {};
-	for (const r of resp.ResultsByTime ?? []) {
-		const date = r.TimePeriod?.Start;
-		if (!date) continue;
-		const { total, byService } = dayCost(r);
-		state.recordCost(date, total);
-		if (date === yesterday) yesterdayByService = byService;
-	}
+	const totals = new Map<string, number>();
+	const byDate = new Map<string, Record<string, number>>();
+	let nextPageToken: string | undefined;
+	do {
+		const resp = (await client.send(
+			new GetCostAndUsageCommand({
+				TimePeriod: { Start: start, End: end },
+				Granularity: "DAILY",
+				Metrics: ["UnblendedCost"],
+				// SIO-1819: attribution only. This does not change when the check
+				// fires -- it changes what the finding can SAY when it does.
+				GroupBy: [{ Type: "DIMENSION", Key: "SERVICE" }],
+				NextPageToken: nextPageToken,
+			}),
+		)) as GetCostAndUsageCommandOutput;
+		for (const r of resp.ResultsByTime ?? []) {
+			const date = r.TimePeriod?.Start;
+			if (!date) continue;
+			const { total, byService } = dayCost(r);
+			totals.set(date, (totals.get(date) ?? 0) + total);
+			// Merge rather than replace: the same date can appear on several pages
+			// with a different slice of its services on each.
+			const merged = byDate.get(date) ?? {};
+			for (const [svc, usd] of Object.entries(byService)) merged[svc] = (merged[svc] ?? 0) + usd;
+			byDate.set(date, merged);
+		}
+		nextPageToken = resp.NextPageToken;
+	} while (nextPageToken);
+
+	for (const [date, total] of totals) state.recordCost(date, total);
+	const yesterdayByService = byDate.get(yesterday) ?? {};
 
 	const latest = state.latestCost();
 	if (!latest || latest.date !== yesterday) return [];

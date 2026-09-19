@@ -181,3 +181,87 @@ describe("checkCost with GroupBy SERVICE", () => {
 		expect(state.latestCost()).toEqual({ date: "2026-08-29", usd: 13 });
 	});
 });
+
+// SIO-1819 follow-up (Greptile P1, verified): GetCostAndUsage pages. Measured
+// live on eu-shared-services-prd (15 days, ~30 service groups/day) it returns
+// NO NextPageToken today -- confirmed with the raw CLI and --no-paginate, not
+// just the auto-paginating SDK. But an account with more services WILL page,
+// and the failure is silent: a day split across pages records an understated
+// total, and a missing final page makes the `latest.date !== yesterday` guard
+// suppress the alert entirely.
+describe("checkCost follows Cost Explorer pagination", () => {
+	function pagedClient(pages: { date: string; services: Record<string, number> }[][]) {
+		let call = 0;
+		return {
+			calls: () => call,
+			async send(cmd: { constructor: { name: string }; input?: { NextPageToken?: string } }) {
+				if (cmd.constructor.name !== "GetCostAndUsageCommand") throw new Error("unexpected");
+				const page = pages[call] ?? [];
+				call++;
+				return {
+					ResultsByTime: page.map((d) => ({
+						TimePeriod: { Start: d.date },
+						Total: {},
+						Groups: Object.entries(d.services).map(([svc, usd]) => ({
+							Keys: [svc],
+							Metrics: { UnblendedCost: { Amount: String(usd), Unit: "USD" } },
+						})),
+					})),
+					...(call < pages.length ? { NextPageToken: `page-${call}` } : {}),
+				};
+			},
+		};
+	}
+
+	const VPC = "Amazon Virtual Private Cloud";
+	const SONNET = "Claude Sonnet 4.6 (Amazon Bedrock Edition)";
+
+	function baselinePage() {
+		const out: { date: string; services: Record<string, number> }[] = [];
+		for (let d = 15; d >= 2; d--) {
+			out.push({
+				date: new Date(NOW.getTime() - d * 86_400_000).toISOString().slice(0, 10),
+				services: { [VPC]: 1000 },
+			});
+		}
+		return out;
+	}
+
+	test("yesterday arriving on a LATER page is still seen", async () => {
+		const state = new MonitorState(":memory:");
+		const client = pagedClient([baselinePage(), [{ date: "2026-08-29", services: { [VPC]: 1101 } }]]);
+		const out = await checkCost(client, state, { now: NOW });
+		expect(client.calls()).toBe(2);
+		expect(out).toHaveLength(1);
+	});
+
+	test("one day split across pages sums to the full total, not the first page", async () => {
+		const state = new MonitorState(":memory:");
+		const client = pagedClient([
+			[...baselinePage(), { date: "2026-08-29", services: { [VPC]: 600 } }],
+			[{ date: "2026-08-29", services: { [SONNET]: 700 } }],
+		]);
+		await checkCost(client, state, { now: NOW });
+		// 600 + 700, not 600.
+		expect(state.latestCost()).toEqual({ date: "2026-08-29", usd: 1300 });
+	});
+
+	test("the per-service split merges across pages", async () => {
+		const state = new MonitorState(":memory:");
+		const client = pagedClient([
+			[...baselinePage(), { date: "2026-08-29", services: { [VPC]: 600 } }],
+			[{ date: "2026-08-29", services: { [SONNET]: 700 } }],
+		]);
+		const out = await checkCost(client, state, { now: NOW });
+		const ev = out[0].evidence as { byService?: Record<string, number>; bedrockUsd?: number };
+		expect(ev.byService?.[VPC]).toBe(600);
+		expect(ev.bedrockUsd).toBe(700);
+	});
+
+	test("a single-page response still issues exactly one call", async () => {
+		const state = new MonitorState(":memory:");
+		const client = pagedClient([[...baselinePage(), { date: "2026-08-29", services: { [VPC]: 1101 } }]]);
+		await checkCost(client, state, { now: NOW });
+		expect(client.calls()).toBe(1);
+	});
+});

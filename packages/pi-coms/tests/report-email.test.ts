@@ -4,7 +4,7 @@
 // system of record (14-day TTL + the queueUnsent retry), so this is a FAN-OUT:
 // a failed publish must never lose a report or break the cycle.
 import { describe, expect, test } from "bun:test";
-import { publishReportToSns, snsTopicFromEnv } from "../scripts/monitor/report-email.ts";
+import { publishReportToSns, snsTopicFromEnv, truncateUtf8 } from "../scripts/monitor/report-email.ts";
 
 type Sent = { TopicArn?: string; Subject?: string; Message?: string };
 
@@ -106,5 +106,48 @@ describe("publishReportToSns", () => {
 		const { client, sent } = fakeSns();
 		await publishReportToSns(client, null, "[info] aws-1 digest");
 		expect(sent).toHaveLength(0);
+	});
+
+	// SIO-1821 follow-up (Greptile P2, verified by measurement): the SNS limit is
+	// 256 KiB of UTF-8 BYTES, not characters. 200k "e-acute" is 200k characters
+	// and 400k bytes, so a body inside the character count was still rejected --
+	// and the empty catch turned that into a silently dropped email.
+	test("a non-ASCII report is bounded by BYTES, not characters", async () => {
+		const { client, sent } = fakeSns();
+		await publishReportToSns(client, ARN, `[info] aws-1 digest\n\n${"é".repeat(200_000)}`);
+		const bytes = new TextEncoder().encode(sent[0].Message ?? "").length;
+		expect(bytes).toBeLessThanOrEqual(262_144);
+		expect(sent[0].Message).toContain("truncated");
+	});
+});
+
+describe("truncateUtf8", () => {
+	const bytes = (s: string) => new TextEncoder().encode(s).length;
+
+	test("leaves a string already inside the budget untouched", () => {
+		expect(truncateUtf8("hello", 100)).toBe("hello");
+	});
+
+	test("respects a BYTE budget for multi-byte characters", () => {
+		// Each "é" is 2 bytes, so 10 bytes is 5 characters.
+		const out = truncateUtf8("é".repeat(50), 10);
+		expect(bytes(out)).toBeLessThanOrEqual(10);
+		expect(out).toBe("é".repeat(5));
+	});
+
+	// A 4-byte emoji is a surrogate PAIR in JS. Cutting between the halves would
+	// emit a lone surrogate, which encodes as U+FFFD and can exceed the budget.
+	test("never splits a surrogate pair", () => {
+		for (let budget = 1; budget <= 12; budget++) {
+			const out = truncateUtf8("🙂".repeat(5), budget);
+			expect(bytes(out)).toBeLessThanOrEqual(budget);
+			expect(out).not.toContain("\uFFFD");
+			// Every retained character is a whole emoji.
+			expect([...out].every((c) => c === "🙂")).toBe(true);
+		}
+	});
+
+	test("a budget too small for even one character yields an empty string", () => {
+		expect(truncateUtf8("🙂", 1)).toBe("");
 	});
 });

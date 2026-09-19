@@ -1,6 +1,7 @@
 // tests/checks-logs.test.ts
 import { describe, expect, test } from "bun:test";
 import {
+	type CollapsedEvent,
 	checkLogs,
 	collapseTraceEvents,
 	logSignature,
@@ -430,6 +431,48 @@ describe("collapseTraceEvents (SIO-1820)", () => {
 			],
 			logSignature,
 		);
+		expect(out).toHaveLength(1);
+	});
+
+	// SIO-1820 follow-up (Greptile P1, verified): FilterLogEvents pages, and an
+	// exception can end one page while its frames and `Caused by:` line begin the
+	// next. Collapsing each page independently resets the open-trace map at every
+	// boundary, so those continuations become separate incidents and the original
+	// never receives its root-cause signature. The reducer therefore takes the
+	// open state in and hands it back.
+	test("a trace split across a page boundary is still ONE incident", () => {
+		const page1 = evs(TRACE.slice(1, 3), "s1", 1000);
+		const page2 = evs(TRACE.slice(3), "s1", 2000);
+		const open = new Map<string, CollapsedEvent>();
+		const a = collapseTraceEvents(page1, logSignature, open);
+		const b = collapseTraceEvents(page2, logSignature, open);
+		expect([...a, ...b]).toHaveLength(1);
+		expect(a[0].signature).toBe(
+			logSignature("java.net.ConnectException: Connection refused: prices-svc/10.3.4.5:8443"),
+		);
+	});
+
+	test("carrying state across pages still separates different streams", () => {
+		const open = new Map<string, CollapsedEvent>();
+		const a = collapseTraceEvents(
+			[{ timestamp: 1, message: "java.lang.IllegalStateException: alpha", logStreamName: "a" }],
+			logSignature,
+			open,
+		);
+		const b = collapseTraceEvents(
+			[
+				{ timestamp: 2, message: "java.lang.IllegalStateException: beta", logStreamName: "b" },
+				{ timestamp: 3, message: "Caused by: java.net.ConnectException: alpha-cause", logStreamName: "a" },
+			],
+			logSignature,
+			open,
+		);
+		expect([...a, ...b]).toHaveLength(2);
+		expect(a[0].signature).toBe(logSignature("java.net.ConnectException: alpha-cause"));
+	});
+
+	test("omitting the state argument keeps the single-page behaviour", () => {
+		const out = collapseTraceEvents(evs(TRACE.slice(1)), logSignature);
 		expect(out).toHaveLength(1);
 	});
 

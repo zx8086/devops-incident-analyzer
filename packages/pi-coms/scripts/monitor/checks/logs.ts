@@ -140,10 +140,17 @@ export function logSignature(message: string): string {
 export type TraceEvent = { timestamp: number; message: string; logStreamName?: string };
 export type CollapsedEvent = { signature: string; message: string; timestamp: number; frames: number };
 
-export function collapseTraceEvents(events: TraceEvent[], sign: (m: string) => string): CollapsedEvent[] {
+// `open` is the caller's: FilterLogEvents pages, and an exception can end one
+// page while its frames and `Caused by:` line begin the next. A map created
+// here would reset at every boundary, splitting that trace into two incidents
+// and leaving the first without its root-cause signature. Callers that read a
+// whole group in one go can omit it.
+export function collapseTraceEvents(
+	events: TraceEvent[],
+	sign: (m: string) => string,
+	open: Map<string, CollapsedEvent> = new Map(),
+): CollapsedEvent[] {
 	const out: CollapsedEvent[] = [];
-	// Per stream: which incident the next continuation line belongs to.
-	const open = new Map<string, CollapsedEvent>();
 	for (const e of events) {
 		const message = e.message ?? "";
 		const stream = e.logStreamName ?? "";
@@ -230,6 +237,10 @@ export async function checkLogs(client: AwsClient, state: MonitorState, opts: Ch
 		const wmKey = `logs:${group}`;
 		const win = logsWindow(state.getWatermark(wmKey), now, windowOpts);
 		const bySig = new Map<string, { count: number; sample: string; lastTs: number }>();
+		// SIO-1820: per GROUP, not per page -- a trace straddling a page boundary
+		// must stay one incident. Scoped to the group so one group's open trace
+		// can never adopt another's frames.
+		const openTraces = new Map<string, CollapsedEvent>();
 		let truncated = false;
 		try {
 			let token: string | undefined;
@@ -246,13 +257,13 @@ export async function checkLogs(client: AwsClient, state: MonitorState, opts: Ch
 				)) as FilterLogEventsCommandOutput;
 				pages++;
 				// FilteredLogEvent marks both fields optional; every real event carries them.
-				// SIO-1820: fold each page's events into incidents first, so a stack
-				// trace's separate one-line events count as ONE occurrence signed by
-				// its root cause instead of one finding per frame. Per page, which is
-				// where a trace lives: FilterLogEvents returns events in time order
-				// and a trace is written in one burst.
+				// SIO-1820: fold events into incidents first, so a stack trace's
+				// separate one-line events count as ONE occurrence signed by its root
+				// cause instead of one finding per frame. `openTraces` lives OUTSIDE
+				// the page loop: a trace can straddle a page boundary, and resetting
+				// per page would split it back into the findings this exists to merge.
 				const events = (resp.events ?? []) as TraceEvent[];
-				for (const inc of collapseTraceEvents(events, logSignature)) {
+				for (const inc of collapseTraceEvents(events, logSignature, openTraces)) {
 					const cur = bySig.get(inc.signature) ?? {
 						count: 0,
 						sample: inc.message.slice(0, 300),
