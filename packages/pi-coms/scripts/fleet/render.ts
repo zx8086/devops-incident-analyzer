@@ -230,13 +230,26 @@ resource "aws_sns_topic_policy" "monitor_reports" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Sid    = "SpokeMonitorsPublish"
-      Effect = "Allow"
-      Principal = {
-        AWS = var.monitor_report_publisher_arns
+      Sid       = "SpokeMonitorsPublish"
+      Effect    = "Allow"
+      Principal = "*"
+      Action    = "sns:Publish"
+      Resource  = aws_sns_topic.monitor_reports.arn
+      // Scoped by CONDITION rather than by a principal list, for the same reason
+      // the dist bucket above is: no spoke carries an account_id in the manifest
+      // (only hubs do), so a rendered list of full role ARNs would be empty or
+      // wrong. An empty Principal.AWS = [] grants NOBODY and the monitor
+      // swallows the resulting 403, so the feature would look enabled and
+      // deliver no email at all.
+      //
+      // Both conditions must hold: inside this AWS Organization AND a role whose
+      // name ends -agent. aws:PrincipalArn resolves an assumed-role session to
+      // the ROLE arn, never the session arn, so matching sts::...:assumed-role/
+      // would never fire. ArnLike is the operator AWS recommends for ARNs.
+      Condition = {
+        StringEquals = { "aws:PrincipalOrgID" = var.org_id }
+        ArnLike      = { "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent" }
       }
-      Action   = "sns:Publish"
-      Resource = aws_sns_topic.monitor_reports.arn
     }]
   })
 }
@@ -246,11 +259,6 @@ resource "aws_sns_topic_policy" "monitor_reports" {
 // sits "pending confirmation" in state forever until they click -- which reads
 // as drift on every plan. Subscribe once by hand:
 //   aws sns subscribe --topic-arn <arn> --protocol email --notification-endpoint <address>
-variable "monitor_report_publisher_arns" {
-  description = "SIO-1821: role ARNs allowed to publish monitor reports to the topic (the spokes' DevOpsAgentReadOnly roles). aws:PrincipalArn is the ROLE arn, never the assumed-role session arn."
-  type        = list(string)
-  default     = []
-}
 
 output "monitor_report_sns_topic_arn" {
   description = "SIO-1821: pass this to each spoke root's monitor_report_sns_topic_arn."

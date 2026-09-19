@@ -184,6 +184,38 @@ describe("fleet root renderer (SIO-1653)", () => {
 		}
 	});
 
+	// SIO-1821 follow-up (Greptile P1, verified): the first version scoped the
+	// policy to a var.monitor_report_publisher_arns list that nothing populated.
+	// It defaults to [], which renders Principal.AWS = [] -- a policy that
+	// authorizes NOBODY -- and publishReportToSns swallows the resulting 403, so
+	// the feature would have looked enabled and delivered no email at all.
+	// No spoke carries an account_id in the manifest (only hubs do), so a derived
+	// ARN list would be empty or wrong; the policy is scoped by CONDITION, the
+	// same shape the dist bucket already uses.
+	test("the topic policy actually authorizes the spoke monitors", () => {
+		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
+		const tagged = parseManifest(text);
+		const hubRoot = Object.keys(tagged.spokes).find((n) => tagged.spokes[n]?.hosts_hub === true);
+		if (!hubRoot) throw new Error("the example manifest has no hosts_hub spoke");
+		const hub = renderRoot(tagged, hubRoot)["main.tf"];
+
+		// The bug: a principal list nothing populates. Asserted on the CODE, not
+		// on prose -- the explanatory comment names the failure it prevents.
+		const code = hub
+			.split("\n")
+			.filter((l) => !l.trim().startsWith("//"))
+			.join("\n");
+		expect(code).not.toContain("monitor_report_publisher_arns");
+		expect(code).not.toContain("AWS = []");
+		expect(code).toContain('Principal = "*"');
+
+		// Both halves of the scope must be present: an org check alone would let
+		// any principal in the org publish, and the ARN pattern alone would let
+		// another org's matching role in.
+		expect(code).toContain('"aws:PrincipalOrgID" = var.org_id');
+		expect(code).toContain('"aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent"');
+	});
+
 	// The topic name must never carry an account id or address: committed roots
 	// are identifier-free by design (the IDENTIFIER guard below covers this too,
 	// but naming it here says why).
