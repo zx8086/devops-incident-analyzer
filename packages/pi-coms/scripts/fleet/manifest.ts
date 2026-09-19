@@ -147,12 +147,6 @@ export const FleetManifestSchema = z.object({
 		// a reporting bug, not a feature. Absent keeps the host zone (UTC here).
 		monitor_tz: z.string().min(1).optional(),
 		monitor_daily_cron: z.string().min(1).optional(),
-		// SIO-1821: render the SNS topic each environment's monitors mail their
-		// digest to, plus its publish policy. Fleet-wide like monitor_tz, because
-		// a digest that reaches an inbox for some accounts and not others is a
-		// reporting gap rather than a per-spoke preference. Absent renders
-		// nothing, so an unset manifest produces exactly today's roots.
-		monitor_report_email: z.boolean().optional(),
 		org_tags: OrgTagsSchema.optional(),
 	}),
 	spokes: z.record(z.string().regex(/^[a-z0-9-]+$/), SpokeSchema),

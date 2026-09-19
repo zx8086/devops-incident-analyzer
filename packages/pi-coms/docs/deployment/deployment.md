@@ -143,12 +143,16 @@ the prd channel (environments never cross, which is why tokens, buckets and
 CIDRs are all per hub too):
 
 ```yaml
-defaults:
-  monitor_report_email: true          # renders the topic + policy per hub root
 hubs:
   eu-shared-services-prd:
     monitor_report_sns_topic_arn: "arn:aws:sns:<region>:<hub-account>:pi-coms-monitor-reports"
 ```
+
+The key's presence is the only switch. A hub that carries it renders the topic,
+its publish policy and the tfvar for its spokes; a hub that omits it is
+untouched, so no environment ends up with a topic nothing publishes to. There
+is deliberately no fleet-wide flag: one would let a hub be "enabled" while
+silently generating nothing.
 
 Render then writes the value into the tfvars of the non-hub spokes bound to
 **that** hub, and leaves every other spoke untouched.

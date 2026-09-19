@@ -159,7 +159,7 @@ describe("fleet root renderer (SIO-1653)", () => {
 
 	// SIO-1821: the report topic renders only when the manifest asks for it, so
 	// an unset manifest produces exactly today's roots.
-	test("no monitor_report_email renders no SNS topic anywhere", () => {
+	test("a manifest with no hub key renders no SNS topic anywhere", () => {
 		for (const name of Object.keys(manifest.spokes)) {
 			const root = renderRoot(manifest, name);
 			expect(root["main.tf"]).not.toContain("aws_sns_topic");
@@ -350,7 +350,7 @@ describe("fleet root renderer (SIO-1653)", () => {
 		}
 	});
 
-	test("monitor_report_email without a hub arn renders a visible placeholder", () => {
+	test("an empty hub key renders a visible placeholder", () => {
 		// Empty on the hub = "this hub wants email, topic not applied yet".
 		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n").replace(
 			/^( {2}eu-shared-services-prd:\n)/m,
@@ -373,7 +373,7 @@ describe("fleet root renderer (SIO-1653)", () => {
 		expect(renderRoot(tagged, devSpoke)["terraform.tfvars"]).not.toContain("monitor_report_sns_topic_arn");
 	});
 
-	test("no monitor_report_email renders no tfvar line at all", () => {
+	test("a manifest with no hub key renders no tfvar line at all", () => {
 		for (const name of Object.keys(manifest.spokes)) {
 			expect(renderRoot(manifest, name)["terraform.tfvars"]).not.toContain("monitor_report_sns_topic_arn");
 		}
