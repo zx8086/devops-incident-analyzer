@@ -11,15 +11,15 @@ import getClusterDiagnosticsReport from "./getClusterDiagnosticsReport";
 import getClusterHealth from "./getClusterHealth";
 import getDocumentById from "./getDocumentById";
 import getFtsIndexDefinition from "./getFtsIndexDefinition";
-import listFtsIndexes from "./listFtsIndexes";
-import runFtsQuery from "./runFtsQuery";
 import getSchemaForCollection from "./getSchemaForCollection";
 import getScopesAndCollections from "./getScopesAndCollections";
 import listDocumentation from "./listDocumentation";
+import listFtsIndexes from "./listFtsIndexes";
 import listPlaybooks from "./listPlaybooks";
 // Import query analysis tools
 import { queryAnalysisTools } from "./queryAnalysis";
 import readDocumentation from "./readDocumentation";
+import runFtsQuery from "./runFtsQuery";
 import runSqlPlusPlusQuery from "./runSqlPlusPlusQuery";
 import syncDocumentation from "./syncDocumentation";
 import upsertDocumentById from "./upsertDocumentById";

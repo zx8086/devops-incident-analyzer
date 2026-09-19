@@ -78,10 +78,7 @@ export const runFtsQuery = async (
 			isError: false,
 		};
 	} catch (error) {
-		logger.error(
-			{ error: summarizeCouchbaseError(error), index_name, scope_name },
-			"Failed to run Search (FTS) query",
-		);
+		logger.error({ error: summarizeCouchbaseError(error), index_name, scope_name }, "Failed to run Search (FTS) query");
 		const message = error instanceof Error ? error.message : String(error);
 		const kind = classifyCouchbaseError(error);
 		// A malformed query body comes back as InternalServerFailureError from the Search

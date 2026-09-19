@@ -99,7 +99,7 @@ apps/
 |--------|------|-------|--------|
 | Elasticsearch | 9080 | 117 (101 cluster incl. 9 ML anomaly-detection + 4 ES\|QL/async-search + 16 conditional cloud/billing on `EC_API_KEY`) | `ES_URL`, `ES_API_KEY`, multi-deployment via `ELASTIC_DEPLOYMENTS` |
 | Kafka | 9081 | 11-61 (11 base + up to 50 gated: SR + ksqlDB + Connect + REST Proxy) | `KAFKA_PROVIDER` (local/msk/confluent), `KAFKA_BROKERS` |
-| Couchbase Capella | 9082 | ~39 (SIO-1107 official Couchbase tools: buckets, INFER, EXPLAIN, Index Advisor, covering-index detectors) | `COUCHBASE_URL`, `COUCHBASE_USERNAME`, `COUCHBASE_PASSWORD` |
+| Couchbase Capella | 9082 | ~43 (SIO-1107 official Couchbase tools: buckets, INFER, EXPLAIN, Index Advisor, covering-index detectors) | `COUCHBASE_URL`, `COUCHBASE_USERNAME`, `COUCHBASE_PASSWORD` |
 | Kong Konnect | 9083 | 67+ | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION` |
 | GitLab | 9084 | 21+ (proxy + code analysis) | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` |
 | Atlassian | 9085 (OAuth :9185) | proxy + custom | `ATLASSIAN_SITE_NAME`, `ATLASSIAN_UPSTREAM_MCP_URL`, `ATLASSIAN_READ_ONLY` |

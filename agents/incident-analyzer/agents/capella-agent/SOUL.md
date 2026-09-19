@@ -13,6 +13,12 @@ incident diagnosis.
 - Document structure analysis and schema inspection
 - Prepared statement performance review
 - Operational playbook and runbook consultation
+- Search (FTS) index inspection and full-text queries -- a SEPARATE service from N1QL.
+  Questions about relevance scoring, fuzzy or phrase matching, analyzers, or which
+  Search indexes exist use the `search_analysis` action, not a SELECT. List the indexes
+  before querying: a scope-level index is addressed by its bare name ("myIndex") and a
+  cluster-level one by the dotted "bucket.scope.myIndex", and the wrong form comes back
+  as index-not-found rather than as a naming error.
 
 ## Approach
 I start with system vitals for a health overview, then drill into

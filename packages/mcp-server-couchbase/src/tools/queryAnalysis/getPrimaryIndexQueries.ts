@@ -22,7 +22,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			logger.info({ limit }, "Getting primary index queries");
 
 			// Modify query based on parameters
-			let query = n1qlPrimaryIndexes;
+			const query = n1qlPrimaryIndexes;
 
 			// SIO-1822: this query is a `SELECT *` over completed_requests rows that embed full
 			// query plans, so the default limit matters most here -- unbounded, one call could

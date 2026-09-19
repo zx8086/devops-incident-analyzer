@@ -45,9 +45,7 @@ export const listFtsIndexes = async (params: { bucket_name?: string; scope_name?
 			}
 			if (skipped.length > 0) {
 				return {
-					content: [
-						{ type: "text" as const, text: JSON.stringify({ indexes, unreadableScopes: skipped }, null, 2) },
-					],
+					content: [{ type: "text" as const, text: JSON.stringify({ indexes, unreadableScopes: skipped }, null, 2) }],
 					isError: false,
 				};
 			}
@@ -85,10 +83,7 @@ export default (server: McpServer, bucket: Bucket) => {
 					.string()
 					.optional()
 					.describe("Bucket to list scope-level Search indexes for. Omit to list cluster-level indexes."),
-				scope_name: z
-					.string()
-					.optional()
-					.describe("Scope to list Search indexes for. Requires bucket_name."),
+				scope_name: z.string().optional().describe("Scope to list Search indexes for. Requires bucket_name."),
 			},
 			annotations: couchbaseToolAnnotations("capella_list_fts_indexes"),
 		},

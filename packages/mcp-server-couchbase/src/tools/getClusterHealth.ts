@@ -100,7 +100,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				service_types: z
 					.array(z.nativeEnum(ServiceType))
 					.optional()
-					.describe("Limit the ping to these services (e.g. [\"query\",\"search\"]). Omit to ping every service."),
+					.describe('Limit the ping to these services (e.g. ["query","search"]). Omit to ping every service.'),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_cluster_health"),
 		},
