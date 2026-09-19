@@ -3,11 +3,21 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { parseManifest } from "../scripts/fleet/manifest.ts";
-import { hasToken, renderRoot, withToken } from "../scripts/fleet/render.ts";
+import { hasToken, renderRoot, renderTfvars, withToken } from "../scripts/fleet/render.ts";
 
 const EXAMPLE = readFileSync(path.join(import.meta.dir, "..", "deploy", "fleet.example.yaml"), "utf-8");
 const manifest = parseManifest(EXAMPLE);
 const IDENTIFIER = /subnet-|10\.\d+\.\d+\.\d+|\b\d{12}\b|<set by/;
+
+// SIO-1821: the topic arn belongs to a HUB, not to fleet-wide defaults -- a
+// single default renders the prd topic into dev spokes. These helpers set it on
+// the PRD hub only, so a dev spoke bound to the dev hub must come back empty.
+const PRD_ARN = "arn:aws:sns:eu-central-1:111111111111:pi-coms-monitor-reports";
+function withHubArn(yaml: string): string {
+	return yaml
+		.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n")
+		.replace(/^( {2}eu-shared-services-prd:\n)/m, `$1    monitor_report_sns_topic_arn: "${PRD_ARN}"\n`);
+}
 
 describe("fleet root renderer (SIO-1653)", () => {
 	// SIO-1736: the monitor reads its crons in the host zone (UTC on these
@@ -149,7 +159,7 @@ describe("fleet root renderer (SIO-1653)", () => {
 
 	// SIO-1821: the report topic renders only when the manifest asks for it, so
 	// an unset manifest produces exactly today's roots.
-	test("no monitor_report_email renders no SNS topic anywhere", () => {
+	test("a manifest with no hub key renders no SNS topic anywhere", () => {
 		for (const name of Object.keys(manifest.spokes)) {
 			const root = renderRoot(manifest, name);
 			expect(root["main.tf"]).not.toContain("aws_sns_topic");
@@ -168,12 +178,14 @@ describe("fleet root renderer (SIO-1653)", () => {
 		}
 	});
 
-	test("monitor_report_email renders the topic in EVERY hub root, and a tfvar elsewhere", () => {
-		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
+	test("a hub carrying the key renders the topic; its spokes get a tfvar", () => {
+		const text = withHubArn(EXAMPLE);
 		const tagged = parseManifest(text);
 		// The example manifest has one hub-hosting spoke per ENVIRONMENT, so this
 		// must hold for each of them, not just the first one found.
-		const hubRoots = Object.keys(tagged.spokes).filter((n) => tagged.spokes[n]?.hosts_hub === true);
+		const hubRoots = Object.keys(tagged.spokes).filter(
+			(n) => tagged.spokes[n]?.hosts_hub === true && tagged.spokes[n]?.hub === "eu-shared-services-prd",
+		);
 		expect(hubRoots.length).toBeGreaterThan(0);
 
 		for (const name of hubRoots) {
@@ -185,13 +197,19 @@ describe("fleet root renderer (SIO-1653)", () => {
 		}
 
 		for (const name of Object.keys(tagged.spokes)) {
-			if (hubRoots.includes(name)) continue;
-			const spoke = renderRoot(tagged, name)["main.tf"];
-			// Cross-account: a value from tfvars, never a reference into another
-			// account's state.
-			expect(spoke).not.toContain('resource "aws_sns_topic"');
-			expect(spoke).toContain("monitor_report_sns_topic_arn = var.monitor_report_sns_topic_arn");
-			expect(spoke).toContain('variable "monitor_report_sns_topic_arn"');
+			const spoke = tagged.spokes[name];
+			if (!spoke || hubRoots.includes(name)) continue;
+			const main = renderRoot(tagged, name)["main.tf"];
+			expect(main).not.toContain('resource "aws_sns_topic"');
+			if (spoke.hub === "eu-shared-services-prd") {
+				// Cross-account: a value from tfvars, never a reference into another
+				// account's state.
+				expect(main).toContain("monitor_report_sns_topic_arn = var.monitor_report_sns_topic_arn");
+				expect(main).toContain('variable "monitor_report_sns_topic_arn"');
+			} else {
+				// A hub that never asked for email leaves its spokes entirely alone.
+				expect(main).not.toContain("monitor_report_sns_topic_arn");
+			}
 		}
 	});
 
@@ -204,9 +222,10 @@ describe("fleet root renderer (SIO-1653)", () => {
 	// ARN list would be empty or wrong; the policy is scoped by CONDITION, the
 	// same shape the dist bucket already uses.
 	test("the topic policy actually authorizes the spoke monitors", () => {
-		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
-		const tagged = parseManifest(text);
-		const hubRoot = Object.keys(tagged.spokes).find((n) => tagged.spokes[n]?.hosts_hub === true);
+		const tagged = parseManifest(withHubArn(EXAMPLE));
+		const hubRoot = Object.keys(tagged.spokes).find(
+			(n) => tagged.spokes[n]?.hosts_hub === true && tagged.spokes[n]?.hub === "eu-shared-services-prd",
+		);
 		if (!hubRoot) throw new Error("the example manifest has no hosts_hub spoke");
 		const hub = renderRoot(tagged, hubRoot)["main.tf"];
 
@@ -246,12 +265,118 @@ describe("fleet root renderer (SIO-1653)", () => {
 	// are identifier-free by design (the IDENTIFIER guard below covers this too,
 	// but naming it here says why).
 	test("the rendered topic carries no identifiers", () => {
-		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
-		const tagged = parseManifest(text);
-		const hubRoot = Object.keys(tagged.spokes).find((n) => tagged.spokes[n]?.hosts_hub === true);
+		const tagged = parseManifest(withHubArn(EXAMPLE));
+		const hubRoot = Object.keys(tagged.spokes).find(
+			(n) => tagged.spokes[n]?.hosts_hub === true && tagged.spokes[n]?.hub === "eu-shared-services-prd",
+		);
 		if (!hubRoot) throw new Error("the example manifest has no hosts_hub spoke");
 		const hub = renderRoot(tagged, hubRoot)["main.tf"];
 		expect(hub).toContain('name = "pi-coms-monitor-reports"');
+	});
+
+	// SIO-1821 follow-up (Greptile P1, verified): renderTfvars REGENERATES the
+	// file and preserves only coms_auth_token, so a hand-appended line is
+	// silently deleted by the next render -- and `just fleet deploy` renders
+	// before it applies. The ARN therefore has to come from the manifest.
+	test("the report topic arn is rendered into tfvars, not hand-added", () => {
+		const text = withHubArn(EXAMPLE);
+		const tagged = parseManifest(text);
+		for (const name of Object.keys(tagged.spokes)) {
+			const spoke = tagged.spokes[name];
+			if (!spoke) continue;
+			const tfvars = renderRoot(tagged, name)["terraform.tfvars"];
+			const boundToPrdHub = spoke.hub === "eu-shared-services-prd";
+			if (spoke.hosts_hub || !boundToPrdHub) {
+				// The hub root gets it by Terraform reference; a spoke on ANOTHER hub
+				// must never see this hub's ARN -- environments never cross. It may
+				// carry the placeholder, which is the "enabled but not yet applied"
+				// state and is what the next test covers.
+				expect({ name, leaked: tfvars.includes(PRD_ARN) }).toEqual({ name, leaked: false });
+			} else {
+				expect(tfvars).toContain(`monitor_report_sns_topic_arn = "${PRD_ARN}"`);
+			}
+		}
+	});
+
+	// The bug this shape prevents: a fleet-wide default rendered the PRD topic
+	// into every dev spoke, so dev digests would have mailed the prd channel.
+	test("a spoke on another hub never gets this hub's topic", () => {
+		const tagged = parseManifest(withHubArn(EXAMPLE));
+		const devSpoke = Object.keys(tagged.spokes).find(
+			(n) => !tagged.spokes[n]?.hosts_hub && tagged.spokes[n]?.hub !== "eu-shared-services-prd",
+		);
+		if (!devSpoke) throw new Error("the example manifest has no non-hub spoke on another hub");
+		expect(renderRoot(tagged, devSpoke)["terraform.tfvars"]).not.toContain(PRD_ARN);
+	});
+
+	test("re-rendering keeps the topic arn (the hand-edit failure mode)", () => {
+		const text = withHubArn(EXAMPLE);
+		const tagged = parseManifest(text);
+		const spoke = Object.keys(tagged.spokes).find(
+			(n) => !tagged.spokes[n]?.hosts_hub && tagged.spokes[n]?.hub === "eu-shared-services-prd",
+		);
+		if (!spoke) throw new Error("no non-hub prd spoke in the example manifest");
+		const first = renderRoot(tagged, spoke)["terraform.tfvars"];
+		const second = renderTfvars(tagged, spoke, first);
+		expect(second).toContain("monitor_report_sns_topic_arn");
+		// And the minted token still survives, as before.
+		const withToken = first.replace(/coms_auth_token = "[^"]*"/, 'coms_auth_token = "MINTED"');
+		expect(renderTfvars(tagged, spoke, withToken)).toContain('coms_auth_token = "MINTED"');
+	});
+
+	// SIO-1821 follow-up (Greptile P1, verified): enabling the feature without
+	// the hub arn parsed happily, created the topic, and left every spoke with an
+	// empty env var -- reporting silently off. The ARN genuinely does not exist
+	// until the hub root is applied once, so this cannot be a hard error; it
+	// renders the same visible placeholder org_id uses, which shows up in the
+	// tfvars and fails loudly at apply rather than shipping a dead feature.
+	// SIO-1821 (Greptile P1, round 4): the fleet-wide flag created a topic in
+	// EVERY hub root, dev included, while only the hub carrying an arn wired its
+	// spokes up. That leaves an orphaned topic with no publisher -- enabled,
+	// applied, and silently unused. The hub key is now the single switch: a hub
+	// that carries it gets a topic AND wires its spokes; a hub that does not is
+	// untouched.
+	test("a hub without the key gets no topic and no spoke wiring", () => {
+		const tagged = parseManifest(withHubArn(EXAMPLE));
+		for (const name of Object.keys(tagged.spokes)) {
+			const spoke = tagged.spokes[name];
+			if (!spoke?.hosts_hub) continue;
+			const main = renderRoot(tagged, name)["main.tf"];
+			const hubHasKey = tagged.hubs[spoke.hub]?.monitor_report_sns_topic_arn !== undefined;
+			expect({ name, topic: main.includes('resource "aws_sns_topic" "monitor_reports"') }).toEqual({
+				name,
+				topic: hubHasKey,
+			});
+		}
+	});
+
+	test("an empty hub key renders a visible placeholder", () => {
+		// Empty on the hub = "this hub wants email, topic not applied yet".
+		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n").replace(
+			/^( {2}eu-shared-services-prd:\n)/m,
+			'$1    monitor_report_sns_topic_arn: ""\n',
+		);
+		const tagged = parseManifest(text);
+		const spoke = Object.keys(tagged.spokes).find(
+			(n) => !tagged.spokes[n]?.hosts_hub && tagged.spokes[n]?.hub === "eu-shared-services-prd",
+		);
+		if (!spoke) throw new Error("no non-hub prd spoke in the example manifest");
+		const tfvars = renderRoot(tagged, spoke)["terraform.tfvars"];
+		expect(tfvars).toContain("<set:");
+
+		// And a hub that never asked for email leaves its spokes alone, rather
+		// than blocking their plan for a feature that environment does not use.
+		const devSpoke = Object.keys(tagged.spokes).find(
+			(n) => !tagged.spokes[n]?.hosts_hub && tagged.spokes[n]?.hub !== "eu-shared-services-prd",
+		);
+		if (!devSpoke) throw new Error("no non-hub spoke on another hub");
+		expect(renderRoot(tagged, devSpoke)["terraform.tfvars"]).not.toContain("monitor_report_sns_topic_arn");
+	});
+
+	test("a manifest with no hub key renders no tfvar line at all", () => {
+		for (const name of Object.keys(manifest.spokes)) {
+			expect(renderRoot(manifest, name)["terraform.tfvars"]).not.toContain("monitor_report_sns_topic_arn");
+		}
 	});
 
 	test("org_tags may not override a pi-coms tag", () => {

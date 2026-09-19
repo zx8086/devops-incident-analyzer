@@ -30,6 +30,10 @@ export const GENERATED_HEADER = (name: string) =>
 `;
 
 const TOKEN_PLACEHOLDER = "<set by: just fleet tokens ensure>";
+// SIO-1821: visible in the generated tfvars and rejected by the module's
+// variable validation, so an enabled-but-unset topic fails at plan time instead
+// of booting every host with an empty variable and no email.
+export const REPORT_ARN_PLACEHOLDER = "<set: terraform output -raw monitor_report_sns_topic_arn, in the hub root>";
 
 function hcl(value: string): string {
 	return JSON.stringify(value);
@@ -111,7 +115,7 @@ variable "dist_bucket" {
   description = "Fleet distribution bucket of the ${spoke.env} hub account (terraform.tfvars)."
   type        = string
 }${
-		manifest.defaults.monitor_report_email
+		hub.monitor_report_sns_topic_arn !== undefined
 			? `
 
 // SIO-1821: the hub account's report topic, which lives in another account.
@@ -200,7 +204,7 @@ resource "aws_s3_bucket_public_access_block" "dist" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }${
-			manifest.defaults.monitor_report_email
+			hub.monitor_report_sns_topic_arn !== undefined
 				? `
 
 // SIO-1821: the topic every monitor in this environment mails its daily digest
@@ -401,7 +405,7 @@ import {
 		...(manifest.defaults.monitor_daily_cron
 			? ([["monitor_daily_cron", hcl(manifest.defaults.monitor_daily_cron)]] as [string, string][])
 			: []),
-		...(manifest.defaults.monitor_report_email
+		...(hub.monitor_report_sns_topic_arn !== undefined
 			? ([
 					[
 						"monitor_report_sns_topic_arn",
@@ -540,6 +544,27 @@ export function renderTfvars(manifest: FleetManifest, name: string, existing?: s
 		`agent_subnet_id = ${hcl(spoke.subnet_id)}`,
 		`dist_bucket     = ${hcl(hub.dist_bucket ?? `pi-coms-dist-${hub.account_id ?? "<hub-account-id>"}`)}`,
 	];
+	// SIO-1821: the topic of the hub THIS spoke is bound to -- never a
+	// fleet-wide default, which would render the prd topic into dev spokes.
+	// Cross-account, so a non-hub spoke needs the VALUE; the hub-hosting root
+	// gets the topic by Terraform reference and would ignore a tfvar. Rendered
+	// from the manifest rather than hand-added, because this whole file is
+	// regenerated on every render and only the minted token survives.
+	// Enabled but no ARN yet is the expected FIRST state for a hub -- the topic
+	// does not exist until that hub's root is applied once -- so this renders a
+	// placeholder rather than failing. The placeholder is deliberately NOT a
+	// valid ARN, so the module's variable validation rejects it at plan time:
+	// without it the render was silent, the topic got created, no spoke ever
+	// received the ARN, and every host booted with an empty variable and no
+	// email. Same idiom as org_id.
+	//
+	// Gated on the HUB having been reached, not on the fleet-wide flag: a hub
+	// with no topic (dev today) must not have its spokes blocked at plan time
+	// for a feature that environment does not use.
+	const reportArn = hub.monitor_report_sns_topic_arn;
+	if (!spoke.hosts_hub && reportArn !== undefined) {
+		lines.push(`monitor_report_sns_topic_arn = ${hcl(reportArn || REPORT_ARN_PLACEHOLDER)}`);
+	}
 	const orgTags = Object.entries(orgTagsFor(manifest, name));
 	if (orgTags.length > 0) {
 		lines.push(`org_tags = {`, ...orgTags.map(([k, v]) => `  ${hcl(k)} = ${hcl(v)}`), `}`);
