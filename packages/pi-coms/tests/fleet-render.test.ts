@@ -9,6 +9,16 @@ const EXAMPLE = readFileSync(path.join(import.meta.dir, "..", "deploy", "fleet.e
 const manifest = parseManifest(EXAMPLE);
 const IDENTIFIER = /subnet-|10\.\d+\.\d+\.\d+|\b\d{12}\b|<set by/;
 
+// SIO-1821: the topic arn belongs to a HUB, not to fleet-wide defaults -- a
+// single default renders the prd topic into dev spokes. These helpers set it on
+// the PRD hub only, so a dev spoke bound to the dev hub must come back empty.
+const PRD_ARN = "arn:aws:sns:eu-central-1:111111111111:pi-coms-monitor-reports";
+function withHubArn(yaml: string): string {
+	return yaml
+		.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n")
+		.replace(/^( {2}eu-shared-services-prd:\n)/m, `$1    monitor_report_sns_topic_arn: "${PRD_ARN}"\n`);
+}
+
 describe("fleet root renderer (SIO-1653)", () => {
 	// SIO-1736: the monitor reads its crons in the host zone (UTC on these
 	// hosts), so a wall-clock digest time has to be rendered in, not hand-set on
@@ -259,32 +269,41 @@ describe("fleet root renderer (SIO-1653)", () => {
 	// silently deleted by the next render -- and `just fleet deploy` renders
 	// before it applies. The ARN therefore has to come from the manifest.
 	test("the report topic arn is rendered into tfvars, not hand-added", () => {
-		const text = EXAMPLE.replace(
-			/^(defaults:\n)/m,
-			'$1  monitor_report_email: true\n  monitor_report_sns_topic_arn: "arn:aws:sns:eu-central-1:111111111111:pi-coms-monitor-reports"\n',
-		);
+		const text = withHubArn(EXAMPLE);
 		const tagged = parseManifest(text);
 		for (const name of Object.keys(tagged.spokes)) {
+			const spoke = tagged.spokes[name];
+			if (!spoke) continue;
 			const tfvars = renderRoot(tagged, name)["terraform.tfvars"];
-			if (tagged.spokes[name]?.hosts_hub) {
-				// The hub root gets it by Terraform reference; a tfvar would be dead weight.
-				expect(tfvars).not.toContain("monitor_report_sns_topic_arn");
+			const boundToPrdHub = spoke.hub === "eu-shared-services-prd";
+			if (spoke.hosts_hub || !boundToPrdHub) {
+				// The hub root gets it by Terraform reference; a spoke on ANOTHER hub
+				// must never see this hub's topic -- environments never cross.
+				expect({ name, has: tfvars.includes("monitor_report_sns_topic_arn") }).toEqual({ name, has: false });
 			} else {
-				expect(tfvars).toContain(
-					'monitor_report_sns_topic_arn = "arn:aws:sns:eu-central-1:111111111111:pi-coms-monitor-reports"',
-				);
+				expect(tfvars).toContain(`monitor_report_sns_topic_arn = "${PRD_ARN}"`);
 			}
 		}
 	});
 
-	test("re-rendering keeps the topic arn (the hand-edit failure mode)", () => {
-		const text = EXAMPLE.replace(
-			/^(defaults:\n)/m,
-			'$1  monitor_report_email: true\n  monitor_report_sns_topic_arn: "arn:aws:sns:eu-central-1:111111111111:pi-coms-monitor-reports"\n',
+	// The bug this shape prevents: a fleet-wide default rendered the PRD topic
+	// into every dev spoke, so dev digests would have mailed the prd channel.
+	test("a spoke on another hub never gets this hub's topic", () => {
+		const tagged = parseManifest(withHubArn(EXAMPLE));
+		const devSpoke = Object.keys(tagged.spokes).find(
+			(n) => !tagged.spokes[n]?.hosts_hub && tagged.spokes[n]?.hub !== "eu-shared-services-prd",
 		);
+		if (!devSpoke) throw new Error("the example manifest has no non-hub spoke on another hub");
+		expect(renderRoot(tagged, devSpoke)["terraform.tfvars"]).not.toContain("monitor_report_sns_topic_arn");
+	});
+
+	test("re-rendering keeps the topic arn (the hand-edit failure mode)", () => {
+		const text = withHubArn(EXAMPLE);
 		const tagged = parseManifest(text);
-		const spoke = Object.keys(tagged.spokes).find((n) => !tagged.spokes[n]?.hosts_hub);
-		if (!spoke) throw new Error("no non-hub spoke in the example manifest");
+		const spoke = Object.keys(tagged.spokes).find(
+			(n) => !tagged.spokes[n]?.hosts_hub && tagged.spokes[n]?.hub === "eu-shared-services-prd",
+		);
+		if (!spoke) throw new Error("no non-hub prd spoke in the example manifest");
 		const first = renderRoot(tagged, spoke)["terraform.tfvars"];
 		const second = renderTfvars(tagged, spoke, first);
 		expect(second).toContain("monitor_report_sns_topic_arn");

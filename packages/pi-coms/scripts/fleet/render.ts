@@ -540,12 +540,14 @@ export function renderTfvars(manifest: FleetManifest, name: string, existing?: s
 		`agent_subnet_id = ${hcl(spoke.subnet_id)}`,
 		`dist_bucket     = ${hcl(hub.dist_bucket ?? `pi-coms-dist-${hub.account_id ?? "<hub-account-id>"}`)}`,
 	];
-	// SIO-1821: cross-account, so a non-hub spoke needs the VALUE; the
-	// hub-hosting root gets the topic by Terraform reference and would ignore a
-	// tfvar. Rendered from the manifest rather than hand-added, because this
-	// whole file is regenerated on every render and only the token survives.
-	if (manifest.defaults.monitor_report_sns_topic_arn && !spoke.hosts_hub) {
-		lines.push(`monitor_report_sns_topic_arn = ${hcl(manifest.defaults.monitor_report_sns_topic_arn)}`);
+	// SIO-1821: the topic of the hub THIS spoke is bound to -- never a
+	// fleet-wide default, which would render the prd topic into dev spokes.
+	// Cross-account, so a non-hub spoke needs the VALUE; the hub-hosting root
+	// gets the topic by Terraform reference and would ignore a tfvar. Rendered
+	// from the manifest rather than hand-added, because this whole file is
+	// regenerated on every render and only the minted token survives.
+	if (hub.monitor_report_sns_topic_arn && !spoke.hosts_hub) {
+		lines.push(`monitor_report_sns_topic_arn = ${hcl(hub.monitor_report_sns_topic_arn)}`);
 	}
 	const orgTags = Object.entries(orgTagsFor(manifest, name));
 	if (orgTags.length > 0) {

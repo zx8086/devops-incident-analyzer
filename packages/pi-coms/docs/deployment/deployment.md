@@ -137,13 +137,21 @@ exactly like `dist_bucket`. It is tempting to append the line to each spoke's
 `terraform.tfvars` -- do not. `renderTfvars` REGENERATES that file and preserves
 only the minted `coms_auth_token`, so the next `just fleet render` deletes it,
 and `just fleet deploy` renders before it applies. Put the value in
-`deploy/fleet.yaml` under `defaults` and let render emit it:
+`deploy/fleet.yaml` and let render emit it -- on the **hub**, never under
+`defaults`, or every dev spoke renders the prd topic and mails its digest into
+the prd channel (environments never cross, which is why tokens, buckets and
+CIDRs are all per hub too):
 
 ```yaml
 defaults:
-  monitor_report_email: true
-  monitor_report_sns_topic_arn: "arn:aws:sns:<region>:<hub-account>:pi-coms-monitor-reports"
+  monitor_report_email: true          # renders the topic + policy per hub root
+hubs:
+  eu-shared-services-prd:
+    monitor_report_sns_topic_arn: "arn:aws:sns:<region>:<hub-account>:pi-coms-monitor-reports"
 ```
+
+Render then writes the value into the tfvars of the non-hub spokes bound to
+**that** hub, and leaves every other spoke untouched.
 
 Miss it and you get a green apply, a healthy host, and a silently disabled
 feature: the userdata carries `VAR=''`, the bootstrap correctly skips an empty
