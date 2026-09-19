@@ -6,6 +6,28 @@ import { adviseCouchbaseError } from "../../lib/adviseCouchbaseError";
 import { classifyCouchbaseError, summarizeCouchbaseError } from "../../lib/classifyCouchbaseError";
 import type { ToolResponse } from "../../types";
 import { logger } from "../../utils/logger";
+import { DEFAULT_ANALYSIS_LIMIT } from "./analysisQueries";
+
+// SIO-1822: one definition of how an analysis query gets its LIMIT, replacing seven
+// copies across the completed_requests tools (two of which had drifted into a second
+// variant). The default is the load-bearing part: without it these tools returned every
+// matching row, and `capella_get_primary_index_queries` is a `SELECT *` over rows that
+// embed full query plans -- an unbounded result there can swamp the agent's context.
+// Upstream binds $limit with a default of 10 for the same reason.
+//
+// LIMIT cannot be a named parameter in N1QL, so it is spliced. The value is an integer
+// here by construction: callers zod-validate it and the fallback is a module constant.
+export function applyAnalysisLimit(query: string, limit?: number): { query: string; appliedLimit: number } {
+	const appliedLimit = limit !== undefined && Number.isInteger(limit) && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
+
+	// An existing LIMIT in the canned SQL is replaced, not appended to -- appending would
+	// produce "LIMIT 50 LIMIT 10" and a syntax error.
+	const query_ = /LIMIT\s+\d+/i.test(query)
+		? query.replace(/LIMIT\s+\d+/i, `LIMIT ${appliedLimit}`)
+		: `${query.trim().replace(/;$/, "")} LIMIT ${appliedLimit};`;
+
+	return { query: query_, appliedLimit };
+}
 
 // SIO-1107: shared human-markdown renderer for both the cluster-context and
 // scope-context executors. Extracted verbatim from executeAnalysisQuery so the

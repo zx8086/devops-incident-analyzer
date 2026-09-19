@@ -6,7 +6,7 @@ import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlMostFrequentQueries } from "./analysisQueries";
-import { executeAnalysisQuery } from "./queryAnalysisUtils";
+import { applyAnalysisLimit, executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.registerTool(
@@ -15,7 +15,9 @@ export default (server: McpServer, bucket: Bucket) => {
 			description: "Get the most frequently executed queries",
 			inputSchema: {
 				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
-				min_count: z.number().optional().describe("Minimum execution count to include"),
+				// SIO-1822: .int() -- this is spliced into the SQL, and an execution count is a
+				// whole number. Also rejects NaN/Infinity, which would emit invalid SQL.
+				min_count: z.number().int().nonnegative().optional().describe("Minimum execution count to include"),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_most_frequent_queries"),
 		},
@@ -34,17 +36,8 @@ export default (server: McpServer, bucket: Bucket) => {
 				);
 			}
 
-			// Apply limit if specified
-			if (limit && Number.isInteger(limit) && limit > 0) {
-				// Add or replace LIMIT clause
-				if (query.includes("LIMIT")) {
-					query = query.replace(/LIMIT \d+/i, `LIMIT ${limit}`);
-				} else {
-					query = `${query.replace(";", "")} LIMIT ${limit};`;
-				}
-			}
-
-			return executeAnalysisQuery(bucket, query, "Most Frequently Executed Queries", limit);
+			const { query: limitedQuery, appliedLimit } = applyAnalysisLimit(query, limit);
+			return executeAnalysisQuery(bucket, limitedQuery, "Most Frequently Executed Queries", appliedLimit);
 		},
 	);
 };

@@ -6,7 +6,7 @@ import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlLongestRunningQueries } from "./analysisQueries";
-import { executeAnalysisQueryStructured } from "./queryAnalysisUtils";
+import { applyAnalysisLimit, executeAnalysisQueryStructured } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.registerTool(
@@ -16,36 +16,35 @@ export default (server: McpServer, bucket: Bucket) => {
 				"Get the longest running queries based on service time. Returns bare JSON array of {statement, avgServiceTime, lastExecutionTime, queries} -- machine-readable for correlation extractors.",
 			inputSchema: {
 				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
-				min_time_ms: z.number().optional().describe("Minimum execution time in milliseconds to include"),
+				// SIO-1822: .int() matters -- this value is spliced into the SQL, and a fractional
+				// one silently disabled the filter (1.5 produced "1.5000000" ns via the old
+				// string-append conversion, i.e. 1.5 ms, matching everything).
+				min_time_ms: z
+					.number()
+					.int()
+					.nonnegative()
+					.optional()
+					.describe("Minimum average execution time in milliseconds to include (whole milliseconds)"),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_longest_running_queries"),
 		},
 		async ({ limit, min_time_ms }) => {
 			logger.info({ limit, min_time_ms }, "Getting longest running queries");
 
-			// Modify query based on parameters
 			let query = n1qlLongestRunningQueries;
 
-			// Apply minimum time filter if specified
-			if (min_time_ms && min_time_ms > 0) {
+			if (min_time_ms !== undefined && min_time_ms > 0) {
+				// serviceTime is compared in nanoseconds. Compute the value numerically rather
+				// than appending "000000" to its decimal text (SIO-1822).
+				const minServiceTimeNs = min_time_ms * 1_000_000;
 				query = query.replace(
 					"LETTING avgServiceTime = AVG(STR_TO_DURATION(serviceTime))",
 					`LETTING avgServiceTime = AVG(STR_TO_DURATION(serviceTime))
-           HAVING avgServiceTime >= ${min_time_ms}000000`, // Convert ms to ns for N1QL
+           HAVING avgServiceTime >= ${minServiceTimeNs}`,
 				);
 			}
 
-			// Apply limit if specified
-			if (limit && Number.isInteger(limit) && limit > 0) {
-				// Add or replace LIMIT clause
-				if (query.includes("LIMIT")) {
-					query = query.replace(/LIMIT \d+/i, `LIMIT ${limit}`);
-				} else {
-					query = `${query.replace(";", "")} LIMIT ${limit};`;
-				}
-			}
-
-			return executeAnalysisQueryStructured(bucket, query);
+			return executeAnalysisQueryStructured(bucket, applyAnalysisLimit(query, limit).query);
 		},
 	);
 };

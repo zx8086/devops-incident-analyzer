@@ -8,7 +8,7 @@ input_schema:
   properties:
     action:
       type: string
-      enum: [system_vitals, fatal_requests, slow_queries, expensive_queries, index_analysis, node_status, document_ops, query_execution]
+      enum: [system_vitals, fatal_requests, slow_queries, expensive_queries, index_analysis, node_status, document_ops, query_execution, search_analysis]
       description: Type of health check to perform
     bucket:
       type: string
@@ -49,6 +49,11 @@ tool_mapping:
       - capella_get_system_nodes
       - capella_get_cluster_health
       - capella_ping
+      # SIO-1823: paired with the ping tools on purpose. capella_ping and
+      # capella_get_cluster_health both probe the network, which RECONNECTS a broken
+      # connection and reports it healthy; this one reads the SDK's cached state and so
+      # shows the breakage the probes just papered over.
+      - capella_get_cluster_diagnostics_report
     fatal_requests:
       - capella_get_fatal_requests
       - capella_get_completed_requests
@@ -82,6 +87,15 @@ tool_mapping:
       - capella_get_system_nodes
       - capella_get_system_vitals
       - capella_get_cluster_health
+      - capella_get_cluster_diagnostics_report
+    # SIO-1823: the Search service. Listing comes first deliberately -- a scope-level
+    # index is addressed by its bare name and a cluster-level one by the dotted
+    # bucket.scope.name, and the wrong form fails as IndexNotFoundError, so the agent
+    # needs the listing to know which name to pass.
+    search_analysis:
+      - capella_list_fts_indexes
+      - capella_get_fts_index_definition
+      - capella_run_fts_query
     document_ops:
       - capella_get_document_by_id
       - capella_get_buckets
@@ -114,8 +128,16 @@ tool_mapping:
       when investigating queries with high resource cost (memory, CPU, scan size, non-covering fetches) --
       can be fast OR slow; also carries EXPLAIN + Index Advisor to check surfaced statements for index problems
     index_analysis: when reading GSI/secondary index definitions or stats, running the server-computed Index Advisor on a query, or sweeping for non-covering / low-selectivity query patterns
-    node_status: when checking individual cluster node status (services running, version, uptime) -- not cluster-wide health
+    node_status: >-
+      when checking individual cluster node status (services running, version, uptime) -- not cluster-wide health;
+      also carries the SDK diagnostics report, which reads CACHED connection state without probing the network
+      and so answers whether a connection was ALREADY broken (an active ping reconnects and reports healthy)
     document_ops: when listing buckets/scopes/collections or reading specific documents by key (read-only K/V access)
     query_execution: >-
       when running an N1QL SELECT query or EXPLAIN plan (read-only; carries the index-listing tools
       because the SOUL's index-first protocol requires consulting them before the first SELECT)
+    search_analysis: >-
+      when the question concerns the Search (FTS) service rather than N1QL: which Search indexes exist,
+      what one indexes (mappings, analyzers, type filters), or running a full-text query for relevance-scored
+      or fuzzy matching. List the indexes first -- a scope-level index is addressed by its bare name and a
+      cluster-level one by bucket.scope.name, and the wrong form fails as index-not-found

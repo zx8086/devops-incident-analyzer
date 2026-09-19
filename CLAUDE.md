@@ -44,7 +44,7 @@ individual packages:
 - `agent/` -- LangGraph supervisor + the 32-node pipeline (see below)
 - `mcp-server-elastic/` -- 117 tools: 101 cluster incl. 9 ML anomaly-detection (SIO-1148) + 4 ES|QL/async-search (SIO-1391) + 16 conditional cloud/billing gated on `EC_API_KEY`
 - `mcp-server-kafka/` -- 11-61 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy
-- `mcp-server-couchbase/` -- ~39 tools (SIO-1107 official Couchbase tools)
+- `mcp-server-couchbase/` -- ~43 tools (SIO-1107 official Couchbase tools)
 - `mcp-server-konnect/` -- 67+ tools | `mcp-server-gitlab/` -- 21+ tools (proxy + code analysis)
 - `mcp-server-atlassian/` -- Jira + Confluence proxy via Rovo OAuth 2.1
 - `mcp-server-aws/` -- multi-estate via cross-account AssumeRole

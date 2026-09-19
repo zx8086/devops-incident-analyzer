@@ -61,6 +61,9 @@ SELECT statement,
 FROM system:completed_requests
 WHERE UPPER(statement) NOT LIKE 'INFER %'
     AND UPPER(statement) NOT LIKE 'CREATE INDEX%'
+    AND UPPER(statement) NOT LIKE 'CREATE PRIMARY INDEX%'
+    AND UPPER(statement) NOT LIKE 'EXPLAIN %'
+    AND UPPER(statement) NOT LIKE 'ADVISE %'
     AND UPPER(statement) NOT LIKE '% SYSTEM:%'
 GROUP BY statement
 LETTING queries = COUNT(1)

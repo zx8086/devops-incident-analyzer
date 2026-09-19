@@ -6,7 +6,7 @@ import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlLargestResultCountQueries } from "./analysisQueries";
-import { executeAnalysisQuery } from "./queryAnalysisUtils";
+import { applyAnalysisLimit, executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.registerTool(
@@ -15,7 +15,8 @@ export default (server: McpServer, bucket: Bucket) => {
 			description: "Get queries that return the largest number of results",
 			inputSchema: {
 				limit: z.number().optional().describe("Optional limit for the number of results to return"),
-				min_count: z.number().optional().describe("Minimum result count to include"),
+				// SIO-1822: spliced into the SQL; rejects NaN/Infinity and fractional counts.
+				min_count: z.number().int().nonnegative().optional().describe("Minimum average result count to include"),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_largest_result_count_queries"),
 		},
@@ -34,17 +35,8 @@ export default (server: McpServer, bucket: Bucket) => {
 				);
 			}
 
-			// Apply limit if specified
-			if (limit && Number.isInteger(limit) && limit > 0) {
-				// Add or replace LIMIT clause
-				if (query.includes("LIMIT")) {
-					query = query.replace(/LIMIT \d+/i, `LIMIT ${limit}`);
-				} else {
-					query = `${query.replace(";", "")} LIMIT ${limit};`;
-				}
-			}
-
-			return executeAnalysisQuery(bucket, query, "Queries with Largest Result Counts", limit);
+			const { query: limitedQuery, appliedLimit } = applyAnalysisLimit(query, limit);
+			return executeAnalysisQuery(bucket, limitedQuery, "Queries with Largest Result Counts", appliedLimit);
 		},
 	);
 };

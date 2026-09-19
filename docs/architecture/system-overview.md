@@ -54,7 +54,7 @@ The agent's investigation is strictly read-only against production systems. It o
 | ES   | | Kafka| | Capella| | Konnect| | GitLab | |Atlassian|
 | MCP  | | MCP  | | MCP    | | MCP    | | MCP    | | MCP     |
 | :9080| | :9081| | :9082  | | :9083  | | :9084  | | :9085   |
-|101-117| | 11-61| | ~39    | | 67+    | | proxy+ | | proxy+  |
+|101-117| | 11-61| | ~43    | | 67+    | | proxy+ | | proxy+  |
 | tools| | gated| | tools  | | tools  | | custom | | custom  |
 +------+ +------+ +--------+ +--------+ +--------+ +---------+
     |        |          |         |         |         |
@@ -142,7 +142,7 @@ Two `agentName === "elastic-iac"` branches remain deliberately in `invokeAgent` 
 | Observability | `packages/observability` | Pino logger factory, OpenTelemetry span helpers, request-scoped child loggers |
 | Elasticsearch MCP | `packages/mcp-server-elastic` | 117 tools (101 cluster incl. 9 ML anomaly-detection + 4 ES\|QL/async-search + 16 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, ML jobs/datafeeds, ES\|QL + async search, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
 | Kafka MCP | `packages/mcp-server-kafka` | 11 base tools + up to 50 gated tools (Schema Registry + ksqlDB + Connect + REST Proxy) for cluster info, topic management, consumer groups, message consumption |
-| Couchbase MCP | `packages/mcp-server-couchbase` | ~39 tools (SIO-1107 official Couchbase tools) for cluster health, bucket listing, N1QL queries, INFER-based schema, EXPLAIN, Index Advisor + covering-index detectors, playbooks |
+| Couchbase MCP | `packages/mcp-server-couchbase` | ~43 tools (SIO-1107 official Couchbase tools) for cluster health, bucket listing, N1QL queries, INFER-based schema, EXPLAIN, Index Advisor + covering-index detectors, playbooks |
 | Konnect MCP | `packages/mcp-server-konnect` | 15 enhanced tools + proxy surface for services, routes, plugins, consumers, upstreams, analytics |
 | GitLab MCP | `packages/mcp-server-gitlab` | Proxy + 5-8 custom tools for CI/CD pipelines, merge requests, code analysis, issues |
 | Atlassian MCP | `packages/mcp-server-atlassian` | Proxy + custom tools for Jira issues, Confluence pages, projects, and ticket metadata |

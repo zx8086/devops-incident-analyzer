@@ -229,12 +229,16 @@ describe("couchbase-health.yaml query-diagnosis chaining coverage (SIO-1137)", (
 		});
 	}
 
-	test("full action-map union stays at 29 unique tools (no MAX_TOOLS_PER_AGENT pressure added)", () => {
+	// SIO-1823: 29 -> 33 (the 3 Search tools plus the diagnostics report). The union is NOT
+	// what MAX_TOOLS_PER_AGENT budgets -- only the SELECTED actions bind -- so the pressure
+	// check is that no single action's tool list grew past the cap, which none did:
+	// search_analysis is its own 3-tool action and node_status went from 3 to 4.
+	test("full action-map union stays at 33 unique tools (no MAX_TOOLS_PER_AGENT pressure added)", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const couchbase = agent.tools.find((t) => t.name === "couchbase-cluster-health");
 		expect(couchbase).toBeDefined();
 		if (!couchbase) return;
-		expect(getAllActionToolNames(couchbase).length).toBe(29);
+		expect(getAllActionToolNames(couchbase).length).toBe(33);
 	});
 });
 

@@ -53,7 +53,7 @@ devops-incident-analyzer/
     skillflow/                   Declarative workflow (DAG) loader + executor (SIO-848)
     mcp-server-elastic/          Elasticsearch MCP server (117 tools: 101 cluster incl. 9 ML anomaly-detection + 4 ES|QL/async-search + 16 conditional cloud/billing on EC_API_KEY)
     mcp-server-kafka/            Kafka MCP server (11-61 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
-    mcp-server-couchbase/        Couchbase Capella MCP server (~39 tools: official Couchbase tools, SIO-1107)
+    mcp-server-couchbase/        Couchbase Capella MCP server (~43 tools: official Couchbase tools, SIO-1107)
     mcp-server-konnect/          Kong Konnect MCP server (15 enhanced + proxy)
     mcp-server-gitlab/           GitLab MCP server (proxy + 5-8 custom code analysis tools)
     mcp-server-atlassian/        Atlassian MCP server (Jira + Confluence Rovo OAuth 2.1 proxy + incident filters)
@@ -269,11 +269,11 @@ Source: `packages/mcp-server-kafka/src/`
 
 ### @devops-agent/mcp-server-couchbase
 
-Couchbase Capella MCP server with ~39 tools for cluster management, query analysis, and operational playbooks (SIO-1107 adopted the official Couchbase tools).
+Couchbase Capella MCP server with ~43 tools for cluster management, query analysis, and operational playbooks (SIO-1107 adopted the official Couchbase tools).
 
 | Capability | Details |
 |------------|---------|
-| Tools | ~39 tools: N1QL query, INFER schema, EXPLAIN, Index Advisor, covering-index detectors, bucket operations, playbooks |
+| Tools | ~43 tools: N1QL query, INFER schema, EXPLAIN, Index Advisor, covering-index detectors, bucket operations, playbooks |
 | Configuration | Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD` |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
 | Port | 9082 (default) |
@@ -380,7 +380,7 @@ agents/incident-analyzer/
       agent.yaml         Tools: 11-61 Kafka tools via MCP port 9081 (11 base + up to 50 gated SR + ksqlDB + Connect + REST Proxy)
       SOUL.md            Persona: event streaming and consumer group analyst
     capella-agent/       Couchbase Capella specialist
-      agent.yaml         Tools: ~39 Capella tools via MCP port 9082 (SIO-1107 official Couchbase tools)
+      agent.yaml         Tools: ~43 Capella tools via MCP port 9082 (SIO-1107 official Couchbase tools)
       SOUL.md            Persona: document database and query optimization expert
     konnect-agent/       Kong Konnect specialist
       agent.yaml         Tools: 15 enhanced + proxy Konnect tools via MCP port 9083

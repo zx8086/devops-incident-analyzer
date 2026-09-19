@@ -7,15 +7,19 @@ import deleteDocumentation from "./deleteDocumentation";
 import deleteDocumentById from "./deleteDocumentById";
 import explainSqlPlusPlusQuery from "./explainSqlPlusPlusQuery";
 import getBuckets from "./getBuckets";
+import getClusterDiagnosticsReport from "./getClusterDiagnosticsReport";
 import getClusterHealth from "./getClusterHealth";
 import getDocumentById from "./getDocumentById";
+import getFtsIndexDefinition from "./getFtsIndexDefinition";
 import getSchemaForCollection from "./getSchemaForCollection";
 import getScopesAndCollections from "./getScopesAndCollections";
 import listDocumentation from "./listDocumentation";
+import listFtsIndexes from "./listFtsIndexes";
 import listPlaybooks from "./listPlaybooks";
 // Import query analysis tools
 import { queryAnalysisTools } from "./queryAnalysis";
 import readDocumentation from "./readDocumentation";
+import runFtsQuery from "./runFtsQuery";
 import runSqlPlusPlusQuery from "./runSqlPlusPlusQuery";
 import syncDocumentation from "./syncDocumentation";
 import upsertDocumentById from "./upsertDocumentById";
@@ -47,11 +51,17 @@ export const toolRegistry: Record<string, ToolFunction> = {
 	// Core database tools
 	capella_get_buckets: getBuckets,
 	capella_get_cluster_health: getClusterHealth,
+	capella_get_cluster_diagnostics_report: getClusterDiagnosticsReport,
 	capella_get_scopes_and_collections: getScopesAndCollections,
 	capella_get_schema_for_collection: getSchemaForCollection,
 	capella_run_sql_plus_plus_query: runSqlPlusPlusQuery,
 	capella_explain_sql_plus_plus_query: explainSqlPlusPlusQuery,
 	capella_get_document_by_id: getDocumentById,
+
+	// Search (FTS) tools (SIO-1823)
+	capella_list_fts_indexes: listFtsIndexes,
+	capella_get_fts_index_definition: getFtsIndexDefinition,
+	capella_run_fts_query: runFtsQuery,
 	capella_upsert_document_by_id: upsertDocumentById,
 	capella_delete_document_by_id: deleteDocumentById,
 

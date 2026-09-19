@@ -30,7 +30,7 @@ All eight MCP servers (the seven datasources plus the peer `elastic-iac` server)
 | elastic | | kafka | |couchbase| | konnect | | gitlab  | |atlassian |
 |  -mcp   | | -mcp  | |  -mcp  | |  -mcp   | |  -mcp   | |  -mcp    |
 |         | |       | |        | |         | |         | |          |
-| 101-117 | | 11-61 | | ~39    | | 67+     | | proxy+  | | proxy+   |
+| 101-117 | | 11-61 | | ~43    | | 67+     | | proxy+  | | proxy+   |
 | tools   | | gated | | tools  | | tools   | | custom  | | custom   |
 |         | |       | |        | |         | |         | |          |
 | :9080   | | :9081 | | :9082  | | :9083   | | :9084   | | :9085    |
@@ -105,7 +105,7 @@ The `getToolsForDataSource()` function routes datasource IDs to their correspond
 |---------------|-------------|-----------------|------------|
 | `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | 117 (101 cluster incl. 9 ML anomaly-detection + 4 ES\|QL/async-search SIO-1391 + 16 conditional cloud/billing on `EC_API_KEY`) |
 | `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 11-61 (11 base + up to 50 gated SR + ksqlDB + Connect + REST Proxy) |
-| `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~39 (official Couchbase tools, SIO-1107) |
+| `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~43 (official Couchbase tools, SIO-1107) |
 | `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 15 enhanced + proxy |
 | `gitlab` | `gitlab-mcp` | `GITLAB_MCP_URL` | proxy + 5-8 custom |
 | `atlassian` | `atlassian-mcp` | `ATLASSIAN_MCP_URL` | proxy + custom |
@@ -248,7 +248,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
-### Couchbase Capella MCP (~39 tools)
+### Couchbase Capella MCP (~43 tools)
 
 **Purpose:** Read-only access to Couchbase Capella clusters for bucket health, N1QL query execution (SELECT only), index analysis, and system vitals.
 
