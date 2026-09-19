@@ -1,4 +1,4 @@
-/* src/lib/ftsIndexes.ts */
+// src/lib/ftsIndexes.ts
 
 import type { Bucket, Scope, SearchIndex } from "couchbase";
 import { resolveBucket } from "./resolveBucket";

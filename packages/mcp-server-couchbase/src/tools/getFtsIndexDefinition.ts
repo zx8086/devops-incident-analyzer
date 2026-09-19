@@ -1,4 +1,4 @@
-/* src/tools/getFtsIndexDefinition.ts */
+// src/tools/getFtsIndexDefinition.ts
 
 import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";

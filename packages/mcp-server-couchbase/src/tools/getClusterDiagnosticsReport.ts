@@ -1,4 +1,4 @@
-/* src/tools/getClusterDiagnosticsReport.ts */
+// src/tools/getClusterDiagnosticsReport.ts
 
 import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
