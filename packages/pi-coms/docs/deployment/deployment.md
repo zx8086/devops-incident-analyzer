@@ -102,6 +102,80 @@ replaces instances**. Always read the "forces replacement" lines of a plan.
 Per-host configuration that must not churn instances belongs in the
 bootstrap, not in terraform/userdata (for example `PI_MONITOR_REPORT_TO`).
 
+### Shipping a feature that needs a new userdata variable (SIO-1821)
+
+A feature gated on a new `PI_MONITOR_*` variable is **two deploys, not one**,
+because the code and the variable travel by different routes. The code rides
+the bundle (publish + rollout, no instance touched); the variable rides
+userdata, and adding one replaces the agent instance in every account. Merging
+them into a single step is what turns a code change into a fleet replacement
+nobody planned for.
+
+Write the gate so an unset variable disables the feature. Then the first stage
+is inert on every host and the second is schedulable.
+
+| Stage | Command | Plan | Replaces? |
+|---|---|---|---|
+| 1. Code | `just fleet publish` + `just fleet rollout` | -- | No |
+| 2a. New resources | `terraform apply -target=<resource>` | `N to add, 0 to destroy` | No |
+| 2b. IAM grant | `terraform apply -target=module.agent.aws_iam_policy.pi_coms_extensions` | `0 to add, 1 to change, 0 to destroy` | No |
+| 2c. The variable | `just fleet apply <spoke> [--yes]` | `~23 add, ~23 destroy` per spoke | **Yes** |
+
+Stage 2c reads as alarming and is not: per spoke it replaces ONE real resource,
+`module.agent.aws_instance.agent`. The rest are dependent `aws_ec2_tag` entries
+following the new ENI and root volume -- two `for_each` resources over the
+root's effective `default_tags`, so the count is `2 x <number of default tags>`
+(22 with today's eleven tags, and it moves when `org_tags` does). Confirm in the
+plan that `module.hub.aws_instance.hub` says `Refreshing state` and nothing
+more, and that the mailbox EBS volume is untouched -- it outlives the instance
+by design.
+
+**A cross-account value must come from the manifest, never a hand-edited
+tfvars.** The hub-hosting root gets such a value by Terraform reference; every
+other spoke renders `= var.<name>` against a variable defaulting to `""`,
+exactly like `dist_bucket`. It is tempting to append the line to each spoke's
+`terraform.tfvars` -- do not. `renderTfvars` REGENERATES that file and preserves
+only the minted `coms_auth_token`, so the next `just fleet render` deletes it,
+and `just fleet deploy` renders before it applies. Put the value in
+`deploy/fleet.yaml` and let render emit it -- on the **hub**, never under
+`defaults`, or every dev spoke renders the prd topic and mails its digest into
+the prd channel (environments never cross, which is why tokens, buckets and
+CIDRs are all per hub too):
+
+```yaml
+hubs:
+  eu-shared-services-prd:
+    monitor_report_sns_topic_arn: "arn:aws:sns:<region>:<hub-account>:pi-coms-monitor-reports"
+```
+
+The key's presence is the only switch. A hub that carries it renders the topic,
+its publish policy and the tfvar for its spokes; a hub that omits it is
+untouched, so no environment ends up with a topic nothing publishes to. There
+is deliberately no fleet-wide flag: one would let a hub be "enabled" while
+silently generating nothing.
+
+Render then writes the value into the tfvars of the non-hub spokes bound to
+**that** hub, and leaves every other spoke untouched.
+
+Chicken-and-egg: the ARN does not exist until the hub root is applied once. Set
+the key to `""` for that first pass -- render then writes a deliberately invalid
+placeholder that the module's variable validation rejects, so a forgotten ARN
+stops the plan instead of booting every host with no email. Fill it in from
+`terraform output -raw monitor_report_sns_topic_arn` in the hub root and
+re-render.
+
+Miss it and you get a green apply, a healthy host, and a silently disabled
+feature: the userdata carries `VAR=''`, the bootstrap correctly skips an empty
+value, and nothing anywhere reports a problem. Verify on the host rather than
+trusting the apply:
+
+```bash
+grep PI_MONITOR_<VAR> /home/piagent/.coms-env   # absent means the value never reached userdata
+```
+
+Do stage 2c on one **dev** spoke first. That is where the empty variable above
+was caught, at the cost of one dev instance instead of six production ones.
+
 ## Code distribution: the fleet bundle
 
 Development stays on GitHub; fleet hosts never talk to it. `main` is

@@ -112,6 +112,11 @@ changes -- see `plan` output: `user_data ... # forces replacement`.
 destroy` is the signal: something is being replaced. Confirm that is what you
 intended.
 
+Shipping a feature gated on a NEW userdata variable splits this into two
+separately schedulable deploys, and carries a cross-account tfvar trap that
+produces a green apply and a silently disabled feature. See
+[deployment.md](deployment.md#shipping-a-feature-that-needs-a-new-userdata-variable-sio-1821).
+
 ## 5. Cross-account S3 needs BOTH an identity grant and a bucket policy
 
 The spokes live in their own accounts; the dist bucket lives in
