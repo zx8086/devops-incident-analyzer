@@ -73,6 +73,16 @@ variable "dist_bucket" {
   type        = string
 }
 
+// SIO-1821: the hub account's report topic, which lives in another account.
+// Cross-account, so it is a value in terraform.tfvars rather than a reference --
+// the same shape as dist_bucket above. Read it from the hub root's
+// monitor_report_sns_topic_arn output.
+variable "monitor_report_sns_topic_arn" {
+  description = "SNS topic in the dev hub account that monitor reports are mailed to (terraform.tfvars)."
+  type        = string
+  default     = ""
+}
+
 variable "org_tags" {
   description = "Organization-required tags applied to every resource (terraform.tfvars)."
   type        = map(string)
@@ -143,6 +153,77 @@ resource "aws_s3_bucket_public_access_block" "dist" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+// SIO-1821: the topic every monitor in this environment mails its daily digest
+// and weekly suppression review to. Project-owned on purpose -- the estate
+// already carries SNS topics belonging to other teams, and their default
+// policies would accept a publish from any principal in the account. Publishing
+// fleet digests there would put operational detail about these accounts into a
+// channel someone else is on call for.
+//
+// The org's required tags arrive through the provider's default_tags, so this
+// topic is born compliant with the required-tags Config rule.
+//
+// No retention is set because the attribute does not exist on a standard topic:
+// SNS is a fan-out bus, and the 14-day guarantee lives on the hub mailbox via
+// REPORT_TTL_MS. The email copy is strictly best-effort.
+resource "aws_sns_topic" "monitor_reports" {
+  name = "pi-coms-monitor-reports"
+}
+
+// Only the spoke roles of this environment may publish. The SNS default policy
+// allows any principal in the account, which is exactly the looseness that made
+// the other teams' topics publishable by us -- not a property worth inheriting.
+resource "aws_sns_topic_policy" "monitor_reports" {
+  arn = aws_sns_topic.monitor_reports.arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "SpokeMonitorsPublish"
+      Effect    = "Allow"
+      Principal = "*"
+      Action    = "sns:Publish"
+      Resource  = aws_sns_topic.monitor_reports.arn
+      // Scoped by CONDITION rather than by a principal list, for the same reason
+      // the dist bucket above is: no spoke carries an account_id in the manifest
+      // (only hubs do), so a rendered list of full role ARNs would be empty or
+      // wrong. An empty Principal.AWS = [] grants NOBODY and the monitor
+      // swallows the resulting 403, so the feature would look enabled and
+      // deliver no email at all.
+      //
+      // Both conditions must hold: inside this AWS Organization AND the role the
+      // monitor actually publishes as.
+      //
+      // That role is DevOpsAgentReadOnly, NOT the *-agent instance role. The
+      // bootstrap sets AWS_PROFILE=devops-readonly whenever READONLY_ROLE_ARN is
+      // present, so the whole piagent workload -- agent, monitor, CLI -- assumes
+      // it, and the sns:Publish grant is on that role's pi-coms-extensions
+      // policy. The dist bucket above guards a different principal (the instance
+      // role writing checkpoints), so its "*-agent" pattern is right there and
+      // wrong here; copying it rejected every intended publisher.
+      //
+      // aws:PrincipalArn resolves an assumed-role session to the ROLE arn, never
+      // the session arn, so matching sts::...:assumed-role/ would never fire.
+      // ArnLike is the operator AWS recommends for ARNs.
+      Condition = {
+        StringEquals = { "aws:PrincipalOrgID" = var.org_id }
+        ArnLike      = { "aws:PrincipalArn" = "arn:aws:iam::*:role/DevOpsAgentReadOnly" }
+      }
+    }]
+  })
+}
+
+// The email subscription is deliberately NOT declared here. SNS requires the
+// recipient to confirm it out of band, and a Terraform-declared subscription
+// sits "pending confirmation" in state forever until they click -- which reads
+// as drift on every plan. Subscribe once by hand:
+//   aws sns subscribe --topic-arn <arn> --protocol email --notification-endpoint <address>
+
+output "monitor_report_sns_topic_arn" {
+  description = "SIO-1821: pass this to each spoke root's monitor_report_sns_topic_arn."
+  value       = aws_sns_topic.monitor_reports.arn
 }
 
 // SIO-1745: superseded checkpoint bodies. Each changed checkpoint writes a new
@@ -235,24 +316,25 @@ module "hub" {
 module "agent" {
   source = "../../modules/agent"
 
-  hub_url              = module.hub.hub_url
-  coms_auth_token      = var.coms_auth_token
-  repo_url             = var.repo_url
-  agent_name           = var.agent_name
-  coms_project         = "pi-coms-dev"
-  monitor_tz           = "Europe/Amsterdam"
-  monitor_daily_cron   = "15 8 * * *"
-  subnet_id            = var.agent_subnet_id
-  associate_public_ip  = false
-  instance_type        = "t4g.small"
-  pi_model             = var.pi_model
-  pi_provider          = "amazon-bedrock"
-  enable_bedrock       = true
-  readonly_role        = true
-  readonly_role_mode   = "create"
-  readonly_external_id = var.readonly_external_id
-  bundle_s3_uri        = "s3://${aws_s3_bucket.dist.bucket}/fleet"
-  dist_bucket_arn      = aws_s3_bucket.dist.arn
+  hub_url                      = module.hub.hub_url
+  coms_auth_token              = var.coms_auth_token
+  repo_url                     = var.repo_url
+  agent_name                   = var.agent_name
+  coms_project                 = "pi-coms-dev"
+  monitor_tz                   = "Europe/Amsterdam"
+  monitor_daily_cron           = "15 8 * * *"
+  monitor_report_sns_topic_arn = aws_sns_topic.monitor_reports.arn
+  subnet_id                    = var.agent_subnet_id
+  associate_public_ip          = false
+  instance_type                = "t4g.small"
+  pi_model                     = var.pi_model
+  pi_provider                  = "amazon-bedrock"
+  enable_bedrock               = true
+  readonly_role                = true
+  readonly_role_mode           = "create"
+  readonly_external_id         = var.readonly_external_id
+  bundle_s3_uri                = "s3://${aws_s3_bucket.dist.bucket}/fleet"
+  dist_bucket_arn              = aws_s3_bucket.dist.arn
 }
 
 // Every 30 minutes each tagged host compares its bundle version against S3 and
