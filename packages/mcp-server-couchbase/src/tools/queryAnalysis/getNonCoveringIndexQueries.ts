@@ -6,7 +6,7 @@ import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlNonCoveringIndexQueries } from "./analysisQueries";
-import { executeAnalysisQuery } from "./queryAnalysisUtils";
+import { applyAnalysisLimit, executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export type NonCoveringIndexQueriesInput = {
 	limit?: number;
@@ -16,12 +16,10 @@ export function buildQuery(input: NonCoveringIndexQueriesInput): {
 	query: string;
 	parameters: Record<string, unknown>;
 } {
-	let query = n1qlNonCoveringIndexQueries;
-	// LIMIT is zod-validated as a positive integer before this splice (SIO-667
-	// posture: values bind as $named params; LIMIT cannot be parameterized in N1QL).
-	if (input.limit !== undefined && input.limit > 0) {
-		query = `${query.trim().replace(/;$/, "")} LIMIT ${input.limit};`;
-	}
+	// LIMIT is zod-validated as a positive integer before this splice (SIO-667 posture:
+	// values bind as $named params; LIMIT cannot be parameterized in N1QL). SIO-1822: an
+	// omitted limit now falls back to DEFAULT_ANALYSIS_LIMIT rather than returning every row.
+	const { query } = applyAnalysisLimit(n1qlNonCoveringIndexQueries, input.limit);
 	return { query, parameters: {} };
 }
 

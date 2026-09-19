@@ -6,7 +6,7 @@ import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlLargestResultSizeQueries } from "./analysisQueries";
-import { executeAnalysisQuery } from "./queryAnalysisUtils";
+import { applyAnalysisLimit, executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.registerTool(
@@ -15,7 +15,10 @@ export default (server: McpServer, bucket: Bucket) => {
 			description: "Get queries that return the largest result sizes in bytes",
 			inputSchema: {
 				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
-				min_size_kb: z.number().optional().describe("Minimum result size in KB to include"),
+				// SIO-1822: .finite() rejects NaN/Infinity, which would splice invalid SQL. A
+				// fractional KB is meaningful here (the value is converted to bytes numerically),
+				// so unlike the count filters this one is not restricted to integers.
+				min_size_kb: z.number().finite().nonnegative().optional().describe("Minimum result size in KB to include"),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_largest_result_size_queries"),
 		},
@@ -37,17 +40,8 @@ export default (server: McpServer, bucket: Bucket) => {
 				);
 			}
 
-			// Apply limit if specified
-			if (limit && Number.isInteger(limit) && limit > 0) {
-				// Add or replace LIMIT clause
-				if (query.includes("LIMIT")) {
-					query = query.replace(/LIMIT \d+/i, `LIMIT ${limit}`);
-				} else {
-					query = `${query.replace(";", "")} LIMIT ${limit};`;
-				}
-			}
-
-			return executeAnalysisQuery(bucket, query, "Queries with Largest Result Sizes", limit);
+			const { query: limitedQuery, appliedLimit } = applyAnalysisLimit(query, limit);
+			return executeAnalysisQuery(bucket, limitedQuery, "Queries with Largest Result Sizes", appliedLimit);
 		},
 	);
 };

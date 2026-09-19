@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { assertIdentifier, COUCHBASE_IDENTIFIER_RE } from "../src/lib/identifiers";
 import { sqlppParser } from "../src/lib/sqlppParser";
 import { buildExplainStatement } from "../src/tools/explainSqlPlusPlusQuery";
+import { DEFAULT_ANALYSIS_LIMIT } from "../src/tools/queryAnalysis/analysisQueries";
 import { buildQuery as buildCompletedRequests } from "../src/tools/queryAnalysis/getCompletedRequests";
 import { buildQuery as buildDetailedIndexes } from "../src/tools/queryAnalysis/getDetailedIndexes";
 import { buildQuery as buildDetailedPreparedStatements } from "../src/tools/queryAnalysis/getDetailedPreparedStatements";
@@ -538,11 +539,13 @@ describe("getMostExpensiveQueries.buildQuery", () => {
 // SIO-1107: covering-index / selectivity detectors + advisor + EXPLAIN helpers.
 
 describe("getNonCoveringIndexQueries.buildQuery (SIO-1107)", () => {
-	test("default query filters on indexScan AND fetch phases, no LIMIT, empty parameters", () => {
+	// SIO-1822: an omitted limit now yields DEFAULT_ANALYSIS_LIMIT, not an unbounded query.
+	// These tools read system:completed_requests, so "no LIMIT" meant every retained request.
+	test("default query filters on indexScan AND fetch phases, default LIMIT, empty parameters", () => {
 		const { query, parameters } = buildNonCovering({});
 		expect(query).toContain("phaseCounts.indexScan IS NOT MISSING");
 		expect(query).toContain("phaseCounts['fetch'] IS NOT MISSING");
-		expect(query).not.toMatch(/LIMIT/);
+		expect(query).toMatch(new RegExp(`LIMIT ${DEFAULT_ANALYSIS_LIMIT};$`));
 		expect(parameters).toEqual({});
 	});
 
@@ -551,18 +554,20 @@ describe("getNonCoveringIndexQueries.buildQuery (SIO-1107)", () => {
 		expect(query).toMatch(/LIMIT 5;$/);
 	});
 
-	test("zero/negative limit is ignored", () => {
-		expect(buildNonCovering({ limit: 0 }).query).not.toMatch(/LIMIT/);
-		expect(buildNonCovering({ limit: -3 }).query).not.toMatch(/LIMIT/);
+	// SIO-1822: a rejected limit falls back to the default rather than removing the bound.
+	test("zero/negative limit falls back to the default limit", () => {
+		expect(buildNonCovering({ limit: 0 }).query).toMatch(new RegExp(`LIMIT ${DEFAULT_ANALYSIS_LIMIT};$`));
+		expect(buildNonCovering({ limit: -3 }).query).toMatch(new RegExp(`LIMIT ${DEFAULT_ANALYSIS_LIMIT};$`));
 	});
 });
 
 describe("getLowSelectivityQueries.buildQuery (SIO-1107)", () => {
-	test("default query compares indexScan to resultCount, no LIMIT, empty parameters", () => {
+	// SIO-1822: omitted limit now yields DEFAULT_ANALYSIS_LIMIT (see the sibling suite above).
+	test("default query compares indexScan to resultCount, default LIMIT, empty parameters", () => {
 		const { query, parameters } = buildLowSelectivity({});
 		expect(query).toContain("phaseCounts.indexScan > resultCount");
 		expect(query).toContain("avgScanResultGap");
-		expect(query).not.toMatch(/LIMIT/);
+		expect(query).toMatch(new RegExp(`LIMIT ${DEFAULT_ANALYSIS_LIMIT};$`));
 		expect(parameters).toEqual({});
 	});
 

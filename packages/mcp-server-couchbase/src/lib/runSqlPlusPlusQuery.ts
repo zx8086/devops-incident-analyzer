@@ -17,6 +17,10 @@ export async function runSqlPlusPlusQuery(
 	scopeName: string,
 	query: string,
 	sqlppParser: SQLPPParser,
+	// SIO-1822: optional, so every existing caller is unchanged. Values bind as N1QL named
+	// parameters ($name) instead of being concatenated into the statement text -- the model
+	// no longer has to build SQL string-wise around user-supplied values.
+	namedParameters?: Record<string, unknown>,
 ): Promise<RunQueryResult> {
 	const requestLogger = createContextLogger("runSqlPlusPlusQuery");
 
@@ -84,7 +88,16 @@ export async function runSqlPlusPlusQuery(
 			"execute_query",
 			async () => {
 				requestLogger.debug({ query: safeQuery }, "Executing query");
-				const result = await ctx.lifespanContext.bucket.scope(scopeName).query(safeQuery);
+				// Log parameter KEYS only -- values may be user-controlled (same posture as
+				// executeAnalysisQuery, SIO-667).
+				const hasParameters = namedParameters !== undefined && Object.keys(namedParameters).length > 0;
+				if (hasParameters) {
+					requestLogger.debug({ paramKeys: Object.keys(namedParameters) }, "Query bound parameters");
+				}
+				const scope = ctx.lifespanContext.bucket.scope(scopeName);
+				const result = hasParameters
+					? await scope.query(safeQuery, { parameters: namedParameters })
+					: await scope.query(safeQuery);
 				const rows = await result.rows;
 
 				requestLogger.info(

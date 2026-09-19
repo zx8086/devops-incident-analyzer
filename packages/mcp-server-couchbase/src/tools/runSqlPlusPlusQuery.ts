@@ -10,6 +10,7 @@ import { z } from "zod";
 import { adviseCouchbaseError } from "../lib/adviseCouchbaseError";
 import { classifyCouchbaseError, summarizeCouchbaseError } from "../lib/classifyCouchbaseError";
 import { AppError } from "../lib/errors";
+import { resolveBucket } from "../lib/resolveBucket";
 import { runSqlPlusPlusQuery } from "../lib/runSqlPlusPlusQuery";
 import { sqlppParser } from "../lib/sqlppParser";
 import { logger } from "../utils/logger";
@@ -17,7 +18,15 @@ import { couchbaseToolAnnotations } from "./tool-classification";
 
 // Ensure all queries use only the collection name in the FROM clause when using scope context
 // Exported for unit testing (SIO-744).
-export const runQuery = async (params: { scope_name: string; query: string }, bucket: Bucket) => {
+export const runQuery = async (
+	params: {
+		scope_name: string;
+		query: string;
+		named_parameters?: Record<string, unknown>;
+		bucket_name?: string;
+	},
+	bucket: Bucket,
+) => {
 	if (!bucket) {
 		return {
 			content: [{ type: "text" as const, text: "Database error: bucket not found" }],
@@ -25,7 +34,7 @@ export const runQuery = async (params: { scope_name: string; query: string }, bu
 		};
 	}
 
-	const { scope_name, query } = params;
+	const { scope_name, query, named_parameters, bucket_name } = params;
 
 	// Throw an error if the query uses a full bucket.scope.collection path (contains two dots in FROM clause)
 	if (/from\s+[`\w]+\.[`\w]+\.[`\w]+/i.test(query)) {
@@ -52,7 +61,17 @@ export const runQuery = async (params: { scope_name: string; query: string }, bu
 	}
 
 	try {
-		const result = await runSqlPlusPlusQuery({ lifespanContext: { bucket } }, scope_name, query, sqlppParser);
+		// SIO-1822: bucket_name brings this tool in line with its siblings
+		// (capella_explain_sql_plus_plus_query, capella_get_index_advisor_recommendations),
+		// which already accept one. Absent, resolveBucket returns the configured default.
+		const resolved = resolveBucket(bucket, bucket_name);
+		const result = await runSqlPlusPlusQuery(
+			{ lifespanContext: { bucket: resolved } },
+			scope_name,
+			query,
+			sqlppParser,
+			named_parameters,
+		);
 		const rows = result.rows as Record<string, unknown>[];
 		// The N1QL warnings are ADVISORY (index selectivity, sequential-scan fallback,
 		// deprecated syntax) -- a warning never means the returned rows are incomplete or
@@ -118,12 +137,20 @@ export default (server: McpServer, bucket: Bucket) => {
 	server.registerTool(
 		"capella_run_sql_plus_plus_query",
 		{
-			description: "Execute a SQL++ query against a specific scope in the Couchbase bucket",
+			description:
+				"Execute a SQL++ query against a specific scope in the Couchbase bucket. Bind values with named_parameters rather than writing them into the query text.",
 			inputSchema: {
 				scope_name: z.string().describe("Name of the scope"),
 				query: z
 					.string()
 					.describe("SQL++ query to execute. Use only the collection name in the FROM clause if using scope context."),
+				named_parameters: z
+					.record(z.string(), z.unknown())
+					.optional()
+					.describe(
+						"Values to bind to $name placeholders in the query, e.g. query \"SELECT * FROM `orders` WHERE status = $status\" with named_parameters {status: 'FAILED'}. Prefer this over writing values into the query text.",
+					),
+				bucket_name: z.string().optional().describe("Optional bucket name (defaults to the configured bucket)"),
 			},
 			annotations: couchbaseToolAnnotations("capella_run_sql_plus_plus_query"),
 		},

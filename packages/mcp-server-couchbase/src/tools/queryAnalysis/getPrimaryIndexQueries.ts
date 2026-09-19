@@ -6,7 +6,7 @@ import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlPrimaryIndexes } from "./analysisQueries";
-import { executeAnalysisQuery } from "./queryAnalysisUtils";
+import { applyAnalysisLimit, executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.registerTool(
@@ -24,17 +24,11 @@ export default (server: McpServer, bucket: Bucket) => {
 			// Modify query based on parameters
 			let query = n1qlPrimaryIndexes;
 
-			// Apply limit if specified
-			if (limit && Number.isInteger(limit) && limit > 0) {
-				// Add or replace LIMIT clause
-				if (query.includes("LIMIT")) {
-					query = query.replace(/LIMIT \d+/i, `LIMIT ${limit}`);
-				} else {
-					query = `${query.replace(";", "")} LIMIT ${limit};`;
-				}
-			}
-
-			return executeAnalysisQuery(bucket, query, "Queries Using Primary Indexes", limit);
+			// SIO-1822: this query is a `SELECT *` over completed_requests rows that embed full
+			// query plans, so the default limit matters most here -- unbounded, one call could
+			// swamp the agent's context.
+			const { query: limitedQuery, appliedLimit } = applyAnalysisLimit(query, limit);
+			return executeAnalysisQuery(bucket, limitedQuery, "Queries Using Primary Indexes", appliedLimit);
 		},
 	);
 };

@@ -31,13 +31,19 @@ export const explainQuery = async (
 	// Same scope-context contract as capella_run_sql_plus_plus_query: bare
 	// collection names only, no bucket.scope.collection paths.
 	if (/from\s+[`\w]+\.[`\w]+\.[`\w]+/i.test(query)) {
+		// SIO-1822: structured envelope, matching how capella_run_sql_plus_plus_query reports
+		// this same mistake. As plain text it reached the agent with no kind, so a trivially
+		// fixable query error was categorized "unknown" = degrading and capped confidence.
+		const envelope = buildToolErrorEnvelope({
+			kind: "bad-query",
+			message:
+				"Query uses a full bucket.scope.collection path in the FROM clause. Under scope context, reference only the collection name.",
+			advice:
+				"Drop the bucket.scope prefix from the FROM clause and pass the scope via the scope_name argument. " +
+				'Example: scope_name="inventory", query="SELECT COUNT(*) FROM `airline`" (NOT FROM `bucket`.`inventory`.`airline`).',
+		});
 		return {
-			content: [
-				{
-					type: "text" as const,
-					text: "Error: Query uses full bucket.scope.collection path. When using scope context, only use the collection name in the query. For example: SELECT COUNT(*) FROM `_default`",
-				},
-			],
+			content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
 			isError: true,
 		};
 	}
@@ -48,13 +54,20 @@ export const explainQuery = async (
 	const inner = query.trim().replace(/^EXPLAIN\s+/i, "");
 	const parsed = sqlppParser.parse(inner);
 	if (config.server.readOnlyQueryMode && (sqlppParser.modifiesData(parsed) || sqlppParser.modifiesStructure(parsed))) {
+		// SIO-1822: structured envelope, like the sibling guard above. "bad-input" and not
+		// "auth-denied" deliberately -- the latter is in the degrading category and would cap
+		// agent confidence for what is a policy refusal (see src/lib/readOnlyGuard.ts).
+		//
+		// The refusal itself is unchanged: this tool is stricter than the run tool and than
+		// upstream on purpose (see the comment above), so that stays a separate decision.
+		const envelope = buildToolErrorEnvelope({
+			kind: "bad-input",
+			message: "EXPLAIN of data/structure modification statements is not allowed in read-only mode",
+			advice:
+				"Explain a read statement instead. To understand a mutation's cost, explain the equivalent SELECT over the same keyspace and predicates.",
+		});
 		return {
-			content: [
-				{
-					type: "text" as const,
-					text: "Error: EXPLAIN of data/structure modification statements is not allowed in read-only mode",
-				},
-			],
+			content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
 			isError: true,
 		};
 	}
