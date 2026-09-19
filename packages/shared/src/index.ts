@@ -301,6 +301,7 @@ export {
 	type FleetInboxSeverity,
 	FleetInboxSeveritySchema,
 	isPiActionTool,
+	MONITOR_INBOX_KINDS,
 	PI_ACTION_TOOLS,
 	PI_INVESTIGATION_RESPONSE_SCHEMA,
 	PI_VERDICT_RESPONSE_SCHEMA,

@@ -131,6 +131,7 @@ describe("parseMonitorReport and classifyMessage", () => {
 	test("parses the monitor's report header and finding lines", () => {
 		const report = parseMonitorReport(REPORT);
 		expect(report).toEqual({
+			kind: "incident-report",
 			accountId: "111122223333",
 			topSeverity: "critical",
 			findingCount: 3,
@@ -178,7 +179,7 @@ describe("parseMonitorReport and classifyMessage", () => {
 		].join("\n");
 		const report = parseMonitorReport(text);
 		expect(report?.findings).toEqual(findings);
-		expect(report?.findings.length).toBe(report?.findingCount);
+		expect(report?.findings.length).toBe(report?.findingCount ?? -1);
 	});
 
 	// The digest's notable lines share the "(sev/family)" shape behind a two-space
@@ -191,6 +192,144 @@ describe("parseMonitorReport and classifyMessage", () => {
 			`  ${formatFindingLine({ severity: "warn", family: "db-events", resource: "orders-db", summary: "failover" })}`,
 		].join("\n");
 		expect(parseMonitorReport(text)?.findings.map((f) => f.family)).toEqual(["logs"]);
+	});
+
+	// SIO-1825: the monitor writes four header shapes. The analyzer matched only the
+	// incident report's, so a daily digest and a suppression review parsed as undefined,
+	// fell through to the conversation branch and were dropped by buildEstateDigest --
+	// the fleet inbox read "0 monitor report(s)" on accounts the monitor reports on daily.
+	describe("SIO-1825: every monitor header shape", () => {
+		// Verbatim from packages/pi-coms/scripts/monitor/report.ts (formatDigest,
+		// formatSuppressionReview). Pinned here so a header change fails a test rather
+		// than silently emptying the inbox again.
+		const DIGEST = [
+			"[info] aws-111122223333 daily digest (since 2026-09-16T00:00:00Z)",
+			"",
+			"- findings: 7 (logs=4 alarm=2 cost=1)",
+			"- notable warn+ findings (last 24h):",
+			`  ${formatFindingLine({ severity: "warn", family: "logs", resource: "/ecs/fargate/shop-prd", summary: "timeout" })}`,
+			"- check errors: 0",
+		].join("\n");
+		const DEGRADED_DIGEST = [
+			"[warn] aws-111122223333 daily digest DEGRADED: 2 check error(s) (since 2026-09-16T00:00:00Z)",
+			"",
+			"- findings: no findings in the last 24h",
+		].join("\n");
+		const PAUSED_DIGEST = [
+			'[warn] aws-111122223333 daily digest PAUSED: check cycles skipped since 2026-09-16T00:00:00Z; send "resume" to the monitor',
+			"",
+			"- findings: no findings in the last 24h",
+		].join("\n");
+		const SUPPRESSION = [
+			"[info] aws-111122223333 suppression review (last 7d)",
+			"",
+			"- ledger entries: 1",
+			"- alarm:noisy-alarm -- known flapper (since 2026-09-01T00:00:00Z)",
+		].join("\n");
+
+		test.each([
+			["daily digest", DIGEST, "daily-digest"],
+			["degraded digest", DEGRADED_DIGEST, "daily-digest"],
+			["paused digest", PAUSED_DIGEST, "daily-digest"],
+			["suppression review", SUPPRESSION, "suppression-review"],
+		])("parses a %s and gives it its own kind", (_label, text, kind) => {
+			const report = parseMonitorReport(text);
+			expect(report?.kind).toBe(kind === "daily-digest" ? "daily-digest" : "suppression-review");
+			expect(report?.accountId).toBe("111122223333");
+			expect(classifyMessage(message({ prompt: text })).kind).toBe(kind as never);
+		});
+
+		// A digest's counts are a 24 h rollup and its notable lines are findings already
+		// reported one by one. Carrying either as fresh findings would double-count them.
+		test("a digest carries no finding count and no findings", () => {
+			const report = parseMonitorReport(DIGEST);
+			expect(report?.findingCount).toBeNull();
+			expect(report?.findings).toEqual([]);
+			const entry = classifyMessage(message({ prompt: DIGEST }));
+			expect(entry.findingCount).toBeNull();
+			expect(entry.findings).toEqual([]);
+		});
+
+		// The bug as the user saw it: a mailbox holding real monitor traffic, read as empty.
+		test("digests survive buildEstateDigest and are counted by kind", () => {
+			const estate = buildEstateDigest({
+				estate: "eu-oit-prd",
+				environment: "prd",
+				inboxes: ["ops"],
+				messages: [
+					{ inbox: "ops", message: message({ msg_id: "d1", prompt: DIGEST }) },
+					{ inbox: "ops", message: message({ msg_id: "s1", prompt: SUPPRESSION }) },
+					{ inbox: "ops", message: message({ msg_id: "r1", prompt: REPORT }) },
+				],
+				error: null,
+			});
+			expect(estate.counts.total).toBe(3);
+			expect(estate.counts.incidentReports).toBe(1);
+			expect(estate.counts.dailyDigests).toBe(1);
+			expect(estate.counts.suppressionReviews).toBe(1);
+			// The incident report leads: a digest ships daily whatever happens, so when the
+			// entry cap bites it is the fresh findings that must survive it.
+			expect(estate.entries[0]?.kind).toBe("monitor-report");
+		});
+
+		// attributableToEstate parses the same header: an ops-inbox digest whose sender is
+		// not the estate's agent can only be attributed by its account id.
+		test("a digest on the ops inbox is attributed by its account header", () => {
+			const foreign = message({ sender_name: "monitor-eu-other-prd", prompt: DIGEST });
+			const identity = { estate: "eu-oit-prd", accountId: "111122223333", agentNames: ["eu-oit-prd"] };
+			expect(attributableToEstate(foreign, identity)).toBe(true);
+			expect(attributableToEstate(foreign, { ...identity, accountId: "999999999999" })).toBe(false);
+		});
+
+		// Greptile, PR #854: a header is untrusted text. Widening the parser to three kinds
+		// widened what a quoted header can claim, so the sender name -- the one hub-controlled
+		// signal -- gates it. Reproduced before the fix: sender "simon" posting a
+		// "[critical] aws-... daily digest" line scored a critical report against the estate.
+		test.each([
+			["an operator", "simon"],
+			["a spoke agent", "eu-oit-prd"],
+			["the analyzer itself", "incident-analyzer-89d64578"],
+		])("a monitor header quoted by %s is not monitor traffic", (_label, sender) => {
+			const quoted = message({ sender_name: sender, prompt: DIGEST });
+			expect(classifyMessage(quoted).kind).not.toBe("daily-digest");
+			expect(classifyMessage(quoted).severity).toBeNull();
+			const estate = buildEstateDigest({
+				estate: "eu-oit-prd",
+				environment: "prd",
+				inboxes: ["ops"],
+				messages: [{ inbox: "ops", message: quoted }],
+				error: null,
+			});
+			expect(estate.counts.total).toBe(0);
+		});
+
+		test("a quoted account header does not attribute a non-monitor message to an estate", () => {
+			const quoted = message({ sender_name: "simon", prompt: DIGEST });
+			expect(
+				attributableToEstate(quoted, { estate: "eu-oit-prd", accountId: "111122223333", agentNames: ["eu-oit-prd"] }),
+			).toBe(false);
+		});
+
+		// The untrusted-body invariant (SIO-1660) must hold for the new kinds too.
+		test("no digest body text reaches the prompt summary", () => {
+			const estate = buildEstateDigest({
+				estate: "eu-oit-prd",
+				environment: "prd",
+				inboxes: ["ops"],
+				messages: [{ inbox: "ops", message: message({ prompt: DIGEST }) }],
+				error: null,
+			});
+			const summary = summarizeFleetInboxForPrompt({
+				windowFrom: "2026-09-16T00:00:00Z",
+				windowTo: "2026-09-18T00:00:00Z",
+				generatedAt: "2026-09-18T00:00:00Z",
+				focusServices: [],
+				estates: [estate],
+			});
+			expect(summary).toContain("1 daily digest(s)");
+			expect(summary).not.toContain("timeout");
+			expect(summary).not.toContain("notable");
+		});
 	});
 
 	test("classifies reports, completed conversations and the rest", () => {
@@ -282,7 +421,15 @@ describe("buildEstateDigest and summarizeFleetInboxForPrompt", () => {
 	// run of 2026-09-18, so only the reports themselves survive.
 	test("keeps monitor reports only: conversations and other rows are dropped, not counted", () => {
 		expect(estate.entries.map((e) => [e.msgId, e.kind])).toEqual([["01J", "monitor-report"]]);
-		expect(estate.counts).toEqual({ total: 1, focus: 0, critical: 1, warn: 0 });
+		expect(estate.counts).toEqual({
+			total: 1,
+			focus: 0,
+			critical: 1,
+			warn: 0,
+			incidentReports: 1,
+			dailyDigests: 0,
+			suppressionReviews: 0,
+		});
 		expect(estate.alarmNames).toEqual(["checkout-alb-5xx", "orders-lag"]);
 		expect(estate.latestAt).toBe(estate.entries[0]?.createdAt ?? "");
 		expect(JSON.stringify(estate)).not.toContain("why is checkout slow");
@@ -301,7 +448,15 @@ describe("buildEstateDigest and summarizeFleetInboxForPrompt", () => {
 					estate: "eu-b2b-dev",
 					environment: "dev",
 					entries: [],
-					counts: { total: 0, focus: 0, critical: 0, warn: 0 },
+					counts: {
+						total: 0,
+						focus: 0,
+						critical: 0,
+						warn: 0,
+						incidentReports: 0,
+						dailyDigests: 0,
+						suppressionReviews: 0,
+					},
 					families: [],
 					alarmNames: [],
 					latestAt: null,
@@ -309,7 +464,7 @@ describe("buildEstateDigest and summarizeFleetInboxForPrompt", () => {
 				},
 			],
 		});
-		expect(summary).toContain("eu-oit-prd (prd): 1 monitor report(s); critical=1 warn=0");
+		expect(summary).toContain("eu-oit-prd (prd): 1 monitor message(s) (1 incident report(s)); critical=1 warn=0");
 		expect(summary).toContain("critical=1 warn=0");
 		expect(summary).toContain("alarms: checkout-alb-5xx, orders-lag");
 		expect(summary).toContain(`latest ${estate.latestAt}`);
@@ -398,7 +553,15 @@ describe("SIO-1815: the digest is scoped to the focus services", () => {
 			["03", false],
 			["02", false],
 		]);
-		expect(estate.counts).toEqual({ total: 3, focus: 1, critical: 0, warn: 3 });
+		expect(estate.counts).toEqual({
+			total: 3,
+			focus: 1,
+			critical: 0,
+			warn: 3,
+			incidentReports: 3,
+			dailyDigests: 0,
+			suppressionReviews: 0,
+		});
 		// Focus-first ordering must not turn latestAt into "the focus report's time".
 		expect(estate.latestAt).toBe("2026-09-06T11:00:00.000Z");
 	});
@@ -427,7 +590,7 @@ describe("SIO-1815: the digest is scoped to the focus services", () => {
 			estates: [digestFor(FOCUS)],
 		});
 		expect(summary).toContain("Scoped to the focus services: feed-service, Vendor Data Hub");
-		expect(summary).toContain("3 monitor report(s), 1 naming a focus service");
+		expect(summary).toContain("3 monitor message(s) (3 incident report(s)), 1 naming a focus service");
 		expect(summary).toContain("finding categories: logs=2 (focus 1), alarm=1, health=1");
 		expect(summary).toContain("focus findings: (warn/logs) /ecs/fargate/shop-prd-log-group x1");
 		// The other service's log group is in the inbox but is not a focus finding.
@@ -446,7 +609,7 @@ describe("SIO-1815: the digest is scoped to the focus services", () => {
 			estates: [digestFor(["payments-gateway"])],
 		});
 		expect(summary).toContain("0 naming a focus service");
-		expect(summary).toContain("none of these reports names a focus service");
+		expect(summary).toContain("none of these messages names a focus service");
 	});
 
 	test("the digest never carries a finding's free text", () => {
@@ -487,7 +650,7 @@ describe("SIO-1815: the digest is scoped to the focus services", () => {
 			focusServices: FOCUS,
 			estates: [estate],
 		});
-		expect(summary).toContain(`detail is from ${MAX_ENTRIES_PER_ESTATE} of ${MAX_ENTRIES_PER_ESTATE + 5} reports`);
+		expect(summary).toContain(`detail is from ${MAX_ENTRIES_PER_ESTATE} of ${MAX_ENTRIES_PER_ESTATE + 5} messages`);
 		expect(summary).toContain(`focus findings (top 8 of ${MAX_ENTRIES_PER_ESTATE} distinct)`);
 	});
 

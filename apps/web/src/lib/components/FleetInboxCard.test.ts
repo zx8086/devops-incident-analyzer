@@ -32,7 +32,7 @@ const digest: FleetInboxDigest = {
 					excerpt: "[critical] aws-111122223333: 3 finding(s) - (critical/alarm) checkout-alb-5xx: Alarm entered ALARM",
 				},
 			],
-			counts: { total: 1, focus: 0, critical: 1, warn: 0 },
+			counts: { total: 1, focus: 0, critical: 1, warn: 0, incidentReports: 1, dailyDigests: 0, suppressionReviews: 0 },
 			families: [{ family: "alarm", count: 1, focus: 0 }],
 			alarmNames: ["checkout-alb-5xx"],
 			latestAt: "2026-09-06T10:00:00.000Z",
@@ -43,7 +43,7 @@ const digest: FleetInboxDigest = {
 			environment: "dev",
 			inboxes: ["eu-b2b-dev", "ops"],
 			entries: [],
-			counts: { total: 0, focus: 0, critical: 0, warn: 0 },
+			counts: { total: 0, focus: 0, critical: 0, warn: 0, incidentReports: 0, dailyDigests: 0, suppressionReviews: 0 },
 			families: [],
 			alarmNames: [],
 			latestAt: null,
@@ -58,9 +58,9 @@ describe("FleetInboxCard", () => {
 		expect(body).toContain("Fleet inbox");
 		expect(body).toContain("eu-oit-prd");
 		expect(body).toContain("prd");
-		expect(body).toContain("1 monitor report(s); critical 1, warn 0");
+		expect(body).toContain("1 monitor message(s); critical 1, warn 0");
 		expect(body).toContain("checkout-alb-5xx");
-		expect(body).toContain("monitor report");
+		expect(body).toContain("incident report");
 		expect(body).toContain("monitor-aws-111122223333 to ops");
 		expect(body).toContain("3 finding(s)");
 		expect(body).toContain("Alarm entered ALARM");
@@ -78,7 +78,15 @@ describe("FleetInboxCard", () => {
 			estates: [
 				{
 					...base,
-					counts: { total: 2, focus: 1, critical: 1, warn: 1 },
+					counts: {
+						total: 2,
+						focus: 1,
+						critical: 1,
+						warn: 1,
+						incidentReports: 2,
+						dailyDigests: 0,
+						suppressionReviews: 0,
+					},
 					families: [{ family: "logs", count: 2, focus: 1 }],
 					entries: [
 						{
@@ -97,13 +105,58 @@ describe("FleetInboxCard", () => {
 		};
 		const { body } = render(FleetInboxCard, { props: { digest: scopedDigest } });
 		expect(body).toContain("Scoped to:");
-		expect(body).toContain("2 monitor report(s), 1 naming a focus service");
+		expect(body).toContain("2 monitor message(s), 1 naming a focus service");
 		expect(body).toContain("logs 2 (1 focus)");
 		expect(body).toContain("logs: /ecs/fargate/shop-prd-log-group");
 		expect(body).toContain("1 report(s) about other services in this account");
 		// The focus report is outside the fold, the other one inside it.
 		expect(body.indexOf("FOCUS-EXCERPT")).toBeLessThan(body.indexOf("<details"));
 		expect(body.indexOf("OTHER-EXCERPT")).toBeGreaterThan(body.indexOf("<details"));
+	});
+
+	// Greptile, PR #854: a digest and a suppression review carry no findings, so `focus` is
+	// always false for them. Keyed on focus alone, every daily dead-man signal -- DEGRADED
+	// and PAUSED included -- was folded into "other services" on EVERY scoped run.
+	test("a scoped digest keeps account-level messages out of the fold", () => {
+		const base = digest.estates[0] as FleetInboxDigest["estates"][number];
+		const report = base.entries[0] as (typeof base.entries)[number];
+		const scopedDigest: FleetInboxDigest = {
+			...digest,
+			focusServices: ["feed-service"],
+			estates: [
+				{
+					...base,
+					counts: {
+						total: 3,
+						focus: 1,
+						critical: 1,
+						warn: 0,
+						incidentReports: 2,
+						dailyDigests: 1,
+						suppressionReviews: 0,
+					},
+					entries: [
+						{ ...report, msgId: "FOCUS", focus: true, excerpt: "FOCUS-EXCERPT" },
+						{
+							...report,
+							msgId: "DIGEST",
+							kind: "daily-digest",
+							focus: false,
+							findingCount: null,
+							findings: [],
+							excerpt: "DEGRADED-DIGEST-EXCERPT",
+						},
+						{ ...report, msgId: "OTHER", focus: false, excerpt: "OTHER-EXCERPT" },
+					],
+				},
+			],
+		};
+		const { body } = render(FleetInboxCard, { props: { digest: scopedDigest } });
+		expect(body).toContain("daily digest");
+		// The digest leads beside the focus report; only the unrelated incident report folds.
+		expect(body.indexOf("DEGRADED-DIGEST-EXCERPT")).toBeLessThan(body.indexOf("<details"));
+		expect(body.indexOf("OTHER-EXCERPT")).toBeGreaterThan(body.indexOf("<details"));
+		expect(body).toContain("1 report(s) about other services in this account");
 	});
 
 	// Greptile, PR #846: counts cover every report while details are capped; the card says so.
@@ -115,7 +168,7 @@ describe("FleetInboxCard", () => {
 			estates: [{ ...base, counts: { ...base.counts, total: 25 }, entries: [{ ...report, findingCount: 15 }] }],
 		};
 		const { body } = render(FleetInboxCard, { props: { digest: capped } });
-		expect(body).toContain("Showing 1 of 25 reports");
+		expect(body).toContain("Showing 1 of 25 messages");
 		expect(body).toContain("+14 more");
 	});
 
@@ -140,6 +193,6 @@ describe("FleetInboxCard", () => {
 			estates: [{ ...(digest.estates[1] as FleetInboxDigest["estates"][number]), error: null }],
 		};
 		const { body } = render(FleetInboxCard, { props: { digest: quiet } });
-		expect(body).toContain("No monitor reports in the window.");
+		expect(body).toContain("No monitor messages in the window.");
 	});
 });

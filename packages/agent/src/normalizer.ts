@@ -113,6 +113,19 @@ const SERVICE_STOP_LIST: ReadonlySet<string> = new Set([
 	"end-to-end",
 ]);
 
+// SIO-1826: an ECS/APM FIELD NAME is dot-joined and so satisfies SERVICE_TOKEN, but it
+// names a column, not a service. A query pasted from Kibana carries its field names --
+// "service.name", "service.environment", "@timestamp - Sep 17, 2026" -- and on a live run
+// those two became the focus: the Atlassian card scoped to empty (droppedAll), GitLab fell
+// back to unscoped, and the whole investigation was scoped to two column names.
+//
+// A namespace prefix, not a full field list: ECS has hundreds of fields under a stable set
+// of top-level namespaces, and matching the prefix covers `service.name`, `service.node.name`
+// and any field a newer schema adds under it. Only namespaces that actually appear in this
+// project's queries are listed; add one when a run shows it, not before.
+const ECS_FIELD_NAMESPACE_RE =
+	/^(service|host|container|kubernetes|cloud|agent|error|log|event|trace|transaction|span|url|user|process|network|source|destination|observer|labels)\./i;
+
 const MAX_RECOVERED_SERVICES = 3;
 
 // SIO-1233: deterministic, no LLM. Pulls service-shaped tokens out of the raw query so a
@@ -137,6 +150,8 @@ export function extractServiceCandidates(query: string, limit: number = MAX_RECO
 		if (!/[a-z]/i.test(token)) continue;
 		if (VERSION_TOKEN.test(token)) continue;
 		if (FILE_EXTENSION_TOKEN.test(token)) continue;
+		// SIO-1826: a field name, not a service (see ECS_FIELD_NAMESPACE_RE).
+		if (ECS_FIELD_NAMESPACE_RE.test(token)) continue;
 		const key = token.toLowerCase();
 		if (SERVICE_STOP_LIST.has(key) || seen.has(key)) continue;
 		seen.add(key);

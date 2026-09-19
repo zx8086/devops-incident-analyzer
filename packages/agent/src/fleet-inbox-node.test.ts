@@ -184,7 +184,15 @@ describe("runFetchFleetInbox", () => {
 			if (url.host === "prd.hub.test" && url.searchParams.get("name") === "ops")
 				return { status: 500, body: { error: "boom" } };
 			if (url.host === "prd.hub.test")
-				return { body: { ok: true, name: "eu-oit-prd", messages: [row({ prompt: REPORT })] } };
+				// A report is only monitor traffic when a monitor sent it (Greptile, PR #854):
+				// the default `kim` here is a human, whose quoted header must not be counted.
+				return {
+					body: {
+						ok: true,
+						name: "eu-oit-prd",
+						messages: [row({ prompt: REPORT, sender_name: "monitor-eu-oit-prd" })],
+					},
+				};
 			return undefined;
 		});
 		const out = await runFetchFleetInbox(state, { env, fetchImpl, now });

@@ -2,7 +2,7 @@
 // apps/web/src/lib/components/FleetInboxCard.svelte
 // SIO-1652: the fleet inbox digest rendered as data next to the report. Excerpts
 // are untrusted text from spokes and operators: shown inert, never interpreted.
-import type { FleetInboxDigest, FleetInboxEntry } from "@devops-agent/shared";
+import type { FleetInboxDigest, FleetInboxEntry, FleetInboxEstate } from "@devops-agent/shared";
 
 let { digest }: { digest: FleetInboxDigest } = $props();
 
@@ -18,8 +18,14 @@ const severityChip: Record<string, string> = {
 	info: "bg-gray-100 text-gray-600 border-gray-200",
 };
 
+// SIO-1825: the monitor's three kinds read differently. A daily digest is a 24 h
+// rollup that ships whatever happens (and is the monitor's dead-man signal); an
+// incident report is a fresh finding. Labelling both "monitor report" would hide
+// that difference from the operator reading the card.
 const kindLabel: Record<FleetInboxEntry["kind"], string> = {
-	"monitor-report": "monitor report",
+	"monitor-report": "incident report",
+	"daily-digest": "daily digest",
+	"suppression-review": "suppression review",
 	conversation: "conversation",
 	other: "message",
 };
@@ -27,6 +33,17 @@ const kindLabel: Record<FleetInboxEntry["kind"], string> = {
 // SIO-1815: when the digest is scoped, the reports naming a focus service are the card;
 // the rest of the account's inbox is one click away rather than in the way.
 const scoped = $derived(digest.focusServices.length > 0);
+
+// SIO-1825: " (1 incident report, 2 daily digests)". Empty when the estate has only
+// one kind, so the common single-kind case reads exactly as it did before.
+function kindBreakdown(counts: FleetInboxEstate["counts"]): string {
+	const parts = [
+		counts.incidentReports > 0 ? `${counts.incidentReports} incident report(s)` : "",
+		counts.dailyDigests > 0 ? `${counts.dailyDigests} daily digest(s)` : "",
+		counts.suppressionReviews > 0 ? `${counts.suppressionReviews} suppression review(s)` : "",
+	].filter((p) => p !== "");
+	return parts.length > 1 ? ` (${parts.join(", ")})` : "";
+}
 
 function senderLine(entry: FleetInboxEntry): string {
 	return entry.target ? `${entry.sender} to ${entry.target}` : entry.sender;
@@ -80,14 +97,21 @@ function when(iso: string): string {
   {/if}
 
   {#each digest.estates as estate (estate.estate)}
-    {@const lead = scoped ? estate.entries.filter((e) => e.focus) : estate.entries}
-    {@const rest = scoped ? estate.entries.filter((e) => !e.focus) : []}
+    <!-- SIO-1825 (Greptile, PR #854): a digest and a suppression review carry no findings,
+         so `focus` is always false for them. Keying the lead on focus alone therefore buried
+         every daily dead-man signal -- DEGRADED and PAUSED included -- in the collapsed
+         "other services" section on EVERY scoped run, which is the normal case. They are
+         account-level by nature, not about one service, so they lead alongside the focus
+         reports; only incident reports about OTHER services collapse. -->
+    {@const accountLevel = (e: FleetInboxEntry) => e.kind === "daily-digest" || e.kind === "suppression-review"}
+    {@const lead = scoped ? estate.entries.filter((e) => e.focus || accountLevel(e)) : estate.entries}
+    {@const rest = scoped ? estate.entries.filter((e) => !e.focus && !accountLevel(e)) : []}
     <section class="mb-3 last:mb-0">
       <div class="flex flex-wrap items-center gap-2 text-xs">
         <span class="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded border {envBadge[estate.environment] ?? 'bg-gray-100 text-gray-600 border-gray-200'}">{estate.environment}</span>
         <span class="font-medium text-tommy-navy">{estate.estate}</span>
         <span class="text-gray-400">inboxes: {estate.inboxes.join(", ")}</span>
-        <span class="ml-auto text-gray-500">{estate.counts.total} monitor report(s){scoped ? `, ${estate.counts.focus} naming a focus service` : ""}; critical {estate.counts.critical}, warn {estate.counts.warn}</span>
+        <span class="ml-auto text-gray-500">{estate.counts.total} monitor message(s){kindBreakdown(estate.counts)}{scoped ? `, ${estate.counts.focus} naming a focus service` : ""}; critical {estate.counts.critical}, warn {estate.counts.warn}</span>
       </div>
       {#if estate.error}
         <p class="mt-1 text-xs text-red-700">{estate.error}</p>
@@ -109,10 +133,10 @@ function when(iso: string): string {
         </p>
       {/if}
       {#if estate.entries.length < estate.counts.total}
-        <p class="mt-1 text-xs text-gray-500">Showing {estate.entries.length} of {estate.counts.total} reports (focus reports first, then newest). Counts and categories cover all of them.</p>
+        <p class="mt-1 text-xs text-gray-500">Showing {estate.entries.length} of {estate.counts.total} messages (focus first, then incident reports, then newest). Counts and categories cover all of them.</p>
       {/if}
       {#if estate.entries.length === 0 && !estate.error}
-        <p class="mt-1 text-xs text-gray-400">No monitor reports in the window.</p>
+        <p class="mt-1 text-xs text-gray-400">No monitor messages in the window.</p>
       {/if}
       {#if scoped && lead.length === 0 && estate.entries.length > 0}
         <p class="mt-1 text-xs text-gray-400">No monitor report in the window names a focus service.</p>

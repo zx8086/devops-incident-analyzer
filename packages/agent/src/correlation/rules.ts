@@ -93,12 +93,19 @@ function alarmReferencesFocus(a: AwsCloudWatchAlarm, focusServices: string[]): b
 // the LLM's prose summary (result.data when string). This is the production
 // signal -- unlike getKafkaData which expects structured fields that today's
 // sub-agents do not emit (see comment on line ~154).
-function getKafkaResultSignals(state: AgentStateType): { toolErrors: ToolError[]; prose: string } {
+function getKafkaResultSignals(state: AgentStateType): {
+	toolErrors: ToolError[];
+	prose: string;
+	toolsCalled: Set<string>;
+} {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "kafka");
-	if (result?.status !== "success") return { toolErrors: [], prose: "" };
+	if (result?.status !== "success") return { toolErrors: [], prose: "", toolsCalled: new Set() };
 	const toolErrors = Array.isArray(result.toolErrors) ? result.toolErrors : [];
 	const prose = typeof result.data === "string" ? result.data : "";
-	return { toolErrors, prose };
+	// SIO-1827: which tools the sub-agent actually called this turn. A rule that
+	// demands a probe must check whether the probe ran, not infer it from prose.
+	const toolsCalled = new Set((result.toolOutputs ?? []).map((o) => o.toolName));
+	return { toolErrors, prose, toolsCalled };
 }
 
 // SIO-761 Phase 5: mirror of getKafkaResultSignals for aws-agent. The aws
@@ -417,18 +424,35 @@ This is a targeted fetch -- do NOT re-investigate the incident's focus service, 
 		description:
 			"Aggregator prose declared a Confluent component (REST Proxy, ksqlDB, Kafka Connect, Schema Registry) NOT DETECTED without first calling its *_health_check tool; dispatch a kafka-agent follow-up to probe reachability directly.",
 		trigger: (state) => {
-			const { prose } = getKafkaResultSignals(state);
+			const { prose, toolsCalled } = getKafkaResultSignals(state);
 			if (!prose) return null;
 			// Match any of these "we did not detect" phrasings (case-insensitive).
 			const NOT_PROBED_RE =
 				/\b(NOT DETECTED|not detected|deployment status (is )?unconfirmed|deployment is unconfirmed|cannot confirm.*deploy|no [a-z]+ signal)\b/i;
 			if (!NOT_PROBED_RE.test(prose)) return null;
+			// SIO-1827: the rule's whole premise is "it concluded NOT DETECTED without
+			// probing". A component whose *_health_check ALREADY ran this turn has been
+			// probed, and re-dispatching cannot produce a different answer -- so the rule
+			// stayed unsatisfiable and hard-capped an otherwise healthy run from 0.88 to
+			// 0.59, below the HITL gate. Observed live: all four health checks ran and the
+			// rule still fired on the prose alone.
+			const PROBE_BY_COMPONENT: Record<string, string> = {
+				restproxy: "restproxy_health_check",
+				ksql: "ksql_health_check",
+				connect: "connect_health_check",
+				schema_registry: "schema_registry_health_check",
+			};
 			// Identify which components the prose claims are not detected.
-			const components: string[] = [];
-			if (/\brest proxy\b/i.test(prose)) components.push("restproxy");
-			if (/\bksql(db)?\b/i.test(prose)) components.push("ksql");
-			if (/\bkafka connect\b/i.test(prose)) components.push("connect");
-			if (/\bschema registry\b/i.test(prose)) components.push("schema_registry");
+			const named: string[] = [];
+			if (/\brest proxy\b/i.test(prose)) named.push("restproxy");
+			if (/\bksql(db)?\b/i.test(prose)) named.push("ksql");
+			if (/\bkafka connect\b/i.test(prose)) named.push("connect");
+			if (/\bschema registry\b/i.test(prose)) named.push("schema_registry");
+			// Keep only the ones that were NOT probed; those are the genuine gaps.
+			const components = named.filter((c) => {
+				const probe = PROBE_BY_COMPONENT[c];
+				return probe === undefined || !toolsCalled.has(probe);
+			});
 			if (components.length === 0) return null;
 			return { context: { signal: "confluent-not-probed", components } };
 		},

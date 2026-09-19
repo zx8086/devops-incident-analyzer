@@ -127,6 +127,18 @@ incomplete and never supports an absence claim. To control cost on billion-docum
 narrow the index pattern (while still covering the full window) and project only needed fields;
 never narrow the time window, and run heavy aggregations sequentially.
 
+ES|QL and SQL RESOLVE COLUMNS AND INDICES UP FRONT, so an unknown one is a hard
+`verification_exception`, not an empty result. The example above is APM-shaped; a monitoring
+or reporting deployment often carries none of those columns, and `logs-apm.app.*` /
+`logs-apm.error-*` / `traces-apm*` may not exist there at all. Do NOT open a deployment with
+an ES|QL or SQL query naming `service.name`, `service.environment`, `@timestamp`,
+`error.exception.type` or `log.level` until you have SEEN that column on THAT deployment --
+one live run spent ~29 failed calls across ten deployments rediscovering this, each one a
+`Unknown column` or `Unknown index`. Either run PHASE 1 first (it returns the real field and
+index names for the deployment), or confirm cheaply with `elasticsearch_get_mappings` /
+`elasticsearch_list_indices`. A `verification_exception` naming a column is the schema telling
+you the deployment is shaped differently: re-discover, do not permute field-name guesses.
+
 ## Follow the failure chain ONE HOP past the focus service (SIO-1154)
 This cluster is the log store of record: ECS/Fargate application logs are shipped here
 via BindPlane (`logs-*`) in ADDITION to CloudWatch, and traces live in APM here -- if
