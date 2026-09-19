@@ -23,7 +23,13 @@ export function buildQuery(input: SystemIndexesInput): {
 	const parameters: Record<string, unknown> = {};
 
 	if (bucket_name) {
-		whereClauses.push("t.keyspace_id = $bucket_name");
+		// SIO-1822: system:indexes names the bucket differently per index scope. A
+		// collection-level index carries bucket_id=<bucket> with keyspace_id=<collection>;
+		// only a legacy bucket-level index has keyspace_id=<bucket>. Matching keyspace_id
+		// alone therefore hid every collection-level index: measured live, this filter
+		// returned 6 of 99 rows (93 of which had bucket_id set). Same predicate as the
+		// sibling getDetailedIndexes.ts.
+		whereClauses.push("(t.bucket_id = $bucket_name OR t.keyspace_id = $bucket_name)");
 		parameters.bucket_name = bucket_name;
 	}
 	if (index_type) {

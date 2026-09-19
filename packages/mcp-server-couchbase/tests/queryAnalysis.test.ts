@@ -269,6 +269,15 @@ describe("getSystemIndexes.buildQuery", () => {
 		expect(parameters.bucket_name).toBe(INJECTION_LITERAL);
 	});
 
+	// SIO-1822: matching keyspace_id alone hid every collection-level index, whose bucket is
+	// in bucket_id (keyspace_id is the collection there). Measured against the live cluster,
+	// the old predicate returned 6 of 99 rows -- 93 had bucket_id set. Same predicate as the
+	// sibling getDetailedIndexes.
+	test("bucket_name matches bucket_id as well as keyspace_id", () => {
+		const { query } = buildSystemIndexes({ bucket_name: "b" });
+		expect(query).toContain("(t.bucket_id = $bucket_name OR t.keyspace_id = $bucket_name)");
+	});
+
 	test("index_type binds as parameter with `using` backtick-escaped (reserved word)", () => {
 		const { query, parameters } = buildSystemIndexes({ index_type: INJECTION_LITERAL });
 		expect(query).toContain("LOWER(t.`using`) = LOWER($index_type)");
