@@ -115,7 +115,7 @@ variable "dist_bucket" {
   description = "Fleet distribution bucket of the ${spoke.env} hub account (terraform.tfvars)."
   type        = string
 }${
-		manifest.defaults.monitor_report_email
+		hub.monitor_report_sns_topic_arn !== undefined
 			? `
 
 // SIO-1821: the hub account's report topic, which lives in another account.
@@ -204,7 +204,7 @@ resource "aws_s3_bucket_public_access_block" "dist" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }${
-			manifest.defaults.monitor_report_email
+			hub.monitor_report_sns_topic_arn !== undefined
 				? `
 
 // SIO-1821: the topic every monitor in this environment mails its daily digest
@@ -405,7 +405,7 @@ import {
 		...(manifest.defaults.monitor_daily_cron
 			? ([["monitor_daily_cron", hcl(manifest.defaults.monitor_daily_cron)]] as [string, string][])
 			: []),
-		...(manifest.defaults.monitor_report_email
+		...(hub.monitor_report_sns_topic_arn !== undefined
 			? ([
 					[
 						"monitor_report_sns_topic_arn",
@@ -562,7 +562,7 @@ export function renderTfvars(manifest: FleetManifest, name: string, existing?: s
 	// with no topic (dev today) must not have its spokes blocked at plan time
 	// for a feature that environment does not use.
 	const reportArn = hub.monitor_report_sns_topic_arn;
-	if (manifest.defaults.monitor_report_email && !spoke.hosts_hub && reportArn !== undefined) {
+	if (!spoke.hosts_hub && reportArn !== undefined) {
 		lines.push(`monitor_report_sns_topic_arn = ${hcl(reportArn || REPORT_ARN_PLACEHOLDER)}`);
 	}
 	const orgTags = Object.entries(orgTagsFor(manifest, name));

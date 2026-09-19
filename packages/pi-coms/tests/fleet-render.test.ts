@@ -178,12 +178,14 @@ describe("fleet root renderer (SIO-1653)", () => {
 		}
 	});
 
-	test("monitor_report_email renders the topic in EVERY hub root, and a tfvar elsewhere", () => {
-		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
+	test("a hub carrying the key renders the topic; its spokes get a tfvar", () => {
+		const text = withHubArn(EXAMPLE);
 		const tagged = parseManifest(text);
 		// The example manifest has one hub-hosting spoke per ENVIRONMENT, so this
 		// must hold for each of them, not just the first one found.
-		const hubRoots = Object.keys(tagged.spokes).filter((n) => tagged.spokes[n]?.hosts_hub === true);
+		const hubRoots = Object.keys(tagged.spokes).filter(
+			(n) => tagged.spokes[n]?.hosts_hub === true && tagged.spokes[n]?.hub === "eu-shared-services-prd",
+		);
 		expect(hubRoots.length).toBeGreaterThan(0);
 
 		for (const name of hubRoots) {
@@ -195,13 +197,19 @@ describe("fleet root renderer (SIO-1653)", () => {
 		}
 
 		for (const name of Object.keys(tagged.spokes)) {
-			if (hubRoots.includes(name)) continue;
-			const spoke = renderRoot(tagged, name)["main.tf"];
-			// Cross-account: a value from tfvars, never a reference into another
-			// account's state.
-			expect(spoke).not.toContain('resource "aws_sns_topic"');
-			expect(spoke).toContain("monitor_report_sns_topic_arn = var.monitor_report_sns_topic_arn");
-			expect(spoke).toContain('variable "monitor_report_sns_topic_arn"');
+			const spoke = tagged.spokes[name];
+			if (!spoke || hubRoots.includes(name)) continue;
+			const main = renderRoot(tagged, name)["main.tf"];
+			expect(main).not.toContain('resource "aws_sns_topic"');
+			if (spoke.hub === "eu-shared-services-prd") {
+				// Cross-account: a value from tfvars, never a reference into another
+				// account's state.
+				expect(main).toContain("monitor_report_sns_topic_arn = var.monitor_report_sns_topic_arn");
+				expect(main).toContain('variable "monitor_report_sns_topic_arn"');
+			} else {
+				// A hub that never asked for email leaves its spokes entirely alone.
+				expect(main).not.toContain("monitor_report_sns_topic_arn");
+			}
 		}
 	});
 
@@ -214,9 +222,10 @@ describe("fleet root renderer (SIO-1653)", () => {
 	// ARN list would be empty or wrong; the policy is scoped by CONDITION, the
 	// same shape the dist bucket already uses.
 	test("the topic policy actually authorizes the spoke monitors", () => {
-		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
-		const tagged = parseManifest(text);
-		const hubRoot = Object.keys(tagged.spokes).find((n) => tagged.spokes[n]?.hosts_hub === true);
+		const tagged = parseManifest(withHubArn(EXAMPLE));
+		const hubRoot = Object.keys(tagged.spokes).find(
+			(n) => tagged.spokes[n]?.hosts_hub === true && tagged.spokes[n]?.hub === "eu-shared-services-prd",
+		);
 		if (!hubRoot) throw new Error("the example manifest has no hosts_hub spoke");
 		const hub = renderRoot(tagged, hubRoot)["main.tf"];
 
@@ -256,9 +265,10 @@ describe("fleet root renderer (SIO-1653)", () => {
 	// are identifier-free by design (the IDENTIFIER guard below covers this too,
 	// but naming it here says why).
 	test("the rendered topic carries no identifiers", () => {
-		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
-		const tagged = parseManifest(text);
-		const hubRoot = Object.keys(tagged.spokes).find((n) => tagged.spokes[n]?.hosts_hub === true);
+		const tagged = parseManifest(withHubArn(EXAMPLE));
+		const hubRoot = Object.keys(tagged.spokes).find(
+			(n) => tagged.spokes[n]?.hosts_hub === true && tagged.spokes[n]?.hub === "eu-shared-services-prd",
+		);
 		if (!hubRoot) throw new Error("the example manifest has no hosts_hub spoke");
 		const hub = renderRoot(tagged, hubRoot)["main.tf"];
 		expect(hub).toContain('name = "pi-coms-monitor-reports"');
@@ -320,6 +330,26 @@ describe("fleet root renderer (SIO-1653)", () => {
 	// until the hub root is applied once, so this cannot be a hard error; it
 	// renders the same visible placeholder org_id uses, which shows up in the
 	// tfvars and fails loudly at apply rather than shipping a dead feature.
+	// SIO-1821 (Greptile P1, round 4): the fleet-wide flag created a topic in
+	// EVERY hub root, dev included, while only the hub carrying an arn wired its
+	// spokes up. That leaves an orphaned topic with no publisher -- enabled,
+	// applied, and silently unused. The hub key is now the single switch: a hub
+	// that carries it gets a topic AND wires its spokes; a hub that does not is
+	// untouched.
+	test("a hub without the key gets no topic and no spoke wiring", () => {
+		const tagged = parseManifest(withHubArn(EXAMPLE));
+		for (const name of Object.keys(tagged.spokes)) {
+			const spoke = tagged.spokes[name];
+			if (!spoke?.hosts_hub) continue;
+			const main = renderRoot(tagged, name)["main.tf"];
+			const hubHasKey = tagged.hubs[spoke.hub]?.monitor_report_sns_topic_arn !== undefined;
+			expect({ name, topic: main.includes('resource "aws_sns_topic" "monitor_reports"') }).toEqual({
+				name,
+				topic: hubHasKey,
+			});
+		}
+	});
+
 	test("monitor_report_email without a hub arn renders a visible placeholder", () => {
 		// Empty on the hub = "this hub wants email, topic not applied yet".
 		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n").replace(
