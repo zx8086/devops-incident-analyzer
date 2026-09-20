@@ -894,21 +894,33 @@ describe("extractFindings focus scoping across datasources (SIO-1030)", () => {
 		const previous = process.env.ATLASSIAN_RERANK_ENABLED;
 		process.env.ATLASSIAN_RERANK_ENABLED = "false";
 		try {
+			// The WEAK hit is the whole point of this fixture. Greptile PR #869 found
+			// that a disabled rerank was still returning the weak-hit-inclusive
+			// extraction, so a single-keyword ticket reached the card exactly when no
+			// judge was running to assess it. The first version of this test used
+			// issues with no `matchedBy` at all, which makes isWeakHit return false for
+			// every row -- so both paths agreed by accident and the bug sailed through.
 			const outputs: DataSourceResult["toolOutputs"] = [
 				{
 					toolName: "findLinkedIncidents",
 					rawJson: {
 						service: "orders-service",
 						issues: [
-							{ key: "INC-1", summary: "orders-service KV timeouts", status: "Open" },
-							{ key: "INC-2", summary: "orders-service retry backlog", status: "Open" },
+							{
+								key: "INC-1",
+								summary: "orders-service KV timeouts",
+								status: "Open",
+								matchedBy: ["service-label"],
+								score: 3,
+							},
+							{ key: "WEAK-1", summary: "styles scope retro", status: "Open", matchedBy: ["keyword:styles"], score: 1 },
 						],
 					},
 				},
 			];
 			const scoped = await extractFindings(stateFor("atlassian", outputs, ["orders-service"]));
 			const findings = scoped.dataSourceResults?.[0]?.atlassianFindings;
-			expect(findings?.linkedIssues?.map((i) => i.key)).toEqual(["INC-1", "INC-2"]);
+			expect(findings?.linkedIssues?.map((i) => i.key)).toEqual(["INC-1"]);
 			expect(findings?.rerank).toBe("skipped");
 			expect(findings?.rerankDropped).toBeUndefined();
 			expect(findings?.linkedIssues?.every((i) => i.relevance === undefined)).toBe(true);

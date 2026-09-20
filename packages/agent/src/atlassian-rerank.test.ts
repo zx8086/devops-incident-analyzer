@@ -49,9 +49,14 @@ function askReturning(scores: number[]): { ask: AskSystemOne; sent: unknown[] } 
 }
 
 describe("isAtlassianRerankEnabled", () => {
-	test("defaults ON, and only false/0 disable it", () => {
-		expect(isAtlassianRerankEnabled({})).toBe(true);
+	test("is OPT-IN while the threshold is uncalibrated", () => {
+		// Against the repo's usual default-ON rule, on purpose: RERANK_DROP_BELOW is
+		// set from a synthetic probe, and a default-ON flag would let an untuned
+		// filter hide real tickets as soon as a key is configured. Becomes a
+		// kill-switch once the threshold is tuned on real envelopes.
+		expect(isAtlassianRerankEnabled({})).toBe(false);
 		expect(isAtlassianRerankEnabled({ ATLASSIAN_RERANK_ENABLED: "true" })).toBe(true);
+		expect(isAtlassianRerankEnabled({ ATLASSIAN_RERANK_ENABLED: "1" })).toBe(true);
 		expect(isAtlassianRerankEnabled({ ATLASSIAN_RERANK_ENABLED: "FALSE" })).toBe(false);
 		expect(isAtlassianRerankEnabled({ ATLASSIAN_RERANK_ENABLED: "0" })).toBe(false);
 	});

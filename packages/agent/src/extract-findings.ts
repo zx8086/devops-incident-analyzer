@@ -126,26 +126,36 @@ async function rerankAtlassianCard(
 	state: AgentStateType,
 	focusServices: string[],
 	atlassianOutputs: ToolOutputs,
+	deterministic: AtlassianFindings,
 ): Promise<AtlassianFindings | undefined> {
-	const base = findingsForRerank(atlassianOutputs, focusServices);
-	if (!base) return undefined;
-	const { findings, issues } = base;
-
+	// EVERY gate is checked BEFORE the weak-hit-inclusive extraction. Greptile
+	// PR #869 caught the inverted order: widening first and then returning that
+	// wider set on a skip put single-keyword tickets on the card precisely when
+	// the rerank was NOT running to judge them -- the opposite of the safety
+	// property this function exists to hold. Reproduced before fixing, with a
+	// weak hit appearing on a focused run with the flag off.
 	const apiKey = resolveTypeSafeApiKey();
 	if (!isAtlassianRerankEnabled() || !apiKey) {
-		return { ...findings, rerank: "skipped" };
+		return { ...deterministic, rerank: "skipped" };
 	}
 	const incidentQuery = buildIncidentQuery(state, focusServices);
 	if (incidentQuery.length === 0) {
 		// No report text yet (a first turn that produced no answer): there is nothing
 		// to judge relevance AGAINST, and scoring against an empty query would rank
 		// by the ticket's own text alone.
-		return { ...findings, rerank: "skipped" };
+		return { ...deterministic, rerank: "skipped" };
 	}
+
+	// Only now widen. Weak hits are what the judge exists to separate, and they
+	// can only reach the card through an "applied" outcome below.
+	const base = findingsForRerank(atlassianOutputs, focusServices);
+	if (!base) return undefined;
+	const { findings, issues } = base;
 
 	const outcome = await rerankLinkedIssues(issues, incidentQuery, { apiKey });
 	recordRerankDecision(state, issues.length, outcome);
-	if (!outcome) return { ...findings, rerank: "failed" };
+	// A failure falls back to the DETERMINISTIC set, not the widened one.
+	if (!outcome) return { ...deterministic, rerank: "failed" };
 
 	logCard("AtlassianFindingsCard", focusServices, issues.length, outcome.issues.length, {
 		rerank: "applied",
@@ -463,8 +473,9 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 	// with -- flag off, no key, no incident text, a Jev error, a timeout -- leaves
 	// `findingsByDataSource` exactly as the deterministic path built it.
 	const atlassianOutputs = outputsByDataSource.get("atlassian");
-	if (atlassianOutputs && findingsByDataSource.has("atlassian")) {
-		const reranked = await rerankAtlassianCard(state, focusServices, atlassianOutputs);
+	const deterministicAtlassian = findingsByDataSource.get("atlassian")?.atlassianFindings;
+	if (atlassianOutputs && deterministicAtlassian) {
+		const reranked = await rerankAtlassianCard(state, focusServices, atlassianOutputs, deterministicAtlassian);
 		if (reranked) findingsByDataSource.set("atlassian", { atlassianFindings: reranked });
 	}
 

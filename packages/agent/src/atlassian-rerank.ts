@@ -25,11 +25,17 @@ import { askSystemOne, JEV_MODEL, resolveTypeSafeApiKey, type SystemOneResponse 
 
 const logger = getLogger("agent:atlassian-rerank");
 
-// Default ON; "false"/"0" disables. Read at call time -- no module-scope env
-// reads in packages/agent.
+// OPT-IN, deliberately against the repo's default-ON convention, and only until
+// RERANK_DROP_BELOW is calibrated (see below). That rule has a stated exception
+// for a feature awaiting live verification, and this is one: the threshold comes
+// from a synthetic probe, so a default-ON flag plus a configured key would let an
+// untuned filter start hiding real tickets the moment this merges. Flip to the
+// kill-switch form -- `v !== "false" && v !== "0"` -- in the same commit that
+// lands the tuned threshold and the three-case live replay (Greptile PR #869).
+// Read at call time: no module-scope env reads in packages/agent.
 export function isAtlassianRerankEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const v = env.ATLASSIAN_RERANK_ENABLED?.toLowerCase();
-	return v !== "false" && v !== "0";
+	return v === "true" || v === "1";
 }
 
 // One deadline for the whole fan-out, not per request: the caller is a node in a
