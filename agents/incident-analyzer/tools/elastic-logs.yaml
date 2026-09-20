@@ -101,6 +101,15 @@ tool_mapping:
       - elasticsearch_async_search_submit
       - elasticsearch_async_search_get
       - elasticsearch_async_search_delete
+      # SIO-1855: field discovery belongs to the SEARCH path, not only to index_management.
+      # `action` is a single-string enum, so a search dispatch that could not reach these
+      # had no way to check a field name and guessed instead: 356 ES|QL calls in one week
+      # with ZERO mapping lookups, and 136 "Unknown column [...], did you mean [...]?"
+      # failures. Read-only, already permitted for this agent under index_management, and
+      # the group stays well inside MAX_TOOLS_PER_AGENT (13 -> 16 of 25).
+      - elasticsearch_get_mappings
+      - elasticsearch_get_field_mapping
+      - elasticsearch_index_exists
     cluster_health:
       - elasticsearch_get_cluster_health
       - elasticsearch_get_cluster_stats
@@ -198,7 +207,9 @@ tool_mapping:
     search: >-
       when querying log or APM documents by service, time window, or search terms -- structured
       queries, aggregations, free text, ES|QL pipelines, and async search for heavy aggregations
-      (the primary log-search path; the discovery and absence procedure is in the elastic-agent SOUL)
+      (the primary log-search path; the discovery and absence procedure is in the elastic-agent SOUL).
+      SIO-1855: also carries elasticsearch_get_mappings/get_field_mapping -- check a field name
+      against the mapping BEFORE guessing it, rather than after Elasticsearch rejects the query
     cluster_health: when checking cluster status, node count, shard allocation, or pending tasks at the cluster level
     node_info: when inspecting a specific node's hardware, JVM, thread pools, or per-node disk/memory usage
     index_management: when listing indices, checking index settings, mappings, stats, or rolling over an index pattern
