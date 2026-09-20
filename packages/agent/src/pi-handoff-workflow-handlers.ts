@@ -27,6 +27,7 @@ import {
 	readPiComsCapability,
 	resolvePiComsConfig,
 	runHubTask,
+	unusableVerdictMessage,
 } from "./action-tools/pi-verifier.ts";
 import { loadPiHandoffWorkflow } from "./pi-handoff-workflow.ts";
 import { recordVerdictDecision } from "./pi-verdict-memory.ts";
@@ -117,7 +118,10 @@ export async function runPiHandoff(ctx: PiHandoffContext, deps: PiHandoffDeps): 
 
 				const parsed = PiVerdictSchema.safeParse(outcome.response);
 				if (!parsed.success) {
-					throw new Error(`pi agent ${outcome.target} replied with an unusable verdict (schema mismatch)`);
+					// SIO-1829: the same message as the card path. This one is the SIO-1651
+					// workflow shape, and it had no shape diagnostics at all -- a thrown
+					// "schema mismatch" named neither what arrived nor what to do next.
+					throw new Error(unusableVerdictMessage(outcome.target, outcome.response));
 				}
 				// Structured fields only; see pi-verdict-memory.ts.
 				recordVerdictDecision({

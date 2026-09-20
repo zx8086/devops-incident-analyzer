@@ -519,6 +519,27 @@ function replyKeys(response: unknown): string[] {
 	return response && typeof response === "object" && !Array.isArray(response) ? Object.keys(response) : [];
 }
 
+// SIO-1829: why the verify path does NOT adapt a diagnoses envelope the way the investigate
+// path does (SIO-1830). A verdict is a JUDGEMENT on the analyzer's specific claims; a
+// diagnosis is the spoke's own OBSERVATION of something it found. Synthesising the first
+// from the second invents a judgement the spoke never made -- and in the reported case the
+// diagnosis was about a different service (orders-service) than the one asked about
+// (localcore-service), so adapting it would have produced a confident verdict about the
+// wrong thing. SIO-1830's adapter is safe because both of ITS shapes answer the same
+// question; that property does not transfer here.
+//
+// Losing the verdict is therefore correct. Losing the operator's next step is not: when the
+// reply is recognisably a diagnoses envelope, say so and name the tool that DOES read it.
+// KEY NAMES only, never values -- same rule as replyKeys, for the same reason.
+export function unusableVerdictMessage(target: string, response: unknown): string {
+	const keys = replyKeys(response);
+	if (keys.length === 1 && keys[0] === "diagnoses") {
+		return `pi agent ${target} answered with a diagnosis, not a verdict on the report's claims; use investigate-with-pi, which reads that shape`;
+	}
+	const shape = keys.length > 0 ? `keys: ${keys.join(", ")}` : "no object body";
+	return `pi agent ${target} replied with an unusable verdict (${shape})`;
+}
+
 // The reply half: validate against the analyzer's OWN schema, remember a verdict as
 // structured fields, and propose the investigate follow-up. One implementation for
 // both execution shapes.
@@ -534,7 +555,7 @@ function finalizePiAction(
 				{ target: reply.target, msg_id: reply.msg_id, responseKeys: replyKeys(reply.response) },
 				"pi verdict did not match schema",
 			);
-			return { status: "error", error: `pi agent ${reply.target} replied with an unusable verdict (schema mismatch)` };
+			return { status: "error", error: unusableVerdictMessage(reply.target, reply.response) };
 		}
 		// SIO-1651: remember the verdict as structured fields (enums, counts, ids).
 		// The workflow path writes through the same builder, so a verdict is

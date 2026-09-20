@@ -106,7 +106,29 @@ describe("SIO-1651 runPiHandoff", () => {
 		});
 
 		expect(result.status).toBe("failed");
-		expect(result.status === "failed" && result.reason).toContain("schema mismatch");
+		// SIO-1829: the failure names the shape that arrived, not a bare "schema mismatch".
+		expect(result.status === "failed" && result.reason).toContain("keys: verdict");
+	});
+
+	// SIO-1829: the workflow path shares the card path's message builder, so the known
+	// diagnoses dialect points at the tool that reads it here too. This site previously
+	// threw a bare "schema mismatch" naming neither the shape nor the next step.
+	test("a diagnoses envelope fails the verify step naming investigate-with-pi", async () => {
+		const hub = scriptedHub({
+			agents: online,
+			reply: { diagnoses: [{ dedup_key: "logs:x", probable_cause: "unguarded Optional.get()", confidence: 0.8 }] },
+		});
+		const result = await runPiHandoff(ctx, {
+			readCompletedReport: async () => report,
+			verifierDeps: { env, fetchImpl: hub.fetchImpl },
+		});
+
+		expect(result.status).toBe("failed");
+		const reason = result.status === "failed" ? result.reason : "";
+		expect(reason).toContain("diagnosis, not a verdict");
+		expect(reason).toContain("investigate-with-pi");
+		// Keys only: the spoke's prose must not reach the workflow's failure reason.
+		expect(reason).not.toContain("Optional.get()");
 	});
 
 	test("an empty completed report skips before any hub traffic", async () => {
