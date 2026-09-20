@@ -21,6 +21,7 @@ import {
 	type MonitorFinding,
 	parseMonitorReport,
 	summarizeFleetInboxForPrompt,
+	windowFloorCursor,
 	withinWindow,
 } from "./fleet-inbox.ts";
 
@@ -664,5 +665,42 @@ describe("SIO-1815: the digest is scoped to the focus services", () => {
 		});
 		expect(summary).not.toContain("detail is from");
 		expect(summary).not.toContain("distinct)");
+	});
+});
+
+// SIO-1828: the cursor's whole job is to be an exclusive lower bound under the hub's
+// `msg_id > ?` comparison. The three ULIDs below are REAL msg_ids observed on the
+// eu-shared-services-prd hub, so this pins the property against the hub's own generator
+// rather than against a ULID of my own construction.
+describe("windowFloorCursor", () => {
+	const real = [
+		{ id: "01M2XW5F2XQFKY5215AW7AM04J", at: "2026-09-19T22:21:36.733Z" },
+		{ id: "01M2XWAA9HNQGKWTAS5FPPD7NF", at: "2026-09-19T22:24:15.665Z" },
+		{ id: "01M2Y0YER09EBRCNV4X1S5QTHH", at: "2026-09-19T23:45:09.888Z" },
+	];
+
+	test("is a 26-char ULID that sorts before every real message at or after its instant", () => {
+		const floor = windowFloorCursor("2026-09-19T22:00:00.000Z");
+		expect(floor).toBeDefined();
+		expect(floor).toHaveLength(26);
+		for (const { id } of real) expect((floor as string) < id).toBe(true);
+	});
+
+	test("sorts AFTER a message that predates the window, so paging starts at the window", () => {
+		// A floor one minute past the first real message must exclude it.
+		const floor = windowFloorCursor("2026-09-19T22:22:00.000Z") as string;
+		expect(real[0] && floor > real[0].id).toBe(true);
+		expect(real[1] && floor < real[1].id).toBe(true);
+	});
+
+	test("is monotonic in time", () => {
+		const earlier = windowFloorCursor("2026-09-19T21:00:00.000Z") as string;
+		const later = windowFloorCursor("2026-09-19T22:00:00.000Z") as string;
+		expect(earlier < later).toBe(true);
+	});
+
+	test("is undefined for a window the cursor cannot express", () => {
+		expect(windowFloorCursor("not-a-date")).toBeUndefined();
+		expect(windowFloorCursor("1969-12-31T23:59:59.000Z")).toBeUndefined();
 	});
 });

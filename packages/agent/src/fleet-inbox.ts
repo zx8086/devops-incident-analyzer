@@ -27,6 +27,10 @@ export const MAX_FINDINGS_PER_ENTRY = 12;
 export const MAX_FOCUS_FINDINGS_IN_PROMPT = 8;
 // The hub caps a mailbox listing at 100; without `since` it returns the newest.
 export const MAILBOX_READ_LIMIT = 100;
+// SIO-1828: how many MAILBOX_READ_LIMIT pages a window read may walk. A busy `ops`
+// inbox holds ~100 monitor messages a day, so 5 pages covers a multi-day window
+// while bounding the worst case at 500 rows and 5 round trips per inbox.
+export const MAILBOX_MAX_PAGES = 5;
 export const DEFAULT_FLEET_INBOX_TIMEOUT_MS = 5000;
 // setTimeout delays above the 32-bit signed max overflow to 1 ms.
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -218,6 +222,30 @@ export function classifyMessage(message: PiInboxMessage, focusServices: string[]
 		return { kind: "conversation", severity: null, findingCount: null, alarmNames: [], findings: [] };
 	}
 	return { kind: "other", severity: null, findingCount: null, alarmNames: [], findings: [] };
+}
+
+// Crockford base32, the alphabet the hub's ulid() uses (coms-net-server.ts).
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+// SIO-1828: the exclusive lower bound for a hub mailbox read, as a ULID whose
+// 10-char timestamp encodes `from` and whose 16 randomness chars are all zero.
+// A real ULID minted at that same millisecond has non-zero randomness with
+// overwhelming probability, and one minted later has a greater timestamp, so
+// every message in the window sorts strictly after this cursor under the hub's
+// `msg_id > ?` comparison. Returns undefined for an unparseable or pre-epoch
+// `from`, which makes the caller fall back to the newest-first read.
+export function windowFloorCursor(from: string): string | undefined {
+	const ms = Date.parse(from);
+	if (!Number.isFinite(ms) || ms < 0) return undefined;
+	let time = "";
+	let rest = ms;
+	for (let i = 0; i < 10; i++) {
+		time = CROCKFORD[rest % 32] + time;
+		rest = Math.floor(rest / 32);
+	}
+	// A timestamp past the 48-bit ULID ceiling would have overflowed the 10 chars.
+	if (rest !== 0) return undefined;
+	return time + "0".repeat(16);
 }
 
 export function withinWindow(message: Pick<PiInboxMessage, "created_at">, window: IncidentWindow): boolean {

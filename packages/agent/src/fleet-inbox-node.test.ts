@@ -4,6 +4,7 @@
 // times out into an error row rather than a failed turn.
 import { describe, expect, test } from "bun:test";
 import type { FetchLike } from "./action-tools/pi-coms-client.ts";
+import { MAILBOX_MAX_PAGES, MAILBOX_READ_LIMIT } from "./fleet-inbox.ts";
 import { runFetchFleetInbox } from "./fleet-inbox-node.ts";
 
 type Call = { url: string; auth: string | undefined };
@@ -214,5 +215,96 @@ describe("runFetchFleetInbox", () => {
 		expect(stg?.error).toContain("not listed on any pi-coms hub");
 		expect(stg?.environment).toBe("stg");
 		expect(calls.every((c) => c.url.startsWith("http://prd.hub.test/"))).toBe(true);
+	});
+});
+
+// SIO-1828: before this, the read was one newest-first page of MAILBOX_READ_LIMIT rows.
+// An incident whose window sat behind those rows read as an empty inbox -- the digest
+// said "0 monitor message(s)" for an account the monitor had reported on all along.
+// The fake below is the hub's real forward-paging contract: `since` is an exclusive
+// ULID cursor, rows come back ascending, and a page is capped at MAILBOX_READ_LIMIT.
+describe("SIO-1828 window paging", () => {
+	// Ascending msg_ids across a mailbox deeper than one page. The window below
+	// covers the EARLY rows, which is exactly what a newest-first read cannot see.
+	function deepMailbox(total: number) {
+		return Array.from({ length: total }, (_, i) => {
+			const minute = String(i % 60).padStart(2, "0");
+			const hour = String(2 + Math.floor(i / 60)).padStart(2, "0");
+			return row({
+				// A real hub ULID: 10 timestamp chars then 16 of randomness. Ascending
+				// here because the suffix ascends, which is all the cursor compares.
+				msg_id: `01M2XW5F2X${String(i).padStart(16, "0")}`,
+				sender_name: "monitor-aws-111122223333",
+				prompt: REPORT,
+				created_at: `2026-09-06T${hour}:${minute}:00.000Z`,
+			});
+		});
+	}
+
+	function pagingHub(rowsByInbox: Record<string, ReturnType<typeof row>[]>) {
+		return hubFake((url) => {
+			const name = url.searchParams.get("name") ?? "";
+			const since = url.searchParams.get("since");
+			const limit = Number(url.searchParams.get("limit") ?? "100");
+			const all = rowsByInbox[name] ?? [];
+			// The hub's two modes: forward from an exclusive cursor, else newest-first.
+			const messages = since ? all.filter((m) => m.msg_id > since).slice(0, limit) : all.slice(-limit).reverse();
+			return { body: { ok: true, name, messages } };
+		});
+	}
+
+	test("finds the window's messages when they sit behind more than one page of newer rows", async () => {
+		const { calls, fetchImpl } = pagingHub({ ops: deepMailbox(250), "eu-oit-prd": [] });
+		const out = await runFetchFleetInbox(
+			{ ...state, awsTargetEstates: ["eu-oit-prd"] },
+			{ env: { ...env, PI_COMS_INBOX_TIMEOUT_MS: "5000" }, fetchImpl, now },
+		);
+
+		const prd = out.fleetInboxDigest?.estates.find((e) => e.estate === "eu-oit-prd");
+		// All 250 rows fall inside the 00:00-12:00 window, and every one is attributable
+		// to this estate. A single newest-first page would have capped this at 100.
+		expect(prd?.counts.total).toBe(250);
+		expect(prd?.counts.incidentReports).toBe(250);
+		// The read walked forward from a floor cursor rather than asking for the newest.
+		const opsCalls = calls.filter((c) => c.url.includes("name=ops"));
+		expect(opsCalls.length).toBe(3);
+		expect(opsCalls.every((c) => c.url.includes("since="))).toBe(true);
+		// A full read is not a partial one.
+		expect(prd?.error).toBeNull();
+	});
+
+	test("the page cap truncates rather than hangs, and the digest says the read was capped", async () => {
+		// 5 pages x 100 = the cap, with rows still unread beyond it.
+		const { fetchImpl } = pagingHub({ ops: deepMailbox(700), "eu-oit-prd": [] });
+		const out = await runFetchFleetInbox(
+			{ ...state, awsTargetEstates: ["eu-oit-prd"] },
+			{ env: { ...env, PI_COMS_INBOX_TIMEOUT_MS: "5000" }, fetchImpl, now },
+		);
+
+		const prd = out.fleetInboxDigest?.estates.find((e) => e.estate === "eu-oit-prd");
+		expect(prd?.counts.total).toBe(MAILBOX_MAX_PAGES * MAILBOX_READ_LIMIT);
+		// The honesty rule: a short read is stated, never silent.
+		expect(prd?.error).toContain("read capped before the end of the window");
+	});
+
+	test("a window the hub's cursor cannot express falls back to the newest-first read", async () => {
+		const { calls, fetchImpl } = pagingHub({ ops: deepMailbox(250), "eu-oit-prd": [] });
+		const out = await runFetchFleetInbox(
+			{
+				...state,
+				awsTargetEstates: ["eu-oit-prd"],
+				normalizedIncident: { timeWindow: { from: "not-a-date", to: "2026-09-06T12:00:00.000Z" } },
+			},
+			{ env, fetchImpl, now },
+		);
+
+		const opsCalls = calls.filter((c) => c.url.includes("name=ops"));
+		expect(opsCalls.length).toBe(1);
+		expect(opsCalls.every((c) => c.url.includes("since="))).toBe(false);
+		// The read itself succeeded: no error row, and the digest still reports the
+		// window it was given. (An unparseable window then keeps no rows downstream --
+		// withinWindow rejects every timestamp against NaN -- which is unchanged here.)
+		expect(out.fleetInboxDigest?.estates[0]?.error).toBeNull();
+		expect(out.fleetInboxDigest?.windowFrom).toBe("not-a-date");
 	});
 });
