@@ -91,6 +91,12 @@ const ShapedIssueSchema = z.object({
 	score: z
 		.number()
 		.describe("SIO-1802: label/component hit 3, service named in the text 2, each keyword 1. Issues are sorted by it."),
+	descriptionExcerpt: z
+		.string()
+		.optional()
+		.describe(
+			"SIO-1837: the head of the ticket description, whitespace-collapsed and capped. The field is already fetched for attributeMatch and was being discarded; a summary alone is written in business language and often does not name the failure (SIO-1244), so a relevance judgement needs the body. Absent when the ticket has no description.",
+		),
 });
 
 export const OutputSchema = z.object({
@@ -205,6 +211,37 @@ function containsTerm(haystack: string, term: string): boolean {
 	return words.length > 0 && new RegExp(` ${words}(?:s|es)? `, "u").test(haystack);
 }
 
+// SIO-1837: the head of the description as flat text. The call already asks for markdown
+// (LINKED_INCIDENT_FIELDS), but a site can still answer with ADF, so a non-string body is
+// walked for its text nodes rather than JSON.stringify'd -- attributeMatch can tolerate
+// brace noise in a substring test, a reader cannot.
+const DESCRIPTION_EXCERPT_MAX_CHARS = 600;
+
+function adfText(node: unknown, out: string[]): void {
+	if (typeof node === "string") {
+		out.push(node);
+		return;
+	}
+	if (Array.isArray(node)) {
+		for (const child of node) adfText(child, out);
+		return;
+	}
+	if (node && typeof node === "object") {
+		const record = node as Record<string, unknown>;
+		if (typeof record.text === "string") out.push(record.text);
+		if (record.content !== undefined) adfText(record.content, out);
+	}
+}
+
+export function descriptionExcerpt(description: unknown): string | undefined {
+	if (description === null || description === undefined) return undefined;
+	const parts: string[] = [];
+	adfText(description, parts);
+	const flat = parts.join(" ").replace(/\s+/g, " ").trim();
+	if (flat.length === 0) return undefined;
+	return flat.length > DESCRIPTION_EXCERPT_MAX_CHARS ? flat.slice(0, DESCRIPTION_EXCERPT_MAX_CHARS) : flat;
+}
+
 // SIO-1802: deterministic attribution, no second Jira call and no LLM. Mirrors the additive
 // scoring of the sibling scorePage (get-runbook-for-alert.ts).
 export function attributeMatch(raw: JiraIssueRaw, terms: MatchTerms): { matchedBy: string[]; score: number } {
@@ -306,6 +343,7 @@ export function shapeIssue(raw: JiraIssueRaw, siteUrl?: string, terms?: MatchTer
 		url: siteUrl ? `${siteUrl}/browse/${key}` : undefined,
 		matchedBy,
 		score,
+		descriptionExcerpt: descriptionExcerpt(fields.description),
 	};
 }
 

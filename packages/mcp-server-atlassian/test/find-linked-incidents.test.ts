@@ -4,10 +4,48 @@ import type { AtlassianMcpProxy } from "../src/atlassian-client/index.js";
 import {
 	attributeMatch,
 	buildJql,
+	descriptionExcerpt,
 	findLinkedIncidents,
 	type JiraIssueRaw,
 	shapeIssue,
 } from "../src/tools/custom/find-linked-incidents.js";
+
+describe("findLinkedIncidents.descriptionExcerpt", () => {
+	test("collapses whitespace and returns flat text", () => {
+		expect(descriptionExcerpt("KV  timeouts\n\nafter   a rebuild")).toBe("KV timeouts after a rebuild");
+	});
+
+	test("undefined for absent or empty bodies, never an empty string", () => {
+		// The field is optional in the schema; "" would occupy a slot in the model's
+		// state and say nothing.
+		expect(descriptionExcerpt(undefined)).toBeUndefined();
+		expect(descriptionExcerpt(null)).toBeUndefined();
+		expect(descriptionExcerpt("   \n  ")).toBeUndefined();
+		expect(descriptionExcerpt({})).toBeUndefined();
+	});
+
+	test("caps at 600 characters", () => {
+		const excerpt = descriptionExcerpt("x".repeat(5000));
+		expect(excerpt).toHaveLength(600);
+	});
+
+	test("walks ADF for its text nodes instead of stringifying the document", () => {
+		// The call asks for markdown, but a site can still answer with ADF. Braces and
+		// key names in a JSON.stringify would be noise a reader has to see through.
+		const adf = {
+			type: "doc",
+			version: 1,
+			content: [
+				{ type: "paragraph", content: [{ type: "text", text: "Consumers hit an ambiguous timeout" }] },
+				{ type: "paragraph", content: [{ type: "text", text: "on KV get." }] },
+			],
+		};
+		const excerpt = descriptionExcerpt(adf);
+		expect(excerpt).toBe("Consumers hit an ambiguous timeout on KV get.");
+		expect(excerpt).not.toContain("paragraph");
+		expect(excerpt).not.toContain("{");
+	});
+});
 
 describe("findLinkedIncidents.buildJql", () => {
 	test("constrains to incidentProjects when provided", () => {
@@ -133,6 +171,26 @@ describe("findLinkedIncidents.shapeIssue", () => {
 			fields: { summary: "s", status: { name: "Open" }, created: "2026-04-10T10:00:00Z" },
 		});
 		expect(shaped.severity).toBeNull();
+	});
+
+	test("SIO-1837: carries a description excerpt, absent when there is no description", () => {
+		const withBody = shapeIssue({
+			key: "INC-5",
+			fields: {
+				summary: "s",
+				status: { name: "Open" },
+				created: "2026-04-10T10:00:00Z",
+				description: "KV  timeouts\nafter an index rebuild",
+			},
+		});
+		// Whitespace collapsed so the excerpt reads as one line.
+		expect(withBody.descriptionExcerpt).toBe("KV timeouts after an index rebuild");
+
+		const withoutBody = shapeIssue({
+			key: "INC-6",
+			fields: { summary: "s", status: { name: "Open" }, created: "2026-04-10T10:00:00Z" },
+		});
+		expect(withoutBody.descriptionExcerpt).toBeUndefined();
 	});
 
 	test("SIO-1802: without match terms the attribution is empty, not guessed", () => {

@@ -38,7 +38,20 @@ function matchLabel(matchedBy: string[]): string {
 	return parts.length > 0 ? parts.join(" + ") : "no visible match";
 }
 
+// SIO-1837: the rerank verdict as a word. The numeric score is the model's, the
+// bands are ours: 3 is "same service and same failure", 2 "same service, other
+// failure", 1 "generic overlap". Undefined means the judgement did not run (flag
+// off, no key, or a Jev failure), and then no chip is shown at all -- an unjudged
+// ticket must not look like a judged one.
+function relevanceLabel(relevance: number | undefined): string | undefined {
+	if (relevance === undefined) return undefined;
+	if (relevance >= 2.5) return "same failure";
+	if (relevance >= 1.5) return "same service";
+	return "loose match";
+}
+
 const linkedIssues = $derived(findings.linkedIssues ?? []);
+const rerankDropped = $derived(findings.rerankDropped ?? 0);
 // SIO-1338: a configWarning (SIO-1184 dead-project config, SIO-1337 pagination truncation) can
 // arrive even when linkedIssues is empty -- e.g. truncation on a call whose page happened to
 // contain no focus-matching rows -- so the card must render for the warning alone, not just rows.
@@ -80,9 +93,22 @@ const hasContent = $derived(linkedIssues.length > 0 || Boolean(findings.configWa
                   title={issue.matchedBy.length > 0 ? `Matched by: ${issue.matchedBy.join(", ")}` : "Matched only in text this card cannot see (for example a comment)"}
                 >{matchLabel(issue.matchedBy)}</span>
               {/if}
+              {#if relevanceLabel(issue.relevance)}
+                <span
+                  class="text-[0.5625rem] font-medium text-indigo-700 bg-indigo-100 uppercase tracking-wider rounded px-1 shrink-0"
+                  title={`Relevance to this incident: ${issue.relevance?.toFixed(2)} of 3`}
+                >{relevanceLabel(issue.relevance)}</span>
+              {/if}
             </div>
           {/each}
         </div>
+        {#if rerankDropped > 0}
+          <!-- SIO-1837: a hidden ticket is a decision, so it is stated. Without this
+               the card looks like the search simply returned fewer results. -->
+          <div class="mt-1 text-[0.5625rem] text-gray-500">
+            {rerankDropped} low-relevance {rerankDropped === 1 ? "ticket" : "tickets"} hidden
+          </div>
+        {/if}
       </div>
     {/if}
   </div>

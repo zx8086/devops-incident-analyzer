@@ -149,4 +149,76 @@ describe("AtlassianFindingsCard.svelte", () => {
 			expect(body).not.toContain("Atlassian findings");
 		});
 	});
+
+	// SIO-1837: the rerank verdict on the card.
+	describe("relevance", () => {
+		test("shows a band per judged ticket", () => {
+			const { body } = render(AtlassianFindingsCard, {
+				props: {
+					findings: {
+						rerank: "applied",
+						linkedIssues: [
+							{ key: "INC-1", summary: "same failure", status: "Open", relevance: 2.96 },
+							{ key: "INC-2", summary: "same service", status: "Open", relevance: 2.04 },
+							{ key: "INC-3", summary: "loose", status: "Open", relevance: 1.2 },
+						],
+					},
+				},
+			});
+			expect(body).toContain("same failure");
+			expect(body).toContain("same service");
+			expect(body).toContain("loose match");
+		});
+
+		test("an unjudged ticket carries no relevance chip", () => {
+			// A card rendered with the rerank off or failed must not imply a judgement
+			// that never happened.
+			const { body } = render(AtlassianFindingsCard, {
+				props: {
+					findings: { rerank: "skipped", linkedIssues: [{ key: "INC-1", summary: "unjudged", status: "Open" }] },
+				},
+			});
+			expect(body).toContain("INC-1");
+			expect(body).not.toContain("same failure");
+			expect(body).not.toContain("same service");
+			expect(body).not.toContain("loose match");
+		});
+
+		test("states how many tickets were hidden, singular and plural", () => {
+			const one = render(AtlassianFindingsCard, {
+				props: {
+					findings: {
+						rerank: "applied",
+						rerankDropped: 1,
+						linkedIssues: [{ key: "INC-1", summary: "kept", status: "Open", relevance: 2.9 }],
+					},
+				},
+			});
+			expect(one.body).toContain("1 low-relevance ticket hidden");
+
+			const many = render(AtlassianFindingsCard, {
+				props: {
+					findings: {
+						rerank: "applied",
+						rerankDropped: 4,
+						linkedIssues: [{ key: "INC-1", summary: "kept", status: "Open", relevance: 2.9 }],
+					},
+				},
+			});
+			expect(many.body).toContain("4 low-relevance tickets hidden");
+		});
+
+		test("no hidden-count line when nothing was dropped", () => {
+			const { body } = render(AtlassianFindingsCard, {
+				props: {
+					findings: {
+						rerank: "applied",
+						rerankDropped: 0,
+						linkedIssues: [{ key: "INC-1", summary: "kept", status: "Open", relevance: 2.9 }],
+					},
+				},
+			});
+			expect(body).not.toContain("hidden");
+		});
+	});
 });

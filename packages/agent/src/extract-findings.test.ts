@@ -884,6 +884,39 @@ describe("extractFindings focus scoping across datasources (SIO-1030)", () => {
 			"More than 1 incidents matched within 30d; results were truncated to the requested limit.",
 		);
 	});
+
+	// SIO-1837: the safety property the whole rerank rests on. With the flag off the
+	// card must be what the deterministic path produced -- same tickets, same order,
+	// no relevance fields -- and the only visible difference is the rerank marker
+	// saying the judgement did not run. Every test above this line runs the same
+	// path and would fail if the rerank ever mutated a card it was not asked to.
+	test("atlassian: the rerank leaves the card untouched when disabled", async () => {
+		const previous = process.env.ATLASSIAN_RERANK_ENABLED;
+		process.env.ATLASSIAN_RERANK_ENABLED = "false";
+		try {
+			const outputs: DataSourceResult["toolOutputs"] = [
+				{
+					toolName: "findLinkedIncidents",
+					rawJson: {
+						service: "orders-service",
+						issues: [
+							{ key: "INC-1", summary: "orders-service KV timeouts", status: "Open" },
+							{ key: "INC-2", summary: "orders-service retry backlog", status: "Open" },
+						],
+					},
+				},
+			];
+			const scoped = await extractFindings(stateFor("atlassian", outputs, ["orders-service"]));
+			const findings = scoped.dataSourceResults?.[0]?.atlassianFindings;
+			expect(findings?.linkedIssues?.map((i) => i.key)).toEqual(["INC-1", "INC-2"]);
+			expect(findings?.rerank).toBe("skipped");
+			expect(findings?.rerankDropped).toBeUndefined();
+			expect(findings?.linkedIssues?.every((i) => i.relevance === undefined)).toBe(true);
+		} finally {
+			if (previous === undefined) delete process.env.ATLASSIAN_RERANK_ENABLED;
+			else process.env.ATLASSIAN_RERANK_ENABLED = previous;
+		}
+	});
 });
 
 // SIO-1245: the multi-row seam. The AWS estate fan-out (SIO-828) and the elastic deployment

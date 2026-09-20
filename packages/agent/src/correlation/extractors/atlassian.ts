@@ -64,7 +64,17 @@ function isWeakHit(issue: AtlassianLinkedIssue): boolean {
 	return !structural && keywordHits < MIN_KEYWORD_HITS;
 }
 
-export function extractAtlassianFindings(outputs: ToolOutput[], focusServices: string[] = []): AtlassianFindings {
+// SIO-1837: when the Jev rerank is going to run, a weak hit is exactly the case
+// keyword arithmetic cannot judge -- one keyword and no structural match is the
+// shape of both a false positive (SIO-1802) and a correctly-retrieved ticket that
+// happens not to be tagged with the service (SIO-1244). Keeping them lets the
+// rerank decide; the caller passes this ONLY when it will then rerank, so the
+// default path and every existing test are untouched.
+export function extractAtlassianFindings(
+	outputs: ToolOutput[],
+	focusServices: string[] = [],
+	options: { keepWeakHits?: boolean } = {},
+): AtlassianFindings {
 	const linkedIssues: AtlassianLinkedIssue[] = [];
 	// SIO-1338 (CodeRabbit, PR #564): two findLinkedIncidents calls probing different services can
 	// legitimately return the SAME ticket (e.g. text-matched by both services' domain terms). This
@@ -89,7 +99,7 @@ export function extractAtlassianFindings(outputs: ToolOutput[], focusServices: s
 			if (envelopeInFocus) {
 				// Provenance admits the envelope; SIO-1802 then asks each ticket why it is here.
 				// Empty focus stays show-all (the SIO-1030 guardrail): the drop is for focused runs.
-				if (focusServices.length > 0 && isWeakHit(parsed.data)) continue;
+				if (focusServices.length > 0 && !options.keepWeakHits && isWeakHit(parsed.data)) continue;
 			} else if (!matchesFocus(`${parsed.data.key} ${parsed.data.summary}`, focusServices)) {
 				// A stale or unrelated probe: its matchedBy describes a different query, so the
 				// ticket stands or falls on naming the focus itself.
