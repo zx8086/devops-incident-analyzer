@@ -1,7 +1,14 @@
 // agent/src/extract-findings.ts
 import { getLogger } from "@devops-agent/observability";
-import type { DataSourceResult } from "@devops-agent/shared";
+import type { AtlassianFindings, AtlassianLinkedIssue, DataSourceResult } from "@devops-agent/shared";
+import { createDecisionMetricsRecorder, rankCorrelation, resolveDecisionMetricsDbPath } from "@devops-agent/shared";
 import { buildApplicationTopology, mergeApplicationTopologyOverlay } from "./application-topology.ts";
+import {
+	buildIncidentQuery,
+	isAtlassianRerankEnabled,
+	rerankLinkedIssues,
+	resolveTypeSafeApiKey,
+} from "./atlassian-rerank.ts";
 import { extractAtlassianFindings } from "./correlation/extractors/atlassian.ts";
 import { extractAwsFindings } from "./correlation/extractors/aws.ts";
 import { collectCouchbaseKeyspaces, extractCouchbaseFindings } from "./correlation/extractors/couchbase.ts";
@@ -109,6 +116,107 @@ function countRawConsumerGroups(toolOutputs: DataSourceResult["toolOutputs"]): {
 		}
 	}
 	return { count: ids.size, sampleIds: Array.from(ids).slice(0, 3) };
+}
+
+// SIO-1837: the rerank lane for the Atlassian card. Returns the new findings, or
+// undefined to mean "keep what the deterministic path produced". Every exit that
+// is not a successful rerank returns undefined, so the card can only ever be the
+// arithmetic's answer or a strictly-judged reordering of it.
+async function rerankAtlassianCard(
+	state: AgentStateType,
+	focusServices: string[],
+	atlassianOutputs: ToolOutputs,
+	deterministic: AtlassianFindings,
+): Promise<AtlassianFindings | undefined> {
+	// EVERY gate is checked BEFORE the weak-hit-inclusive extraction. Greptile
+	// PR #869 caught the inverted order: widening first and then returning that
+	// wider set on a skip put single-keyword tickets on the card precisely when
+	// the rerank was NOT running to judge them -- the opposite of the safety
+	// property this function exists to hold. Reproduced before fixing, with a
+	// weak hit appearing on a focused run with the flag off.
+	const apiKey = resolveTypeSafeApiKey();
+	if (!isAtlassianRerankEnabled() || !apiKey) {
+		return { ...deterministic, rerank: "skipped" };
+	}
+	const incidentQuery = buildIncidentQuery(state, focusServices);
+	if (incidentQuery.length === 0) {
+		// No report text yet (a first turn that produced no answer): there is nothing
+		// to judge relevance AGAINST, and scoring against an empty query would rank
+		// by the ticket's own text alone.
+		return { ...deterministic, rerank: "skipped" };
+	}
+
+	// Only now widen. Weak hits are what the judge exists to separate, and they
+	// can only reach the card through an "applied" outcome below.
+	const base = findingsForRerank(atlassianOutputs, focusServices);
+	if (!base) return undefined;
+	const { findings, issues } = base;
+
+	const outcome = await rerankLinkedIssues(issues, incidentQuery, { apiKey });
+	recordRerankDecision(state, issues.length, outcome);
+	// A failure falls back to the DETERMINISTIC set, not the widened one.
+	if (!outcome) return { ...deterministic, rerank: "failed" };
+
+	logCard("AtlassianFindingsCard", focusServices, issues.length, outcome.issues.length, {
+		rerank: "applied",
+		rerankDropped: outcome.dropped,
+		latencyMs: outcome.latencyMs,
+		topScore: outcome.issues[0]?.relevance,
+		bottomScore: outcome.issues[outcome.issues.length - 1]?.relevance,
+	});
+	return {
+		...findings,
+		linkedIssues: outcome.issues,
+		rerank: "applied",
+		rerankDropped: outcome.dropped,
+	};
+}
+
+// Re-extract with weak hits kept, because those are the tickets the rerank exists
+// to judge. Returns undefined when there is nothing to rank, so the caller leaves
+// the card alone rather than stamping a verdict on an empty list.
+function findingsForRerank(
+	atlassianOutputs: ToolOutputs,
+	focusServices: string[],
+): { findings: AtlassianFindings; issues: AtlassianLinkedIssue[] } | undefined {
+	const findings = extractAtlassianFindings(atlassianOutputs, focusServices, { keepWeakHits: true });
+	const issues = findings.linkedIssues ?? [];
+	return issues.length > 0 ? { findings, issues } : undefined;
+}
+
+// Best-effort, and deliberately not awaited into the turn's critical path beyond
+// the write itself: a metrics failure must never cost a card. The recorder is
+// opened per call because extractFindings is a graph node, not a long-lived
+// service, and DECISION_METRICS_DB_PATH is usually unset (then this is a no-op).
+function recordRerankDecision(
+	state: AgentStateType,
+	itemsIn: number,
+	outcome: Awaited<ReturnType<typeof rerankLinkedIssues>>,
+): void {
+	const dbPath = resolveDecisionMetricsDbPath();
+	if (!dbPath) return;
+	void createDecisionMetricsRecorder({ dbPath, logger: { warn: (m, meta) => logger.warn(meta ?? {}, m) } })
+		.then((recorder) => {
+			if (!recorder) return;
+			recorder.record({
+				seam: "atlassian-rerank",
+				outcome: outcome ? "applied" : "failed",
+				requestId: state.requestId,
+				model: outcome?.model,
+				latencyMs: outcome?.latencyMs,
+				inputTokens: outcome?.inputTokens,
+				itemsIn,
+				itemsDropped: outcome?.dropped,
+				topScore: outcome?.issues[0]?.relevance,
+				bottomScore: outcome?.issues[outcome.issues.length - 1]?.relevance,
+				rankCorrelation: outcome ? rankCorrelation(outcome.deterministicRanks, outcome.jevRanks) : undefined,
+			});
+			recorder.close();
+		})
+		.catch(() => {
+			// createDecisionMetricsRecorder already warns on a failed open; a rejected
+			// promise here must not surface as an unhandled rejection.
+		});
 }
 
 export async function extractFindings(state: AgentStateType): Promise<Partial<AgentStateType>> {
@@ -359,6 +467,18 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 			logger.warn({ dataSourceId, error: err instanceof Error ? err.message : String(err) }, "extractFindings failed");
 		}
 	}
+	// SIO-1837: order the Atlassian card by what the incident is about. Runs here,
+	// after the merge, because the rerank needs the whole turn's linked issues and
+	// this is the first point they exist as one list. Everything it can go wrong
+	// with -- flag off, no key, no incident text, a Jev error, a timeout -- leaves
+	// `findingsByDataSource` exactly as the deterministic path built it.
+	const atlassianOutputs = outputsByDataSource.get("atlassian");
+	const deterministicAtlassian = findingsByDataSource.get("atlassian")?.atlassianFindings;
+	if (atlassianOutputs && deterministicAtlassian) {
+		const reranked = await rerankAtlassianCard(state, focusServices, atlassianOutputs, deterministicAtlassian);
+		if (reranked) findingsByDataSource.set("atlassian", { atlassianFindings: reranked });
+	}
+
 	const dataSourceResults = state.dataSourceResults.map((r) => {
 		const findings = findingsByDataSource.get(r.dataSourceId);
 		return findings ? { ...r, ...findings } : r;

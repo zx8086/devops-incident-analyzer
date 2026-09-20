@@ -470,6 +470,15 @@ export const AtlassianLinkedIssueSchema = z.object({
 	// before SIO-1802 carry neither, and the extractor then falls back to provenance.
 	matchedBy: z.array(z.string()).optional(),
 	score: z.number().optional(),
+	// SIO-1837: the head of the ticket body, carried by findLinkedIncidents so a
+	// relevance judgement has more than a business-language summary to read.
+	descriptionExcerpt: z.string().optional(),
+	// SIO-1837: the rerank verdict, 0 unrelated to 3 same-service-same-failure, with
+	// the model's own confidence. Optional throughout: a turn with the rerank off, a
+	// Jev failure, or an envelope recorded before this change carries neither, and
+	// every consumer must read their absence as "not judged" rather than "scored 0".
+	relevance: z.number().optional(),
+	relevanceConfidence: z.number().optional(),
 });
 export type AtlassianLinkedIssue = z.infer<typeof AtlassianLinkedIssueSchema>;
 
@@ -481,6 +490,14 @@ export const AtlassianFindingsSchema = z.object({
 	// discarded it, leaving the warning reachable only if the LLM happened to notice it in the
 	// raw tool JSON.
 	configWarning: z.string().optional(),
+	// SIO-1837: what the rerank did this turn. "skipped" covers the flag being off,
+	// no key configured, and nothing to rank; "failed" is a Jev error or timeout.
+	// Both leave linkedIssues exactly as the deterministic path produced them, so a
+	// reader can tell an unranked card from a ranked one rather than assuming.
+	rerank: z.enum(["applied", "skipped", "failed"]).optional(),
+	// SIO-1837: how many tickets the rerank hid. Surfaced on the card so a dropped
+	// ticket is a visible decision rather than a silent disappearance.
+	rerankDropped: z.number().optional(),
 });
 export type AtlassianFindings = z.infer<typeof AtlassianFindingsSchema>;
 
