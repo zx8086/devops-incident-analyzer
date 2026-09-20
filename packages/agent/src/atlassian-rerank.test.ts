@@ -12,6 +12,7 @@ import {
 	isAtlassianRerankEnabled,
 	RERANK_DROP_BELOW,
 	rerankLinkedIssues,
+	resolveTypeSafeApiKey,
 } from "./atlassian-rerank.ts";
 import type { SystemOneResponse } from "./typesafe-client.ts";
 
@@ -49,16 +50,28 @@ function askReturning(scores: number[]): { ask: AskSystemOne; sent: unknown[] } 
 }
 
 describe("isAtlassianRerankEnabled", () => {
-	test("is OPT-IN while the threshold is uncalibrated", () => {
-		// Against the repo's usual default-ON rule, on purpose: RERANK_DROP_BELOW is
-		// set from a synthetic probe, and a default-ON flag would let an untuned
-		// filter hide real tickets as soon as a key is configured. Becomes a
-		// kill-switch once the threshold is tuned on real envelopes.
-		expect(isAtlassianRerankEnabled({})).toBe(false);
+	test("defaults ON, and only false/0 disable it", () => {
+		// The repo rule for every capability flag, and UNSET must be enabled: a
+		// feature nobody switches on never runs, so shipping it opt-in is shipping
+		// dead code. An untuned threshold is a reason to tune it, not to hide it.
+		expect(isAtlassianRerankEnabled({})).toBe(true);
 		expect(isAtlassianRerankEnabled({ ATLASSIAN_RERANK_ENABLED: "true" })).toBe(true);
 		expect(isAtlassianRerankEnabled({ ATLASSIAN_RERANK_ENABLED: "1" })).toBe(true);
 		expect(isAtlassianRerankEnabled({ ATLASSIAN_RERANK_ENABLED: "FALSE" })).toBe(false);
 		expect(isAtlassianRerankEnabled({ ATLASSIAN_RERANK_ENABLED: "0" })).toBe(false);
+	});
+});
+
+describe("resolveTypeSafeApiKey", () => {
+	test("returns nothing under NODE_ENV=test, so no unit test can reach the network", () => {
+		// Bun sets NODE_ENV=test and auto-loads .env. Without this guard a developer
+		// with a real key in .env has `bun run test` making live billable calls --
+		// measured before the fix: the extract-findings suite fired two real requests
+		// and passed only because the failure path falls back correctly.
+		expect(resolveTypeSafeApiKey({ NODE_ENV: "test", TYPESAFE_API_KEY: "real-key" })).toBeUndefined();
+		expect(resolveTypeSafeApiKey({ TYPESAFE_API_KEY: "real-key" })).toBe("real-key");
+		expect(resolveTypeSafeApiKey({})).toBeUndefined();
+		expect(resolveTypeSafeApiKey({ TYPESAFE_API_KEY: "   " })).toBeUndefined();
 	});
 });
 
