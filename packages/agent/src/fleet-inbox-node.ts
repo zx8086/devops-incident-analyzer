@@ -58,7 +58,12 @@ function describeError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-type Read = { inbox: string; messages: PiInboxMessage[]; truncated: boolean } | { inbox: string; error: string };
+// `stoppedBy` is the error that ENDED a partial walk, when one did: the pages
+// already read are kept, and the cause travels with them so a 401 or a 5xx is
+// not reported as a benign limit.
+type Read =
+	| { inbox: string; messages: PiInboxMessage[]; truncated: boolean; stoppedBy?: string }
+	| { inbox: string; error: string };
 
 // SIO-1828: the window, not just the newest page. Without `since` the hub returns the
 // newest MAILBOX_READ_LIMIT rows, so an incident older than those rows read as an empty
@@ -85,6 +90,7 @@ async function readInbox(client: PiComsClient, inbox: string, budgetMs: number, 
 		const messages: PiInboxMessage[] = [];
 		let cursor = since;
 		let truncated = false;
+		let stoppedBy: string | undefined;
 		for (let page = 0; page < MAILBOX_MAX_PAGES; page++) {
 			const remaining = deadline - Date.now();
 			if (remaining <= 0) {
@@ -104,9 +110,12 @@ async function readInbox(client: PiComsClient, inbox: string, budgetMs: number, 
 				);
 			} catch (error) {
 				// Nothing read at all is a failed read, as before. A later page failing
-				// keeps what the earlier ones returned and says the read was capped.
+				// keeps what the earlier ones returned and says the read was capped --
+				// but carries the CAUSE, so an auth or 5xx failure is not indistinguishable
+				// from hitting a benign limit (Greptile, PR #858).
 				if (messages.length === 0) return { inbox, error: describeError(error) };
 				truncated = true;
+				stoppedBy = describeError(error);
 				break;
 			}
 			messages.push(...batch);
@@ -124,10 +133,17 @@ async function readInbox(client: PiComsClient, inbox: string, budgetMs: number, 
 			// A full last page means rows may remain beyond the page cap.
 			if (page === MAILBOX_MAX_PAGES - 1) truncated = true;
 		}
-		return { inbox, messages, truncated };
+		return { inbox, messages, truncated, stoppedBy };
 	} catch (error) {
 		return { inbox, error: describeError(error) };
 	}
+}
+
+// The partial-read note for a capped walk: the cap alone, or the cap and what
+// stopped it.
+function cappedNote(read: { inbox: string; stoppedBy?: string }): string {
+	const why = read.stoppedBy ? ` (${read.stoppedBy})` : "";
+	return `${read.inbox}: read capped before the end of the window${why}`;
 }
 
 function estateIdentity(estate: string, config: PiComsConfig, env: NodeJS.ProcessEnv): EstateIdentity {
@@ -213,7 +229,7 @@ export async function runFetchFleetInbox(
 				for (const message of ownRead.messages) messages.push({ inbox: ownRead.inbox, message });
 				// SIO-1828: a capped walk read only part of the window. Say so -- a silently
 				// short read is exactly the failure mode this paging replaced.
-				if (ownRead.truncated) errors.push(`${ownRead.inbox}: read capped before the end of the window`);
+				if (ownRead.truncated) errors.push(cappedNote(ownRead));
 			}
 		}
 		const opsRead = r.environment ? opsByEnvironment.get(r.environment) : undefined;
@@ -224,7 +240,7 @@ export async function runFetchFleetInbox(
 				for (const message of opsRead.messages) {
 					if (attributableToEstate(message, identity)) messages.push({ inbox: opsRead.inbox, message });
 				}
-				if (opsRead.truncated) errors.push(`${opsRead.inbox}: read capped before the end of the window`);
+				if (opsRead.truncated) errors.push(cappedNote(opsRead));
 			}
 		}
 		const kept = messages.filter(

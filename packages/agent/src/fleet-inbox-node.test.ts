@@ -312,6 +312,30 @@ describe("SIO-1828 window paging", () => {
 		expect(prd?.error).toContain("read capped before the end of the window");
 	});
 
+	// Greptile round 2, PR #858: a later-page failure keeps the earlier pages AND names
+	// what stopped the walk. Flattening a 500 into a bare "read capped" made a real
+	// service failure read as a benign limit.
+	test("a later-page failure names its cause in the partial note", async () => {
+		let call = 0;
+		const rows = deepMailbox(250);
+		const { fetchImpl } = hubFake((url) => {
+			if (!url.searchParams.get("name")?.includes("ops")) return { body: { ok: true, name: "x", messages: [] } };
+			call++;
+			if (call >= 3) return { status: 500, body: { error: "upstream_unavailable" } };
+			return { body: { ok: true, name: "ops", messages: rows.slice((call - 1) * 100, call * 100) } };
+		});
+		const out = await runFetchFleetInbox(
+			{ ...state, awsTargetEstates: ["eu-oit-prd"] },
+			{ env: { ...env, PI_COMS_INBOX_TIMEOUT_MS: "5000" }, fetchImpl, now },
+		);
+
+		const prd = out.fleetInboxDigest?.estates.find((e) => e.estate === "eu-oit-prd");
+		expect(prd?.counts.total).toBe(200);
+		expect(prd?.error).toContain("read capped before the end of the window");
+		// The operational cause survives, so a 500 is not mistaken for the page cap.
+		expect(prd?.error).toContain("500");
+	});
+
 	// Greptile P2, PR #858: `truncated` keyed only off a full fifth page, so post-window
 	// traffic on a busy inbox stamped a COMPLETE window as capped (and paged through
 	// rows that could not match the window anyway).
