@@ -1,6 +1,6 @@
 // tests/json-extract.test.ts
 import { expect, test } from "bun:test";
-import { extractJsonPayload } from "../extensions/jsonPayload";
+import { extractJsonPayload, jsonParseFailure } from "../extensions/jsonPayload";
 
 const obj = { diagnoses: [{ dedup_key: "k", probable_cause: "c" }] };
 const json = JSON.stringify(obj);
@@ -80,4 +80,49 @@ test("the payload in a second fence is found when the first fence is not JSON", 
 
 test("a JSON null payload is a value, not a failure", () => {
 	expect(extractJsonPayload("null")).toBeNull();
+});
+
+// SIO-1833: a prd spoke lost a good diagnosis to "response not valid JSON
+// (6288 chars, stop=stop; starts: ... ends: ...)" -- length and two ends, never the
+// cause. jsonParseFailure recovers the reason the parser already knew.
+
+test("SIO-1833: a payload that parses has no failure to report", () => {
+	expect(jsonParseFailure(json)).toBeNull();
+	expect(jsonParseFailure(`\`\`\`json\n${json}\n\`\`\``)).toBeNull();
+});
+
+test.each([
+	["trailing comma before ]", '{"diagnoses":[{"a":1},]}', "comma"],
+	["trailing comma in object", '{"diagnoses":[{"a":1,}]}', "Property name"],
+	["single quotes", "{'diagnoses':[]}", "Single quotes"],
+	["unterminated", '{"diagnoses":[{"a":1}', "Expected"],
+])("SIO-1833: %s is named in the failure", (_label, body, expected) => {
+	const reason = jsonParseFailure(body);
+	expect(reason).not.toBeNull();
+	expect(reason).toContain(expected);
+});
+
+test("SIO-1833: a fenced payload reports the reason INSIDE the fence, not the backticks", () => {
+	const reason = jsonParseFailure('```json\n{"diagnoses":[{"a":1},]}\n```') ?? "";
+	expect(reason).toContain("in fence");
+	expect(reason).toContain("comma");
+	// The backtick failure is noise next to the real reason and must not be reported.
+	expect(reason).not.toContain("Unrecognized token");
+});
+
+test("SIO-1833: the reason is parser text only and never echoes payload values", () => {
+	const secret = "arn:aws:logs:eu-central-1:999999999999:log-group:/secret";
+	const reason = jsonParseFailure(`{"diagnoses":[{"resource":"${secret}"},]}`) ?? "";
+	expect(reason).not.toContain(secret);
+	expect(reason).not.toContain("999999999999");
+	expect(reason).toContain("comma");
+});
+
+test("SIO-1833: a non-JSON prose reply reports the parser's reason, unlabelled", () => {
+	const reason = jsonParseFailure("sorry, plain prose only") ?? "";
+	expect(reason).toContain("Unexpected identifier");
+	// With no fence there is nothing to disambiguate, so no label is added, and the
+	// boilerplate "JSON Parse error:" prefix is stripped to stay inside the SIO-1804 budget.
+	expect(reason).not.toContain("whole:");
+	expect(reason).not.toContain("JSON Parse error");
 });

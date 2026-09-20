@@ -61,6 +61,54 @@ function parseLenient(candidate: string): unknown {
 	return FAILED;
 }
 
+// SIO-1833: why the payload would not parse, for the error the operator reads.
+// A separate pass rather than a second return value from extractJsonPayload: the
+// extractor is the hot path and its contract (value | undefined) is relied on by
+// every caller, while this runs once, only after a failure has already happened.
+//
+// The MESSAGE is the whole signal. Bun's JSON.parse names the defect precisely
+// ("Unexpected comma at the end of array expression", "Single quotes (') are not
+// allowed in JSON"), which is exactly what the 6288-char prd failure did not say.
+// Its `line`/`column` are NOT used: a model emits the payload as one long line, and
+// on a real 1350-char sample Bun reported line 5 column 12, pointing at the start of
+// the document rather than the fault. A window derived from that would mislead.
+export function jsonParseFailure(text: string): string | null {
+	const t = text.trim();
+	const reasons: string[] = [];
+	const record = (label: string, candidate: string): boolean => {
+		try {
+			JSON.parse(candidate);
+			return true;
+		} catch (error) {
+			const raw = error instanceof Error ? error.message : String(error);
+			// "JSON Parse error: " prefixes every Bun message and carries no information
+			// in a field already called "parse error". Dropped to keep the whole error
+			// inside the budget SIO-1804 pins (it rides the hub message and the digest).
+			const message = raw.replace(/^JSON Parse error:\s*/i, "");
+			// Schema-derived parser text only; never the candidate itself.
+			reasons.push(label ? `${label}: ${message}` : message);
+			return false;
+		}
+	};
+
+	const fences = [...t.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+	// A FENCED payload always fails as a whole on the backticks, and that reason is
+	// pure noise next to the real one inside the fence. Report the whole-document
+	// attempt only when there is no fence to blame.
+	if (fences.length === 0) {
+		// No fence to disambiguate, so the label would say nothing.
+		if (record("", t)) return null;
+	} else {
+		for (const [index, fence] of fences.entries()) {
+			const label = fences.length === 1 ? "in fence" : `in fence ${index + 1}`;
+			if (record(label, (fence[1] ?? "").trim())) return null;
+		}
+	}
+	// One reason is the useful case; more than two is noise, and the first failure
+	// is the one that describes the payload the model actually meant to send.
+	return reasons.slice(0, 2).join("; ");
+}
+
 // Index of the bracket that closes the one at `start`, string-aware; -1 if unbalanced.
 function balancedEnd(t: string, start: number): number {
 	const open = t[start];

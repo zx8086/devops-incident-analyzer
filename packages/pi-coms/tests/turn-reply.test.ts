@@ -97,7 +97,9 @@ test("schema inbound with non-JSON text reports the extraction error", () => {
 		{
 			msg_id: "m1",
 			response: null,
-			error: "response not valid JSON (23 chars, stop=unknown; text: sorry, plain prose only)",
+			// SIO-1833: the cause is now named ahead of the text.
+			error:
+				'response not valid JSON (23 chars, stop=unknown; parse error: Unexpected identifier "sorry"; text: sorry, plain prose only)',
 		},
 	]);
 });
@@ -486,4 +488,23 @@ test("SIO-1831: a nested failure names the path and never prints the offending v
 	// The payload value must never reach the error string.
 	expect(error).not.toContain("arn:super-secret-account-id");
 	expect(error).not.toContain("7");
+});
+
+// SIO-1833: the error an operator reads must name the CAUSE, not just the length.
+test("SIO-1833: notJsonError reports why the payload failed to parse", () => {
+	const body = `{"diagnoses":[{"probable_cause":"${"p".repeat(400)}"},]}`;
+	const msg = notJsonError({ text: `\`\`\`json\n${body}\n\`\`\``, stopReason: "stop" });
+
+	expect(msg).toContain("parse error:");
+	expect(msg).toContain("comma");
+	// The pre-existing facts are kept, not replaced.
+	expect(msg).toContain("stop=stop");
+	expect(msg).toContain("starts:");
+	expect(msg).toContain("ends:");
+});
+
+test("SIO-1833: a short non-JSON reply keeps printing its whole text, with a cause", () => {
+	const msg = notJsonError({ text: "sorry, plain prose only", stopReason: "stop" });
+	expect(msg).toContain("text: sorry, plain prose only");
+	expect(msg).toContain("parse error:");
 });
