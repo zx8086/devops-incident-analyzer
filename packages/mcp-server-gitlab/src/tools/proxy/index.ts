@@ -79,6 +79,25 @@ function enumValues(prop: Record<string, unknown>): string[] | undefined {
 	return values.length === raw.length ? values : undefined;
 }
 
+// SIO-1854: caps GitLab enforces at request time but omits from the schema it serves over
+// /api/v4/mcp. SIO-1656 carried maxItems through faithfully, which fixed nothing here: the
+// upstream `include` declares items.enum and no maxItems, so the bound never bound and the
+// model kept sending ["diffs","pipelines"] into a documented one-facet-per-call limit
+// ("Validation error: include cannot contain more than 1 items", 4 sessions in the SIO-1834
+// reflection window, 2 of them AFTER that fix shipped).
+//
+// Keyed by the UPSTREAM tool name (no gitlab_ prefix): these are GitLab's own declarations,
+// read before this server renames anything.
+const UNDECLARED_MAX_ITEMS: Record<string, Record<string, number>> = {
+	// docs.gitlab.com/user/model_context_protocol/mcp_server_tools: "Limited to one facet per call."
+	get_merge_request: { include: 1 },
+	get_pipeline: { include: 1 },
+};
+
+function undeclaredMaxItems(toolName: string, key: string): number | undefined {
+	return UNDECLARED_MAX_ITEMS[toolName.replace(/^gitlab_/, "")]?.[key];
+}
+
 function jsonSchemaTypeToZod(key: string, prop: Record<string, unknown>): z.ZodTypeAny {
 	const description = typeof prop.description === "string" ? prop.description : key;
 	switch (prop.type) {
@@ -127,13 +146,25 @@ function jsonSchemaTypeToZod(key: string, prop: Record<string, unknown>): z.ZodT
 
 // Exported for tests: the discovered-schema conversion is the contract between
 // GitLab's tool declarations and what this server will accept from the model.
-export function buildZodShapeFromJsonSchema(inputSchema: ProxyToolInfo["inputSchema"]): Record<string, z.ZodTypeAny> {
+export function buildZodShapeFromJsonSchema(
+	inputSchema: ProxyToolInfo["inputSchema"],
+	toolName?: string,
+): Record<string, z.ZodTypeAny> {
 	const properties = inputSchema.properties ?? {};
 	const required = new Set(inputSchema.required ?? []);
 	const shape: Record<string, z.ZodTypeAny> = {};
 
 	for (const [key, prop] of Object.entries(properties)) {
-		const field = jsonSchemaTypeToZod(key, (prop ?? {}) as Record<string, unknown>);
+		const declared = (prop ?? {}) as Record<string, unknown>;
+		// SIO-1854: GitLab ENFORCES caps it does not DECLARE. Supply the known one only
+		// where upstream is silent, so a future upstream declaration wins on its own and
+		// this table decays into dead weight rather than a second source of truth.
+		const undeclaredCap = toolName ? undeclaredMaxItems(toolName, key) : undefined;
+		const effective =
+			undeclaredCap !== undefined && declared.maxItems === undefined
+				? { ...declared, maxItems: undeclaredCap }
+				: declared;
+		const field = jsonSchemaTypeToZod(key, effective);
 		shape[key] = required.has(key) ? field : field.optional();
 	}
 
@@ -258,7 +289,7 @@ export function registerProxyTools(
 
 	for (const tool of remoteTools) {
 		const prefixedName = tool.name.startsWith(TOOL_PREFIX) ? tool.name : `${TOOL_PREFIX}${tool.name}`;
-		const zodShape = buildZodShapeFromJsonSchema(tool.inputSchema);
+		const zodShape = buildZodShapeFromJsonSchema(tool.inputSchema, tool.name);
 		const isSemanticSearch = tool.name === SEMANTIC_SEARCH_TOOL;
 
 		const handler = async (args: Record<string, unknown>) => {
