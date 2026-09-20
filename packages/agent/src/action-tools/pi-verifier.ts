@@ -511,12 +511,24 @@ function queuedOutcome(estate: string, target: string, msgId: string): PiActionO
 	return { status: "success", result: { kind: "queued", target, estate, msg_id: msgId } };
 }
 
+const MAX_LOGGED_KEYS = 25;
+const MAX_LOGGED_KEY_LENGTH = 64;
+
 // SIO-1830: KEY NAMES only, never values. Diagnosing the production mismatch meant
 // hand-pulling the message from the hub, and it had aged out within the hour -- the keys
 // alone would have named the cause instantly. The body carries account ids, arns and
 // trace ids, so it must never be logged.
 function replyKeys(response: unknown): string[] {
-	return response && typeof response === "object" && !Array.isArray(response) ? Object.keys(response) : [];
+	if (!response || typeof response !== "object" || Array.isArray(response)) return [];
+	// The reply is arbitrary JSON from a remote agent and this path exists precisely because
+	// its shape is NOT one we expect, so neither the key count nor the key length can be
+	// assumed sane: cap both, or one malformed reply writes an oversized log record and a
+	// key name long enough to carry an identifier in it.
+	const keys = Object.keys(response);
+	const shown = keys
+		.slice(0, MAX_LOGGED_KEYS)
+		.map((k) => (k.length > MAX_LOGGED_KEY_LENGTH ? `${k.slice(0, MAX_LOGGED_KEY_LENGTH)}...` : k));
+	return keys.length > MAX_LOGGED_KEYS ? [...shown, `(+${keys.length - MAX_LOGGED_KEYS} more)`] : shown;
 }
 
 // SIO-1829: why the verify path does NOT adapt a diagnoses envelope the way the investigate
