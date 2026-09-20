@@ -1,6 +1,6 @@
 // extensions/turnReply.ts
 import { Value } from "typebox/value";
-import { extractJsonPayload } from "./jsonPayload.ts";
+import { extractJsonPayload, jsonParseFailure } from "./jsonPayload.ts";
 
 export interface TurnReplyInbound {
 	msg_id: string;
@@ -132,14 +132,30 @@ export function shouldRepairHistory(health: RunHealth): boolean {
 // travels on the hub message and onto the sender's card, and it is spoke-authored text:
 // rendered as data by the sender, never fed to a model (the PR #682 invariant).
 const NOT_JSON_EDGE_CHARS = 160;
+// SIO-1833: the parse cause, capped so the WHOLE error stays inside the 450 the
+// SIO-1804 test pins. Greptile P1 on #861: 90 was wrong, and wrong by more than double.
+// The scaffold plus two 160-char excerpts already costs 403, leaving 47. Measured, not
+// estimated. Bun's own messages fit ("Unexpected comma at the end of array expression"
+// is 44 after the prefix is stripped), so this trims only a pathological one.
+const PARSE_CAUSE_CHARS = 44;
 
 function oneLine(s: string): string {
 	return s.replace(/\s+/g, " ").trim();
 }
 
+// SIO-1833: a prd spoke lost a good Schema Registry diagnosis to
+// "response not valid JSON (6288 chars, stop=stop; starts: ... ends: ...)". The
+// operator learned the length and the two ends, never the CAUSE, and the log keeps
+// 320 of 6288 chars while the hub message ages out within the hour (SIO-1830) -- so
+// the failure could not be reproduced afterwards. The parser already knows why;
+// it was being discarded. Cause first, because it is the part that is actionable.
 export function notJsonError(turn: FinalAssistant): string {
 	const text = turn.text.trim();
-	const facts = `${text.length} chars, stop=${turn.stopReason ?? "unknown"}`;
+	// Bounded like the excerpts around it: this error rides the hub message, the
+	// sender's card and the monitor's one-line digest entry (SIO-1804), so the cause
+	// earns a fixed slice rather than however much the parser felt like saying.
+	const cause = jsonParseFailure(text)?.slice(0, PARSE_CAUSE_CHARS);
+	const facts = `${text.length} chars, stop=${turn.stopReason ?? "unknown"}${cause ? `; parse error: ${cause}` : ""}`;
 	if (text.length <= NOT_JSON_EDGE_CHARS * 2) return `response not valid JSON (${facts}; text: ${oneLine(text)})`;
 	const head = oneLine(text.slice(0, NOT_JSON_EDGE_CHARS));
 	const tail = oneLine(text.slice(-NOT_JSON_EDGE_CHARS));

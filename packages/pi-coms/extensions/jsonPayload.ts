@@ -61,6 +61,84 @@ function parseLenient(candidate: string): unknown {
 	return FAILED;
 }
 
+// Greptile P1 (security) on #861: a parser message is NOT schema-only. Bun quotes the
+// offending token straight from the payload -- `Unexpected identifier "SECRETVALUE"`,
+// `Unexpected identifier "arn"` -- and this string travels to the hub, the sender's card
+// and the monitor digest. An unquoted account id or arn at the fault point would be
+// copied out verbatim. The token is also the one part of the message that carries no
+// diagnostic value the rest does not: "Unexpected identifier" already says what is wrong.
+// Everything Bun quotes is therefore replaced, not trimmed.
+function redactParserToken(message: string): string {
+	return message.replace(/"[^"]*"/g, '"..."').replace(/'[^']*'/g, "'...'");
+}
+
+// SIO-1833: why the payload would not parse, for the error the operator reads.
+// A separate pass rather than a second return value from extractJsonPayload: the
+// extractor is the hot path and its contract (value | undefined) is relied on by
+// every caller, while this runs once, only after a failure has already happened.
+//
+// The MESSAGE is the whole signal. Bun's JSON.parse names the defect precisely
+// ("Unexpected comma at the end of array expression", "Single quotes (') are not
+// allowed in JSON"), which is exactly what the 6288-char prd failure did not say.
+// Its `line`/`column` are NOT used: a model emits the payload as one long line, and
+// on a real 1350-char sample Bun reported line 5 column 12, pointing at the start of
+// the document rather than the fault. A window derived from that would mislead.
+export function jsonParseFailure(text: string): string | null {
+	const t = text.trim();
+	const reasons: string[] = [];
+	// Greptile P2 on #861: this MUST mirror extractJsonPayload's candidate pipeline,
+	// or it describes a candidate the extractor never blamed. Two real misreports
+	// before this: a prose fence was blamed for a malformed object outside it, and a
+	// control-char payload the extractor REPAIRS still produced "Unterminated string"
+	// -- a reason for a reply that was not failing. Same order, same lenient retry.
+	const attempt = (label: string, candidate: string): boolean => {
+		if (parseLenient(candidate) !== FAILED) return true;
+		try {
+			JSON.parse(candidate);
+		} catch (error) {
+			const raw = error instanceof Error ? error.message : String(error);
+			const message = redactParserToken(raw.replace(/^JSON Parse error:\s*/i, ""));
+			reasons.push(label ? `${label}: ${message}` : message);
+		}
+		return false;
+	};
+
+	if (attempt("", t)) return null;
+	const fences = [...t.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+	for (const [index, fence] of fences.entries()) {
+		const label = fences.length === 1 ? "in fence" : `in fence ${index + 1}`;
+		if (attempt(label, (fence[1] ?? "").trim())) return null;
+	}
+	// The balanced-span scan, which is where a payload with prose around it is found.
+	let i = 0;
+	while (i < t.length) {
+		const rest = t.slice(i).search(/[{[]/);
+		if (rest < 0) break;
+		const startIdx = i + rest;
+		const endIdx = balancedEnd(t, startIdx);
+		if (endIdx < 0) break;
+		if (attempt("in payload", t.slice(startIdx, endIdx + 1))) return null;
+		i = endIdx + 1;
+	}
+
+	// A fenced payload always fails as a whole on the backticks; that reason is noise
+	// beside a later, more specific one, so drop it when anything else spoke up.
+	const specific = reasons.filter((r) => r.startsWith("in "));
+	const ordered = specific.length > 0 ? specific : reasons;
+	// Prefer a PAYLOAD-span reason over a fence one. A model that wraps prose in a fence
+	// and puts the real object outside it (Greptile's example) would otherwise be told
+	// about the prose. The balanced scan is the extractor's last resort, so its reason
+	// is the one describing the candidate closest to a usable payload.
+	const payloadFirst = ordered.filter((r) => r.startsWith("in payload"));
+	const ranked =
+		payloadFirst.length > 0 ? [...payloadFirst, ...ordered.filter((r) => !r.startsWith("in payload"))] : ordered;
+	const [first, ...restReasons] = ranked;
+	if (first === undefined) return null;
+	// The cap is on the COMPOSED string (Greptile P1): two reasons pushed it to 492
+	// against the 450 the SIO-1804 test pins, so report one and count the others.
+	return restReasons.length > 0 ? `${first} (+${restReasons.length} more)` : first;
+}
+
 // Index of the bracket that closes the one at `start`, string-aware; -1 if unbalanced.
 function balancedEnd(t: string, start: number): number {
 	const open = t[start];
