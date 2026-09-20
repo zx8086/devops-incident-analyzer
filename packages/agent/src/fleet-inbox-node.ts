@@ -24,10 +24,13 @@ import {
 	type EstateIdentity,
 	excludedSenderPrefixes,
 	fleetInboxTimeoutMs,
+	type IncidentWindow,
 	incidentWindow,
 	isExcludedSender,
 	isFleetInboxEnabled,
+	MAILBOX_MAX_PAGES,
 	MAILBOX_READ_LIMIT,
+	windowFloorCursor,
 	withinWindow,
 } from "./fleet-inbox.ts";
 import type { AgentStateType } from "./state.ts";
@@ -55,19 +58,92 @@ function describeError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-type Read = { inbox: string; messages: PiInboxMessage[] } | { inbox: string; error: string };
+// `stoppedBy` is the error that ENDED a partial walk, when one did: the pages
+// already read are kept, and the cause travels with them so a 401 or a 5xx is
+// not reported as a benign limit.
+type Read =
+	| { inbox: string; messages: PiInboxMessage[]; truncated: boolean; stoppedBy?: string }
+	| { inbox: string; error: string };
 
-async function readInbox(client: PiComsClient, inbox: string, budgetMs: number): Promise<Read> {
+// SIO-1828: the window, not just the newest page. Without `since` the hub returns the
+// newest MAILBOX_READ_LIMIT rows, so an incident older than those rows read as an empty
+// inbox -- the silent short read this ticket is about. With a floor cursor at the window
+// start the hub pages FORWARD (`msg_id > ? ORDER BY msg_id ASC`), so the walk starts at
+// the window and the caps below bound it. `truncated` is set when the caps stop the walk
+// with rows still unread, so a short read is stated rather than silent.
+async function readInbox(client: PiComsClient, inbox: string, budgetMs: number, window: IncidentWindow): Promise<Read> {
+	const since = windowFloorCursor(window.from);
 	try {
-		const messages = await withTimeout(
-			client.mailbox(inbox, { limit: MAILBOX_READ_LIMIT }),
-			budgetMs,
-			`mailbox ${inbox}`,
-		);
-		return { inbox, messages };
+		// No usable cursor (unparseable window): the pre-SIO-1828 newest-first read.
+		if (since === undefined) {
+			const messages = await withTimeout(
+				client.mailbox(inbox, { limit: MAILBOX_READ_LIMIT }),
+				budgetMs,
+				`mailbox ${inbox}`,
+			);
+			return { inbox, messages, truncated: false };
+		}
+		// One deadline for the whole walk, so paging cannot extend the per-estate
+		// budget: each page gets whatever is left of it.
+		const deadline = Date.now() + budgetMs;
+		const windowEnd = Date.parse(window.to);
+		const messages: PiInboxMessage[] = [];
+		let cursor = since;
+		let truncated = false;
+		let stoppedBy: string | undefined;
+		for (let page = 0; page < MAILBOX_MAX_PAGES; page++) {
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) {
+				truncated = true;
+				break;
+			}
+			// A page that times out truncates the walk; it does not discard the pages
+			// already in hand (Greptile, PR #858). Losing them would report zero
+			// messages for an estate whose window data had already been fetched --
+			// the silent-empty failure this ticket exists to remove, made worse.
+			let batch: PiInboxMessage[];
+			try {
+				batch = await withTimeout(
+					client.mailbox(inbox, { limit: MAILBOX_READ_LIMIT, since: cursor }),
+					remaining,
+					`mailbox ${inbox}`,
+				);
+			} catch (error) {
+				// Nothing read at all is a failed read, as before. A later page failing
+				// keeps what the earlier ones returned and says the read was capped --
+				// but carries the CAUSE, so an auth or 5xx failure is not indistinguishable
+				// from hitting a benign limit (Greptile, PR #858).
+				if (messages.length === 0) return { inbox, error: describeError(error) };
+				truncated = true;
+				stoppedBy = describeError(error);
+				break;
+			}
+			messages.push(...batch);
+			// A short page means the forward scan reached the end of the mailbox.
+			if (batch.length < MAILBOX_READ_LIMIT) break;
+			const last = batch[batch.length - 1];
+			// Defensive: a page whose last row carries no id would loop on one cursor.
+			if (!last?.msg_id) break;
+			// The scan is ascending, so once the newest row of a page is past the
+			// window there is nothing left to find: stop rather than page through
+			// post-window traffic and then call a COMPLETE window capped.
+			const newest = Date.parse(last.created_at);
+			if (Number.isFinite(newest) && Number.isFinite(windowEnd) && newest > windowEnd) break;
+			cursor = last.msg_id;
+			// A full last page means rows may remain beyond the page cap.
+			if (page === MAILBOX_MAX_PAGES - 1) truncated = true;
+		}
+		return { inbox, messages, truncated, stoppedBy };
 	} catch (error) {
 		return { inbox, error: describeError(error) };
 	}
+}
+
+// The partial-read note for a capped walk: the cap alone, or the cap and what
+// stopped it.
+function cappedNote(read: { inbox: string; stoppedBy?: string }): string {
+	const why = read.stoppedBy ? ` (${read.stoppedBy})` : "";
+	return `${read.inbox}: read capped before the end of the window${why}`;
 }
 
 function estateIdentity(estate: string, config: PiComsConfig, env: NodeJS.ProcessEnv): EstateIdentity {
@@ -122,12 +198,12 @@ export async function runFetchFleetInbox(
 
 	const opsReads = new Map<PiComsEnvironment, Promise<Read>>();
 	for (const [environment, { hub, client }] of clients) {
-		opsReads.set(environment, readInbox(client, hub.fallbackTarget, budgetMs));
+		opsReads.set(environment, readInbox(client, hub.fallbackTarget, budgetMs, window));
 	}
 	const estateReads = routed.map((r) => {
 		const entry = r.environment ? clients.get(r.environment) : undefined;
 		return entry
-			? readInbox(entry.client, r.estate, budgetMs)
+			? readInbox(entry.client, r.estate, budgetMs, window)
 			: Promise.resolve<Read>({ inbox: r.estate, error: r.error ?? "" });
 	});
 	const [ops, own] = await Promise.all([
@@ -151,6 +227,9 @@ export async function runFetchFleetInbox(
 				if (!r.error) errors.push(ownRead.error);
 			} else {
 				for (const message of ownRead.messages) messages.push({ inbox: ownRead.inbox, message });
+				// SIO-1828: a capped walk read only part of the window. Say so -- a silently
+				// short read is exactly the failure mode this paging replaced.
+				if (ownRead.truncated) errors.push(cappedNote(ownRead));
 			}
 		}
 		const opsRead = r.environment ? opsByEnvironment.get(r.environment) : undefined;
@@ -161,6 +240,7 @@ export async function runFetchFleetInbox(
 				for (const message of opsRead.messages) {
 					if (attributableToEstate(message, identity)) messages.push({ inbox: opsRead.inbox, message });
 				}
+				if (opsRead.truncated) errors.push(cappedNote(opsRead));
 			}
 		}
 		const kept = messages.filter(
