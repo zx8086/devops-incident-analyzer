@@ -132,10 +132,12 @@ export function shouldRepairHistory(health: RunHealth): boolean {
 // travels on the hub message and onto the sender's card, and it is spoke-authored text:
 // rendered as data by the sender, never fed to a model (the PR #682 invariant).
 const NOT_JSON_EDGE_CHARS = 160;
-// SIO-1833: the parse cause, capped so the whole error stays inside the budget the
-// SIO-1804 test pins. Bun's messages are short ("Unexpected comma at the end of array
-// expression" is 48), so this trims only a pathological one.
-const PARSE_CAUSE_CHARS = 90;
+// SIO-1833: the parse cause, capped so the WHOLE error stays inside the 450 the
+// SIO-1804 test pins. Greptile P1 on #861: 90 was wrong, and wrong by more than double.
+// The scaffold plus two 160-char excerpts already costs 403, leaving 47. Measured, not
+// estimated. Bun's own messages fit ("Unexpected comma at the end of array expression"
+// is 44 after the prefix is stripped), so this trims only a pathological one.
+const PARSE_CAUSE_CHARS = 44;
 
 function oneLine(s: string): string {
 	return s.replace(/\s+/g, " ").trim();

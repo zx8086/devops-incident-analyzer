@@ -97,9 +97,10 @@ test("schema inbound with non-JSON text reports the extraction error", () => {
 		{
 			msg_id: "m1",
 			response: null,
-			// SIO-1833: the cause is now named ahead of the text.
+			// SIO-1833: the cause is named ahead of the text, with the offending token
+			// redacted -- Bun quotes it straight from the payload (Greptile P1 on #861).
 			error:
-				'response not valid JSON (23 chars, stop=unknown; parse error: Unexpected identifier "sorry"; text: sorry, plain prose only)',
+				'response not valid JSON (23 chars, stop=unknown; parse error: Unexpected identifier "..."; text: sorry, plain prose only)',
 		},
 	]);
 });
@@ -507,4 +508,13 @@ test("SIO-1833: a short non-JSON reply keeps printing its whole text, with a cau
 	const msg = notJsonError({ text: "sorry, plain prose only", stopReason: "stop" });
 	expect(msg).toContain("text: sorry, plain prose only");
 	expect(msg).toContain("parse error:");
+});
+
+// Greptile P1 on #861: the 450 budget is on the COMPOSED error. Two failing fences
+// plus two 160-char excerpts reached 492 before the cap was measured rather than guessed.
+test("SIO-1833: a long reply with MULTIPLE bad fences still fits the SIO-1804 budget", () => {
+	const text = '```json\n{"a":1,}\n```\n```json\n{"b":2,}\n```\n' + "z".repeat(400);
+	const error = notJsonError({ text, stopReason: "stop" });
+	expect(error).toContain("parse error:");
+	expect(error.length).toBeLessThan(450);
 });

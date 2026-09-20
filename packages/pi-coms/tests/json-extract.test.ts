@@ -102,12 +102,14 @@ test.each([
 	expect(reason).toContain(expected);
 });
 
-test("SIO-1833: a fenced payload reports the reason INSIDE the fence, not the backticks", () => {
+test("SIO-1833: a fenced payload reports the defect inside it, not the backticks", () => {
 	const reason = jsonParseFailure('```json\n{"diagnoses":[{"a":1},]}\n```') ?? "";
-	expect(reason).toContain("in fence");
 	expect(reason).toContain("comma");
-	// The backtick failure is noise next to the real reason and must not be reported.
+	// The whole-document backtick failure is noise next to the real reason.
 	expect(reason).not.toContain("Unrecognized token");
+	// Labelled by the candidate that produced it: the balanced span inside the fence
+	// is what the extractor would have used, so it outranks the fence body itself.
+	expect(reason).toMatch(/^in (payload|fence)/);
 });
 
 test("SIO-1833: the reason is parser text only and never echoes payload values", () => {
@@ -116,6 +118,38 @@ test("SIO-1833: the reason is parser text only and never echoes payload values",
 	expect(reason).not.toContain(secret);
 	expect(reason).not.toContain("999999999999");
 	expect(reason).toContain("comma");
+});
+
+// Greptile P1 (security) on #861: Bun QUOTES the offending token from the payload
+// ("Unexpected identifier \"SECRETVALUE\""), and this string reaches the hub, the
+// sender's card and the monitor digest. My own earlier fixture contained the proof.
+test.each([
+	["a bare identifier", '{"a": SECRETVALUE}', "SECRETVALUE"],
+	["an unquoted arn", '{"a": arn:aws:logs:eu-central-1:999999999999:x}', "arn"],
+	["prose naming an account", "account 999999999999 failed", "999999999999"],
+])("SIO-1833: %s is never copied into the reason", (_label, payload, leaked) => {
+	const reason = jsonParseFailure(payload) ?? "";
+	expect(reason).not.toContain(leaked);
+	// The diagnosis survives the redaction.
+	expect(reason.length).toBeGreaterThan(0);
+});
+
+// Greptile P2 on #861: the failure must mirror extractJsonPayload's candidate pipeline.
+test("SIO-1833: a payload the extractor REPAIRS reports no failure at all", () => {
+	// A raw control character inside a string; parseLenient repairs it, so the reply
+	// is not failing and an error would be a lie.
+	const repaired = '{"a":"line1\nline2"}';
+	expect(extractJsonPayload(repaired)).not.toBeUndefined();
+	expect(jsonParseFailure(repaired)).toBeNull();
+});
+
+test("SIO-1833: a prose fence does not mask a malformed object outside it", () => {
+	const text = '```\njust some prose, not json\n```\n{"diagnoses":[{"a":1,}]}';
+	expect(extractJsonPayload(text)).toBeUndefined();
+	const reason = jsonParseFailure(text) ?? "";
+	// The object's own defect, not the prose fence's.
+	expect(reason).toContain("in payload");
+	expect(reason).toContain("Property name");
 });
 
 test("SIO-1833: a non-JSON prose reply reports the parser's reason, unlabelled", () => {
