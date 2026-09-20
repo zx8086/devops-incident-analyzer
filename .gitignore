@@ -71,6 +71,11 @@ pvh-tf-state-pat.txt
 packages/agent/src/eval/fixtures/*
 !packages/agent/src/eval/fixtures/MANIFEST.json
 
+# SIO-1834: skill-reflection reports -- public repo, and findings quote real tool errors.
+# redactPiiContent deliberately keeps hostnames, IPs and account ids (SIO-861), so a report
+# is never committable. The rest of experiments/ stays tracked.
+experiments/reflect/
+
 # SIO-1400: local MCP tool-call metrics DB (MCP_TOOL_METRICS_DB_PATH) + WAL/SHM sidecars
 data/*.sqlite*
 
