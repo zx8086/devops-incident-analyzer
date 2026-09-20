@@ -76,18 +76,27 @@ export const PiDiagnosesReplySchema = z.object({
 //   confidence        -> confidence, defaulting to 0.5 when the spoke omits it: absent
 //                        confidence must not read as certainty.
 export function investigationFromDiagnoses(reply: z.infer<typeof PiDiagnosesReplySchema>): PiInvestigation {
-	const d = reply.diagnoses[0];
-	if (!d) throw new Error("PiDiagnosesReplySchema guarantees at least one diagnosis");
-	const evidence = [
+	const [first] = reply.diagnoses;
+	if (!first) throw new Error("PiDiagnosesReplySchema guarantees at least one diagnosis");
+	// The producer sends one entry per dedup_key and the monitor asks for exactly that
+	// (coms-net-monitor.ts:505), so a multi-diagnosis reply is normal, not an edge case.
+	// Reading only [0] silently dropped every later cause, its evidence and its action.
+	const evidence = reply.diagnoses.flatMap((d) => [
 		...(d.affected_resources ?? []).map((resource) => ({ resource, observation: "named as an affected resource" })),
 		...(d.evidence ?? []).map((e) => ({ resource: e.command ?? "(command not recorded)", observation: e.observation })),
-	];
+	]);
+	// Confidence is the WEAKEST of the causes, not the first one's: the investigation is only
+	// as good as its shakiest constituent, and averaging would let one certain cause mask a guess.
+	const confidence = Math.min(...reply.diagnoses.map((d) => d.confidence ?? 0.5));
 	return {
-		summary: d.probable_cause,
-		root_cause_hypothesis: d.probable_cause,
+		summary:
+			reply.diagnoses.length === 1
+				? first.probable_cause
+				: `${reply.diagnoses.length} causes reported: ${reply.diagnoses.map((d) => d.probable_cause).join(" | ")}`,
+		root_cause_hypothesis: reply.diagnoses.map((d) => d.probable_cause).join("\n\n"),
 		evidence,
-		suggested_actions: d.suggested_action ? [d.suggested_action] : [],
-		confidence: d.confidence ?? 0.5,
+		suggested_actions: reply.diagnoses.flatMap((d) => (d.suggested_action ? [d.suggested_action] : [])),
+		confidence,
 	};
 }
 

@@ -93,3 +93,53 @@ describe("investigationFromDiagnoses (SIO-1830)", () => {
 		expect(investigation.evidence).toEqual([]);
 	});
 });
+
+// Greptile P1 on PR #857: the producer sends one entry per dedup_key and the monitor asks
+// for exactly that, so a multi-entry reply is the NORMAL case. Reading only diagnoses[0]
+// reported success while silently losing every later cause.
+test("a multi-diagnosis reply keeps every cause, its evidence and its action", () => {
+	const reply = {
+		diagnoses: [
+			{
+				probable_cause: "first cause",
+				affected_resources: ["res-a"],
+				suggested_action: "do A",
+				evidence: [{ command: "cmd-a", observation: "obs-a" }],
+				confidence: 0.9,
+			},
+			{
+				probable_cause: "second cause",
+				affected_resources: ["res-b"],
+				suggested_action: "do B",
+				evidence: [{ command: "cmd-b", observation: "obs-b" }],
+				confidence: 0.4,
+			},
+		],
+	};
+	const parsed = PiDiagnosesReplySchema.safeParse(reply);
+	expect(parsed.success).toBe(true);
+	if (!parsed.success) return;
+
+	const out = investigationFromDiagnoses(parsed.data);
+
+	// Nothing from the second diagnosis is lost.
+	expect(out.root_cause_hypothesis).toContain("first cause");
+	expect(out.root_cause_hypothesis).toContain("second cause");
+	expect(out.suggested_actions).toEqual(["do A", "do B"]);
+	expect(out.evidence.map((e) => e.resource)).toEqual(["res-a", "cmd-a", "res-b", "cmd-b"]);
+
+	// Confidence is the weakest cause, not the first one's: a certain cause must not mask a guess.
+	expect(out.confidence).toBe(0.4);
+
+	// The adapted result must still satisfy the schema the rest of the pipeline reads.
+	expect(PiInvestigationSchema.safeParse(out).success).toBe(true);
+});
+
+test("a single-diagnosis reply keeps its summary verbatim, with no count prefix", () => {
+	const parsed = PiDiagnosesReplySchema.safeParse({
+		diagnoses: [{ probable_cause: "only cause", evidence: [{ command: "c", observation: "o" }] }],
+	});
+	expect(parsed.success).toBe(true);
+	if (!parsed.success) return;
+	expect(investigationFromDiagnoses(parsed.data).summary).toBe("only cause");
+});
