@@ -2,7 +2,7 @@
 // SIO-1635: proposal rules, target routing, prompt shaping and the two execute
 // flows, with the hub scripted at the fetch boundary.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { PiVerdict } from "@devops-agent/shared";
+import { PiDiagnosesReplySchema, type PiVerdict } from "@devops-agent/shared";
 import { PI_COMS_AWAIT_SLICE_MS, type PiAgentCard } from "./pi-coms-client.ts";
 import {
 	buildInvestigateFollowUp,
@@ -23,6 +23,7 @@ import {
 	resolvePiTarget,
 	selectHubForEstate,
 	startPiAction,
+	unusableVerdictMessage,
 } from "./pi-verifier.ts";
 
 // Single-hub form: the hub serves prd, where the fixtures' estates live.
@@ -347,6 +348,89 @@ describe("follow-up", () => {
 	});
 });
 
+// SIO-1829: the verify path deliberately does NOT adapt a diagnoses envelope the way the
+// investigate path does (SIO-1830) -- a verdict is a judgement on the report's claims, a
+// diagnosis is the spoke's own observation, and synthesising one from the other invents a
+// judgement the spoke never made. What it owes the operator is a message that names the
+// shape that arrived and the tool that reads it.
+describe("SIO-1829: an unusable verdict says what arrived and what to do next", () => {
+	// The real production envelope: one top-level key, the analyzer's claims unanswered.
+	const diagnosesReply = {
+		diagnoses: [
+			{
+				dedup_key: "logs:/ecs/fargate/orders-prd-log-group:6f4e315e",
+				probable_cause: "unguarded Optional.get() at ImageEventConsumer.java:36",
+				confidence: 0.8,
+			},
+		],
+	};
+
+	test("names investigate-with-pi when the spoke answered with a diagnosis", () => {
+		const msg = unusableVerdictMessage("eu-oit-prd", diagnosesReply);
+		expect(msg).toContain("eu-oit-prd");
+		expect(msg).toContain("diagnosis, not a verdict");
+		expect(msg).toContain("investigate-with-pi");
+	});
+
+	// The body carries account ids, arns and trace ids (SIO-1830's rule), so the message
+	// may name KEYS but never values. Mutation-checked: a builder that interpolated the
+	// body would leak the cause string and fail here.
+	test("carries key names only, never values", () => {
+		const msg = unusableVerdictMessage("eu-oit-prd", diagnosesReply);
+		expect(msg).not.toContain("ImageEventConsumer");
+		expect(msg).not.toContain("orders-prd-log-group");
+		expect(msg).not.toContain("6f4e315e");
+	});
+
+	test("falls back to naming the keys for any other unrecognised shape", () => {
+		expect(unusableVerdictMessage("eu-oit-prd", { summary: "s", oops: 1 })).toContain("keys: summary, oops");
+		// A diagnoses envelope with extra keys is NOT the known dialect: the specific
+		// advice would be a guess, so it degrades to the generic shape report.
+		expect(unusableVerdictMessage("eu-oit-prd", { diagnoses: [1], extra: 1 })).toContain("keys: diagnoses, extra");
+	});
+
+	// Greptile, PR #856: the advice must be advice that WORKS. These three have `diagnoses`
+	// as their sole key but PiDiagnosesReplySchema rejects every one, so investigate-with-pi
+	// would fail on them too -- pointing the operator there wastes a hub round trip.
+	// Mutation check: dropping the safeParse from the guard turns each of these red.
+	test.each([
+		["an empty array", { diagnoses: [] }],
+		["null", { diagnoses: null }],
+		["a string", { diagnoses: "nope" }],
+		// probable_cause is the one REQUIRED field of an entry (everything else is
+		// optional), so an entry without it is the minimal invalid diagnosis.
+		["an entry without probable_cause", { diagnoses: [{ confidence: 0.8 }] }],
+	])("does not recommend investigate-with-pi when diagnoses is %s", (_label, response) => {
+		const msg = unusableVerdictMessage("eu-oit-prd", response);
+		expect(msg).not.toContain("investigate-with-pi");
+		expect(msg).toContain("keys: diagnoses");
+		// The guard and the investigate path must agree on what the dialect is.
+		expect(PiDiagnosesReplySchema.safeParse(response).success).toBe(false);
+	});
+
+	test("the recommendation holds only for a reply investigate-with-pi accepts", () => {
+		expect(PiDiagnosesReplySchema.safeParse(diagnosesReply).success).toBe(true);
+		expect(unusableVerdictMessage("eu-oit-prd", diagnosesReply)).toContain("investigate-with-pi");
+	});
+
+	test.each([
+		["a bare string", "just prose"],
+		["null", null],
+		["an array", [{ diagnoses: [] }]],
+	])("reports %s as having no object body", (_label, response) => {
+		expect(unusableVerdictMessage("eu-oit-prd", response)).toContain("no object body");
+	});
+
+	// End to end through the real hub harness: the card's error text is the same message.
+	test("executePiVerify surfaces it when the hub returns a diagnoses envelope", async () => {
+		const hub = scriptedHub({ agents: online, reply: diagnosesReply });
+		const out = await executePiVerify({ estate: "eu-oit-prd" }, report, { env, fetchImpl: hub.fetchImpl });
+		expect(out.status).toBe("error");
+		expect(out.error).toContain("investigate-with-pi");
+		expect(out.error).not.toContain("ImageEventConsumer");
+	});
+});
+
 describe("executePiVerify", () => {
 	test("refuses when unconfigured or params are invalid", async () => {
 		expect((await executePiVerify({ estate: "e" }, report, { env: {} })).status).toBe("error");
@@ -407,7 +491,10 @@ describe("executePiVerify", () => {
 		const hub = scriptedHub({ agents: online, reply: { verdict: "confirmed", claims: "nope" } });
 		const out = await executePiVerify({ estate: "eu-oit-prd" }, report, { env, fetchImpl: hub.fetchImpl });
 		expect(out.status).toBe("error");
-		expect(out.error).toContain("schema mismatch");
+		// SIO-1829: a malformed verdict still fails; the message now names the shape that
+		// arrived instead of a bare "schema mismatch".
+		expect(out.error).toContain("unusable verdict");
+		expect(out.error).toContain("keys: verdict, claims");
 		expect(hub.calls.at(-1)?.method).toBe("DELETE");
 	});
 
