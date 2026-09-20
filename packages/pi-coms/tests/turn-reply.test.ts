@@ -1,6 +1,13 @@
 // tests/turn-reply.test.ts
 import { expect, test } from "bun:test";
-import { buildTurnReplies, nextRunHealth, notJsonError, outboundHops, type RunHealth } from "../extensions/turnReply";
+import {
+	buildTurnReplies,
+	nextRunHealth,
+	notJsonError,
+	outboundHops,
+	type RunHealth,
+	schemaMismatchError,
+} from "../extensions/turnReply";
 
 const text = "Investigation complete: no observed WAF changes in the last 72h.";
 
@@ -320,4 +327,163 @@ test("runHealth accumulates across failures and resets on one good turn", () => 
 test("runHealth treats a length stop as healthy", () => {
 	const h = nextRunHealth({ consecutive_run_errors: 2 }, { text: "partial", stopReason: "length" });
 	expect(h.consecutive_run_errors).toBe(0);
+});
+
+// SIO-1831: the spoke validates against the schema it was HANDED. Before this, any
+// JSON passed as `error: null` and the sender discarded it ~90 s later with only a warn.
+
+// PI_INVESTIGATION_RESPONSE_SCHEMA, copied VERBATIM from packages/shared/src/pi-coms-types.ts.
+// Greptile on #859: an abbreviated copy (no evidence item requirements, no item types, no
+// confidence bounds) meant every rejection exited through missingRequiredKeys before
+// Value.Check ran, so the typebox call was never actually under test.
+const investigateSchema = {
+	type: "object",
+	required: ["summary", "root_cause_hypothesis", "evidence", "suggested_actions", "confidence"],
+	properties: {
+		summary: { type: "string" },
+		root_cause_hypothesis: { type: "string" },
+		evidence: {
+			type: "array",
+			items: {
+				type: "object",
+				required: ["resource", "observation"],
+				properties: { resource: { type: "string" }, observation: { type: "string" } },
+			},
+		},
+		suggested_actions: { type: "array", items: { type: "string" } },
+		confidence: { type: "number", minimum: 0, maximum: 1 },
+	},
+};
+
+// The REAL captured reply from SIO-1830 (redacted, shape-verbatim). An invented
+// fixture would encode the same assumption that let this through in the first place.
+const diagnosesEnvelope = {
+	diagnoses: [
+		{
+			dedup_key: "logs:/ecs/fargate/redacted-log-group:redacted",
+			probable_cause: "an unguarded Optional.get() threw NoSuchElementException",
+			affected_resources: ["arn:redacted:service", "arn:redacted:log-group"],
+			suggested_action: "add a null/absence check around the Optional.get()",
+			evidence: [{ command: "aws logs filter-log-events", observation: "5 distinct events" }],
+			confidence: 0.75,
+		},
+	],
+};
+
+test("SIO-1831: a mismatched shape fails HERE, naming the mismatch, instead of passing as a reply", () => {
+	const replies = buildTurnReplies(
+		[{ msg_id: "m1", fulfilled: false, response_schema: investigateSchema }],
+		JSON.stringify(diagnosesEnvelope),
+	);
+
+	expect(replies).toHaveLength(1);
+	const [reply] = replies;
+	expect(reply?.response).toBeNull();
+	expect(reply?.error).toContain("did not match the requested schema");
+	// Names what arrived and what was wanted, so the sender need not pull the body.
+	expect(reply?.error).toContain("got keys: diagnoses");
+	expect(reply?.error).toContain("missing required: summary");
+	// KEY NAMES only: no value from the payload may leak into the error.
+	expect(reply?.error).not.toContain("Optional.get");
+	expect(reply?.error).not.toContain("arn:redacted");
+	expect(reply?.error).not.toContain("redacted-log-group");
+});
+
+test("SIO-1831: a reply that MATCHES the schema is unaffected", () => {
+	const good = {
+		summary: "s",
+		root_cause_hypothesis: "r",
+		evidence: [{ resource: "x", observation: "y" }],
+		suggested_actions: ["do a thing"],
+		confidence: 0.6,
+	};
+	const replies = buildTurnReplies(
+		[{ msg_id: "m1", fulfilled: false, response_schema: investigateSchema }],
+		JSON.stringify(good),
+	);
+	expect(replies).toEqual([{ msg_id: "m1", response: good, error: null }]);
+});
+
+test("SIO-1831: a request with NO response_schema still returns prose verbatim", () => {
+	const replies = buildTurnReplies([{ msg_id: "m1", fulfilled: false }], "just prose, no schema asked for");
+	expect(replies).toEqual([{ msg_id: "m1", response: "just prose, no schema asked for", error: null }]);
+});
+
+// A spoke must never be made to fail every reply by a schema this validator cannot
+// read. Unknown/exotic schemas fall back to the pre-SIO-1831 behaviour: accept and
+// let the sender decide.
+test("SIO-1831: an unparseable schema accepts the payload rather than failing shut", () => {
+	const replies = buildTurnReplies(
+		[{ msg_id: "m1", fulfilled: false, response_schema: { type: "not-a-real-type", $ref: "#/nope" } }],
+		JSON.stringify({ anything: 1 }),
+	);
+	expect(replies[0]?.error).toBeNull();
+	expect(replies[0]?.response).toEqual({ anything: 1 });
+});
+
+test("SIO-1831: schemaMismatchError caps the key list and never prints values", () => {
+	const many: Record<string, number> = {};
+	for (let i = 0; i < 40; i++) many[`k${i}`] = i;
+	const msg = schemaMismatchError({ type: "object", required: ["a"] }, many);
+	expect(msg).toContain("k0");
+	expect(msg).not.toContain("k39");
+	expect(msg).toContain("missing required: a");
+
+	// A non-object payload is described by its type, not dumped.
+	expect(schemaMismatchError({ type: "object", required: ["a"] }, ["secret-value"])).toContain("got an array");
+	expect(schemaMismatchError({ type: "object", required: ["a"] }, ["secret-value"])).not.toContain("secret-value");
+});
+
+// Greptile on #859: these are the cases that actually exercise Value.Check. Every
+// required top-level key is present, so missingRequiredKeys returns empty and the
+// typebox call is the only thing that can reject them. Replacing Value.Check with
+// `true` turns each of these red.
+const wellFormedExcept = (patch: Record<string, unknown>) => ({
+	summary: "s",
+	root_cause_hypothesis: "r",
+	evidence: [{ resource: "arn:x", observation: "o" }],
+	suggested_actions: ["do a thing"],
+	confidence: 0.5,
+	...patch,
+});
+
+test.each([
+	["a string confidence", { confidence: "high" }],
+	["confidence above the maximum", { confidence: 1.5 }],
+	["confidence below the minimum", { confidence: -0.1 }],
+	["an evidence item missing observation", { evidence: [{ resource: "arn:x" }] }],
+	["a non-string suggested action", { suggested_actions: [42] }],
+	["evidence that is not an array", { evidence: "none" }],
+])("SIO-1831: rejects %s, with every required key present", (_label, patch) => {
+	const payload = wellFormedExcept(patch);
+	// Precondition: this case must NOT be caught by the required-key check, or it
+	// would not test Value.Check at all.
+	expect(Object.keys(payload)).toEqual(
+		expect.arrayContaining(["summary", "root_cause_hypothesis", "evidence", "suggested_actions", "confidence"]),
+	);
+
+	const replies = buildTurnReplies(
+		[{ msg_id: "m1", fulfilled: false, response_schema: investigateSchema }],
+		JSON.stringify(payload),
+	);
+
+	expect(replies[0]?.response).toBeNull();
+	expect(replies[0]?.error).toContain("did not match the requested schema");
+	// Names WHERE it failed, not just which keys arrived.
+	expect(replies[0]?.error).toContain("failed at:");
+	expect(replies[0]?.error).not.toContain("missing required");
+});
+
+test("SIO-1831: a nested failure names the path and never prints the offending value", () => {
+	const replies = buildTurnReplies(
+		[{ msg_id: "m1", fulfilled: false, response_schema: investigateSchema }],
+		JSON.stringify(wellFormedExcept({ evidence: [{ resource: "arn:super-secret-account-id", observation: 7 }] })),
+	);
+
+	const error = replies[0]?.error ?? "";
+	expect(error).toContain("failed at:");
+	expect(error).toContain("/evidence/0/observation");
+	// The payload value must never reach the error string.
+	expect(error).not.toContain("arn:super-secret-account-id");
+	expect(error).not.toContain("7");
 });
