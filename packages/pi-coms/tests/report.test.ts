@@ -851,8 +851,38 @@ describe("accountNameFromEnv", () => {
 
 	// A name outside the contract's charset would produce a header that
 	// parseMonitorHeader rejects outright, emptying the fleet inbox.
-	test.each(["Bad_Name", "has space", "UPPER", "sym!bol", "x".repeat(65)])("drops %p", (bad) => {
+	test.each(["Bad_Name", "has space", "UPPER", "sym!bol"])("drops %p", (bad) => {
 		expect(accountNameFromEnv(bad, "111122223333")).toBeUndefined();
+	});
+
+	// An over-long name is SHORTENED, not dropped: it still identifies the
+	// account, where no name sends the operator back to memorising ids.
+	test("truncates an over-long name instead of dropping it", () => {
+		const long = `${"a".repeat(40)}-tail`;
+		const out = accountNameFromEnv(long, "111122223333");
+		expect(out).toBe("a".repeat(32));
+		expect(out?.length).toBe(32);
+	});
+
+	test("a truncated name never ends on a hyphen", () => {
+		expect(accountNameFromEnv(`${"a".repeat(31)}-more`, "111122223333")).toBe("a".repeat(31));
+	});
+
+	// Greptile P1 on PR #860, reproduced before fixing: the account label sits
+	// BEFORE the status in the header, and SNS cuts the subject at 100 chars from
+	// the end -- so a long name pushed the keyword off the line. Measured on the
+	// pre-fix code: DEGRADED was lost at a 50-char name, PAUSED at 52, leaving an
+	// alarming email whose subject said only that a digest existed.
+	test.each([22, 32, 50, 52, 64, 80])("a %i-char name still leaves DEGRADED and PAUSED in the subject", (len) => {
+		const name = accountNameFromEnv("a".repeat(len), "111122223333");
+		const degraded = subjectFor(formatDigest({ ...digestBase, accountName: name, checkErrors: 3 }));
+		const paused = subjectFor(
+			formatDigest({ ...digestBase, accountName: name, paused: { reason: "", since: digestBase.since } }),
+		);
+		expect(degraded).toContain("DEGRADED");
+		expect(paused).toContain("PAUSED");
+		expect(degraded.length).toBeLessThanOrEqual(100);
+		expect(paused.length).toBeLessThanOrEqual(100);
 	});
 
 	test("a rejected name still yields a parseable header", () => {

@@ -177,12 +177,25 @@ function accountLabel(accountId: string, accountName?: string): string {
 //
 // `aws-<id>` is dropped too: that is Terraform's own fallback when agent_name is
 // empty, and repeating it would render as `aws-<id> (aws-<id>)`.
-const ACCOUNT_NAME_OK = /^[a-z0-9-]{1,64}$/;
+//
+// The length cap is what keeps the WARNING readable, and is measured rather than
+// guessed. The header reads `[warn] aws-<id> (<name>) daily digest DEGRADED:
+// ...`, and SNS truncates the subject at 100 characters from the END, so a long
+// name pushes the status keyword off the line: DEGRADED is lost at a 50-char
+// name and PAUSED at 52, leaving an alarming email whose subject says only that
+// a digest exists. 32 leaves both keywords intact with room to spare (the
+// longest real fleet key, eu-shared-services-prd, is 22), and a longer name is
+// TRUNCATED rather than dropped -- a shortened name still identifies the account,
+// while no name at all sends the operator back to memorising ids.
+const ACCOUNT_NAME_OK = /^[a-z0-9-]+$/;
+const ACCOUNT_NAME_MAX = 32;
 
 export function accountNameFromEnv(value: string | undefined, accountId: string): string | undefined {
 	const name = (value ?? "").trim();
 	if (name === "" || name === `aws-${accountId}`) return undefined;
-	return ACCOUNT_NAME_OK.test(name) ? name : undefined;
+	if (!ACCOUNT_NAME_OK.test(name)) return undefined;
+	// Trailing hyphens would otherwise survive the cut and read as a typo.
+	return name.length <= ACCOUNT_NAME_MAX ? name : name.slice(0, ACCOUNT_NAME_MAX).replace(/-+$/, "");
 }
 
 // SIO-1832: a finding summary is wrapped onto its own indented line(s) instead
