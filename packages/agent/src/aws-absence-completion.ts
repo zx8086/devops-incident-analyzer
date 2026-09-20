@@ -37,6 +37,12 @@ export interface AbsenceCompletionDeps {
 	observe: (toolName: string, content: unknown, arg: unknown) => void;
 	// Re-reads the ledger's blocker AFTER each observed page.
 	blocker: () => string | null | undefined;
+	// Greptile P1 on #855: absolute epoch ms the whole run must finish by, from the graph
+	// budget. Checked BETWEEN calls, so it bounds the entire loop rather than one request --
+	// up to MAX_COMPLETION_CLUSTERS x MAX_COMPLETION_PAGES_PER_CLUSTER sequential calls run
+	// after the ReAct stream's own timeout has already been spent. Omitted means unbounded,
+	// which is only correct in tests.
+	deadlineAt?: number | undefined;
 }
 
 // Parses the unwalked cluster list out of "services-incomplete:a,b,c". Returns null when the
@@ -91,8 +97,13 @@ export async function completeEcsEnumeration(deps: AbsenceCompletionDeps): Promi
 	// spend calls and still leave the proof unproven.
 	if (unwalked.length > MAX_COMPLETION_CLUSTERS) return [];
 
+	// Past the deadline before the first call: do nothing rather than start a walk that cannot finish.
+	const outOfTime = (): boolean => deps.deadlineAt !== undefined && Date.now() >= deps.deadlineAt;
+	if (outOfTime()) return [];
+
 	const walked: string[] = [];
 	for (const cluster of unwalked) {
+		if (outOfTime()) return walked;
 		let cursor: string | undefined;
 		let pages = 0;
 		let clusterTouched = false;
@@ -116,6 +127,11 @@ export async function completeEcsEnumeration(deps: AbsenceCompletionDeps): Promi
 
 			const token = tokenFromPage(content);
 			if (!token) break; // final page: the ledger has marked this cluster complete
+			// Stop between pages too: one slow cluster must not spend the whole remaining budget.
+			if (outOfTime()) {
+				walked.push(cluster);
+				return walked;
+			}
 			cursor = token;
 		}
 

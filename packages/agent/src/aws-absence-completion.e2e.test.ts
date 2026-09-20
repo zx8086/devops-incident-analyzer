@@ -1,4 +1,5 @@
-// Temporary end-to-end check: the REAL instrumentTools closure + the REAL completion,
+// agent/src/aws-absence-completion.e2e.test.ts
+// SIO-1784: end-to-end check: the REAL instrumentTools closure + the REAL completion,
 // wired exactly as sub-agent.ts wires them. Only the tool transport is faked.
 import { describe, expect, test } from "bun:test";
 import { tool } from "@langchain/core/tools";

@@ -207,4 +207,62 @@ describe("completeEcsEnumeration (SIO-1784)", () => {
 		expect(calls).toEqual([{ cluster: "a" }, { cluster: "a", cursor: "t1" }]);
 		expect(awsEcsAbsenceProven(state)).toBe(true);
 	});
+
+	// Greptile P1 on #855: this loop runs AFTER the ReAct stream's own timeout is spent and can
+	// make up to MAX_COMPLETION_CLUSTERS x MAX_COMPLETION_PAGES_PER_CLUSTER sequential calls, so
+	// without a deadline a slow estate keeps the sub-agent alive long past its budget and starves
+	// downstream aggregation. The bound is checked BETWEEN calls, so it bounds the whole loop.
+	test("an already-expired deadline makes no calls at all", async () => {
+		const state = ledgerWith(["a", "b"]);
+		const { deps, calls } = depsFor(state, new Map());
+
+		const walked = await completeEcsEnumeration({ ...deps, deadlineAt: Date.now() - 1 });
+
+		expect(calls).toEqual([]);
+		expect(walked).toEqual([]);
+	});
+
+	test("a deadline that expires mid-walk stops early and returns what it walked", async () => {
+		const state = ledgerWith(["a", "b", "c"]);
+		const pages = new Map<string, unknown[]>([
+			["a", [{ serviceArns: [] }]],
+			["b", [{ serviceArns: [] }]],
+			["c", [{ serviceArns: [] }]],
+		]);
+		const { deps, calls } = depsFor(state, pages);
+
+		// Expires once the first cluster has been walked.
+		let now = Date.now();
+		const deadlineAt = now + 5;
+		const spy = {
+			...deps,
+			invoke: async (t: string, a: Record<string, unknown>) => {
+				now += 10; // each call consumes more than the remaining budget
+				return deps.invoke(t, a);
+			},
+		};
+		const realNow = Date.now;
+		Date.now = () => now;
+		try {
+			const walked = await completeEcsEnumeration({ ...spy, deadlineAt });
+			expect(walked.length).toBeLessThan(3);
+			expect(calls.length).toBeLessThan(3);
+		} finally {
+			Date.now = realNow;
+		}
+	});
+
+	// The bound must not change behaviour when there is budget left, or it would silently
+	// disable the completion the ticket exists for.
+	test("a deadline far in the future walks everything, unchanged", async () => {
+		const state = ledgerWith(["a"]);
+		const pages = new Map<string, unknown[]>([["a", [{ serviceArns: [] }]]]);
+		const { deps, calls } = depsFor(state, pages);
+
+		const walked = await completeEcsEnumeration({ ...deps, deadlineAt: Date.now() + 60_000 });
+
+		expect(walked).toEqual(["a"]);
+		expect(calls).toEqual([{ cluster: "a" }]);
+		expect(awsEcsAbsenceProven(state)).toBe(true);
+	});
 });
