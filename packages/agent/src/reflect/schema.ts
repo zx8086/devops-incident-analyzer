@@ -93,7 +93,27 @@ export type RawSession = z.infer<typeof RawSessionSchema>;
 
 // --- Stage 2: normalized (scanner input) ----------------------------------------------
 
-export const NormalizedMessageSchema = RawMessageSchema.extend({ index: z.number() });
+// SIO-1856: a tool_call gains `inputDigest`, a one-way hash of its input taken BEFORE
+// redaction. Redaction maps every value of a PII class onto one placeholder, so without it
+// two calls differing only in an email read as a repeat.
+export const NormalizedPartSchema = z.union([
+	RawPartSchema,
+	z.object({
+		type: z.literal("tool_call"),
+		toolCallId: z.string().nullable(),
+		name: z.string(),
+		input: z.string(),
+		argsIdentifyTheCall: z.boolean(),
+		inputDigest: z.string(),
+	}),
+]);
+
+export type NormalizedPart = z.infer<typeof NormalizedPartSchema>;
+
+export const NormalizedMessageSchema = RawMessageSchema.extend({
+	index: z.number(),
+	parts: z.array(NormalizedPartSchema),
+});
 export type NormalizedMessage = z.infer<typeof NormalizedMessageSchema>;
 
 export const NormalizedSessionSchema = z.object({

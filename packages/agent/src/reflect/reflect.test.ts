@@ -336,6 +336,42 @@ describe("scan", () => {
 		expect(argsCanIdentify("elasticsearch_search", { index: "logs-*", query: { match_all: {} } })).toBe(false);
 	});
 
+	// Greptile P1 (PR #862): kafka_list_consumer_groups takes `states: z.array(z.string())`
+	// (mcp-server-kafka parameters.ts:60). The recorder drops arrays, so two calls filtering
+	// different states record identically -- the exact false repeat the allowlist prevents.
+	test("a tool with an array parameter is not on the scalar allowlist", () => {
+		expect(argsCanIdentify("kafka_list_consumer_groups", {})).toBe(false);
+		// Its array-free siblings stay eligible.
+		expect(argsCanIdentify("kafka_list_topics", {})).toBe(true);
+		expect(argsCanIdentify("kafka_list_dlq_topics", {})).toBe(true);
+	});
+
+	// Greptile P2 (PR #862): redaction maps every value of a PII class onto ONE placeholder,
+	// so two calls differing only by an email collapse to the same bytes. Matching therefore
+	// uses a digest taken BEFORE redaction.
+	test("two calls differing only by a redacted value are not a repeat", () => {
+		const scan = scanSession(
+			sessionFrom(
+				fakeRun({
+					outputs: {
+						dataSourceResults: [
+							{
+								dataSourceId: "aws",
+								toolOutputs: [
+									{ toolName: "aws_ecs_list_services", toolArgs: { cluster: "alice@corp.com" }, rawJson: "{}" },
+									{ toolName: "aws_ecs_list_services", toolArgs: { cluster: "bob@corp.com" }, rawJson: "{}" },
+								],
+							},
+						],
+					},
+				}),
+			),
+		);
+		expect(scan.signals.some((s) => s.kind === "repeat-call")).toBe(false);
+		// and the report still shows the redacted form, never the raw address
+		expect(JSON.stringify(scan)).not.toContain("alice@corp.com");
+	});
+
 	test("differing input is not a repeat", () => {
 		const scan = scanSession(
 			sessionFrom(

@@ -109,6 +109,26 @@ describe("aggregate", () => {
 		expect(new Set(evidence.map((e) => e.session)).size).toBe(3);
 	});
 
+	// Greptile P1 (PR #862): a user reaction implicates the TURN, not a datasource. Taking
+	// suspects[0] pointed remediation at whichever datasource sorted first.
+	test("a signal with several suspects owns nothing, rather than owning the first", () => {
+		const analysis = aggregate(
+			["s1", "s2"].map((id) => scan(id, [{ kind: "user-redo", suspects: ["aws", "elastic"], severity: "high" }])),
+			{ hours: 168 },
+		);
+		expect(analysis.findings[0]?.datasource).toBeNull();
+		// and it is NOT mistaken for a create candidate: that rule is tool-failure only
+		expect(analysis.portfolio).toEqual([]);
+	});
+
+	test("a single suspect still owns the finding", () => {
+		const analysis = aggregate(
+			["s1", "s2"].map((id) => scan(id, [{ kind: "tool-failure", suspects: ["elastic"] }])),
+			{ hours: 168 },
+		);
+		expect(analysis.findings[0]?.datasource).toBe("elastic");
+	});
+
 	test("expected-outcome is never a finding", () => {
 		const analysis = aggregate(
 			["s1", "s2", "s3"].map((id) => scan(id, [{ kind: "expected-outcome" }])),
@@ -264,6 +284,29 @@ describe("report", () => {
 		// The starved-lane warning must appear before the findings a reader would act on.
 		expect(md.indexOf("Read this first")).toBeLessThan(md.indexOf("## Findings"));
 		expect(md).toContain("lead, not a verdict");
+	});
+
+	// Greptile P2 (PR #862): an excerpt is verbatim tool output, so it must READ as its
+	// literal characters. Left raw, a backtick closes the code span around it and
+	// [x](url) renders as a live link in a document a human is meant to trust.
+	test("evidence renders as literal text, not as active Markdown", () => {
+		const analysis = aggregate(
+			["s1", "s2"].map((id) => scan(id, [{ kind: "tool-failure", suspects: ["aws"] }])),
+			{ hours: 168 },
+		);
+		analysis.findings[0] = {
+			...analysis.findings[0],
+			evidence: [{ session: "s1", message: 1, tool: "t", excerpt: "use `x` and [docs](http://evil) and _em_" }],
+		} as never;
+		const md = renderMarkdown(analysis);
+		const line = md.split("\n").find((l) => l.includes("evil")) ?? "";
+		// The excerpt keeps its characters but loses its power: it is wrapped in a code
+		// fence longer than any backtick run inside it, so the single backticks around `x`
+		// cannot close the span and the link renders as text.
+		const excerpt = line.slice(line.indexOf("): ") + 3);
+		expect(excerpt.startsWith("``")).toBe(true);
+		expect(excerpt.endsWith("``")).toBe(true);
+		expect(excerpt).toContain("[docs](http://evil)");
 	});
 
 	test("an empty window still renders a report that says so", () => {

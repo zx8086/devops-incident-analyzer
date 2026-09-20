@@ -4,6 +4,23 @@
 // it, so the two cannot disagree. Edit the JSON (or the code), never the markdown.
 import type { Analysis } from "./aggregate.ts";
 
+// An excerpt is verbatim trace text -- a tool's own error message -- so it must render as
+// the literal characters it contains, not as Markdown. Left raw, a backtick closes the code
+// span around it, `[x](url)` becomes a live link and `|` breaks a table cell, so quoted
+// evidence could read differently from what the tool actually said.
+//
+// Rendered as an inline code span, whose only metacharacter is the backtick: doubling the
+// fence and padding lets the content hold backticks of its own (CommonMark 6.1). Newlines
+// would break the bullet, so they collapse to spaces.
+function quote(text: string): string {
+	const flat = String(text ?? "").replace(/\s*\n\s*/g, " ");
+	if (!flat) return "_(empty)_";
+	const longestRun = [...flat.matchAll(/`+/g)].reduce((max, m) => Math.max(max, m[0].length), 0);
+	const fence = "`".repeat(longestRun + 1);
+	const pad = flat.startsWith("`") || flat.endsWith("`") ? " " : "";
+	return `${fence}${pad}${flat}${pad}${fence}`;
+}
+
 function table(headers: string[], rows: string[][]): string[] {
 	if (!rows.length) return [];
 	return [
@@ -63,7 +80,7 @@ export function renderMarkdown(analysis: Analysis): string {
 			lines.push("", "Evidence:", "");
 			for (const item of finding.evidence) {
 				const tool = item.tool ? `\`${item.tool}\` ` : "";
-				lines.push(`- ${tool}(run \`${item.session}\`, message ${item.message}): ${item.excerpt}`);
+				lines.push(`- ${tool}(run \`${item.session}\`, message ${item.message}): ${quote(item.excerpt)}`);
 			}
 			lines.push("");
 		}

@@ -120,9 +120,13 @@ export function aggregate(scans: Scan[], options: { hours: number; now?: Date })
 			signalCount += 1;
 			if (signal.severity === "high") highCount += 1;
 
-			// A signal's owner is its primary suspect. Several suspects means the turn as a
-			// whole is implicated (a user reaction), and the first is the one we group on.
-			const datasource = signal.suspects[0] ?? null;
+			// One suspect means one owner. SEVERAL means the turn as a whole is implicated --
+			// a user reacted to the answer, not to a datasource -- so there is no owner, and
+			// picking suspects[0] would point remediation at whichever datasource happened to
+			// sort first (the tag is sorted at langsmith-tags.ts:13, so it would at least be
+			// stable, but stably wrong). A turn-wide finding says that honestly by owning
+			// nothing, and the evidence still names the run to open.
+			const datasource = signal.suspects.length === 1 ? (signal.suspects[0] ?? null) : null;
 			if (datasource) {
 				const entry = perDatasource.get(datasource) ?? { sessions: new Set(), high: 0, medium: 0, low: 0 };
 				entry.sessions.add(scan.source.id);

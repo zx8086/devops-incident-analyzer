@@ -49,14 +49,22 @@ function asString(value: unknown): string | null {
 // An allowlist, not a heuristic: "no args recorded" is ambiguous on its own -- it means
 // either "this tool takes none" or "this tool's input was dropped", and those need opposite
 // treatment. Listing the first case is the only way to tell them apart from a trace.
+//
+// BEFORE ADDING ONE: open its MCP schema and confirm EVERY parameter is a scalar. One
+// optional array is enough to break it -- kafka_list_consumer_groups was on this list until
+// review found its `states: z.array(z.string())`, which the recorder drops, making two
+// different state filters look like the same call.
 const SCALAR_INPUT_TOOLS = new Set([
 	"aws_ecs_list_clusters",
 	"aws_sqs_list_queues",
 	"aws_logs_describe_log_groups",
 	"aws_ecs_list_services",
 	"kafka_list_topics",
-	"kafka_list_consumer_groups",
 	"kafka_list_dlq_topics",
+	// NOT kafka_list_consumer_groups: its schema takes `states: z.array(z.string())`
+	// (mcp-server-kafka parameters.ts:60). The recorder drops arrays, so two calls
+	// filtering different states record identically -- exactly the false repeat this
+	// allowlist exists to prevent. Caught in review of this file's own first draft.
 	"capella_get_buckets",
 	"capella_get_scopes_and_collections",
 	"capella_get_document_type_examples",

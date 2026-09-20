@@ -214,7 +214,11 @@ export function scanSession(session: NormalizedSession): Scan {
 				unprovableRepeats += 1;
 				continue;
 			}
-			const key = `${message.index}\x1f${part.name}\x1f${part.input}`;
+			// Keyed on the PRE-redaction digest, not the redacted text: redaction collapses
+			// every email onto one placeholder, so two calls for different users would
+			// otherwise be byte-identical here (SIO-1856, found in review).
+			const identity = "inputDigest" in part ? part.inputDigest : part.input;
+			const key = `${message.index}\x1f${part.name}\x1f${identity}`;
 			const entry = calls.get(key) ?? { count: 0, evidence: [], name: part.name };
 			entry.count += 1;
 			if (entry.evidence.length < MAX_EVIDENCE) {
