@@ -230,6 +230,39 @@ describe("SIO-1859 a bare time in a dated source grounds a qualified answer", ()
 		).toBe("pass_with_warnings");
 	});
 
+	// Greptile (PR #867): sourceData flattens every datasource narrative into one string, so
+	// pairing across it let a date mentioned by ONE datasource qualify a bare time stated by
+	// ANOTHER. Here 17:35:00 belongs to an aws timeline dated the 18th, and the 19th appears
+	// only in an unrelated elastic line -- so a fabricated 2026-09-19T17:35:00Z was accepted
+	// with no warning. Pairing is now scoped to the narrative that states both.
+	test("a date from one datasource does not qualify a bare time from another", () => {
+		const twoSources = [
+			{
+				dataSourceId: "aws",
+				status: "success",
+				data: "Timeline for 2026-09-18 (UTC). Window opened at 2026-09-18T16:00:00Z. | `17:35:00` | Feed run starts |",
+				duration: 100,
+				toolErrors: [],
+			},
+			{
+				dataSourceId: "elastic",
+				status: "success",
+				data: "Unrelated index rollover scheduled for 2026-09-19.",
+				duration: 100,
+				toolErrors: [],
+			},
+		] as DataSourceResult[];
+		const resultFromBoth = (answer: string) =>
+			validate(makeState({ finalAnswer: answer, retryCount: 0, dataSourceResults: twoSources })).validationResult;
+
+		// The real pairing, within the aws narrative, still grounds.
+		expect(resultFromBoth("The aws and elastic evidence show the feed run at 2026-09-18T17:35:00Z.")).toBe("pass");
+		// The cross-narrative pairing must NOT ground: the 19th is elastic's, 17:35:00 is aws's.
+		expect(resultFromBoth("The aws and elastic evidence show the feed run at 2026-09-19T17:35:00Z.")).toBe(
+			"pass_with_warnings",
+		);
+	});
+
 	// Guards the cap: a source ranging over many days must not let one bare time ground a
 	// timestamp on any of them. Four days is over MAX_SOURCE_DAYS_FOR_BARE_TIMES.
 	// The source carries one real timestamp so the fabrication check is LIVE -- it is skipped
