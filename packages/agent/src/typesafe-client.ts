@@ -45,6 +45,13 @@ export interface ScoreQuestion {
 }
 
 export function resolveTypeSafeApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	// NODE_ENV=test returns nothing, so every seam self-skips and no unit test can
+	// reach the network. Bun sets NODE_ENV=test and auto-loads .env, so without this
+	// a developer with a real key in .env would have `bun run test` making live
+	// billable calls -- measured: the extract-findings suite fired two real requests
+	// and only passed because the failure path happens to fall back correctly.
+	// Same guard shape as resolveToolCallMetricsDbPath / resolveDecisionMetricsDbPath.
+	if (env.NODE_ENV === "test") return undefined;
 	const raw = env.TYPESAFE_API_KEY?.trim();
 	return raw ? raw : undefined;
 }
