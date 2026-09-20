@@ -143,6 +143,26 @@ describe("SIO-1857 an offset timestamp is converted, not stripped", () => {
 		expect(result.validationResult).toBe("pass_with_warnings");
 	});
 
+	// Greptile (PR #866): `new Date` ROLLS OVER an impossible calendar date rather than
+	// rejecting it, so 2026-02-30 became 2026-03-02 and would match a real March 2 in the
+	// source -- masking the very fabrication this check exists to catch. A regression the
+	// epoch-based normalizer introduced; the old textual key had kept them apart.
+	test("an impossible calendar date does not collide with the day it rolls over to", () => {
+		const result = resultFor(
+			"The elastic log shows the error at 2026-02-30T10:00:00Z for localcore-service.",
+			"2026-03-02T10:00:00Z",
+		);
+		expect(result.validationResult).toBe("pass_with_warnings");
+	});
+
+	test("a real leap day still matches its source", () => {
+		const result = resultFor(
+			"The elastic log shows the error at 2024-02-29T10:00:00Z for localcore-service.",
+			"2024-02-29T10:00:00Z",
+		);
+		expect(result.validationResult).toBe("pass");
+	});
+
 	test("the AWS space form and a negative offset both match their UTC source", () => {
 		expect(
 			resultFor("The elastic log shows it at 2026-09-19 20:10:46 for localcore-service.", "2026-09-19T20:10:46Z")

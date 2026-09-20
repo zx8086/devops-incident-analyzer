@@ -84,6 +84,15 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 	// fabricated even though the timestamp existed in the source data.
 	const timestampPattern = /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|GMT|UTC|[+-]\d{2}:?\d{2})?/g;
 
+	// True only when Y-M-D names a day that exists. `new Date` accepts 2026-02-30 and
+	// silently reports March 2, so the month/day are compared back against the input.
+	const isRealCalendarDate = (ymd: string): boolean => {
+		const [y, m, d] = ymd.split("-").map(Number);
+		if (!y || !m || !d) return false;
+		const probe = new Date(Date.UTC(y, m - 1, d));
+		return probe.getUTCFullYear() === y && probe.getUTCMonth() === m - 1 && probe.getUTCDate() === d;
+	};
+
 	// Collapse AWS/ISO/precision variants to a single canonical key so source and
 	// answer matches compare equal regardless of which form each side used.
 	//
@@ -93,15 +102,25 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 	// different keys, so a correctly converted timestamp was reported as fabricated.
 	// A bare timestamp (no suffix) is read as UTC, which is what the old behaviour assumed
 	// and what every source in this repo emits.
+	const textualKey = (ts: string): string => ts.replace(/\.\d+/, "").replace(/(Z|GMT|UTC|[+-]\d{2}:?\d{2})$/, "");
+
 	const normalizeTimestamp = (ts: string): string => {
 		const spaceless = ts.replace(" ", "T");
 		const hasZone = /(Z|GMT|UTC|[+-]\d{2}:?\d{2})$/.test(spaceless);
 		const parsed = new Date(hasZone ? spaceless.replace(/(GMT|UTC)$/, "Z") : `${spaceless}Z`);
-		// An unparseable match falls back to the old textual key rather than throwing:
-		// the regex is looser than Date, and a bad key only costs a false warning.
-		if (Number.isNaN(parsed.getTime())) {
-			return spaceless.replace(/\.\d+/, "").replace(/(Z|GMT|UTC|[+-]\d{2}:?\d{2})$/, "");
-		}
+		// An unparseable match keeps its textual key rather than throwing: the regex is
+		// looser than Date, and a bad key only costs a false warning.
+		if (Number.isNaN(parsed.getTime())) return textualKey(spaceless);
+
+		// `new Date` ROLLS OVER an impossible calendar date instead of rejecting it, so
+		// 2026-02-30 becomes 2026-03-02 and would match a real March 2 in the source --
+		// masking exactly the fabrication this check exists to catch. Such a value keeps
+		// its own textual key so it can never collide with a genuine instant.
+		//
+		// The day is checked on the LITERAL Y-M-D rather than by round-tripping, because a
+		// real offset legitimately moves the date (15:10-05:00 on the 19th is the 20th UTC).
+		if (!isRealCalendarDate(spaceless.slice(0, 10))) return textualKey(spaceless);
+
 		return parsed.toISOString().replace(/\.\d+Z$/, "");
 	};
 
