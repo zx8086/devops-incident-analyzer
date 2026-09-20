@@ -666,3 +666,30 @@ describe("fleet_inbox (SIO-1652)", () => {
 		expect(replaced.fleetInboxDigest?.estates[0]?.estate).toBe("eu-b2b-dev");
 	});
 });
+
+// SIO-1835: feedback is filed against lastRunId, which must be the LangSmith trace root the
+// `run_id` event carries -- NOT `done.runId`, the route's local request correlator. Taking
+// the latter silently undid the whole fix: the stream delivered the real id mid-turn and
+// `done` overwrote it a moment later, so every score still went to an id LangSmith never
+// created. Caught in review of the fix itself.
+describe("SIO-1835 lastRunId is the trace root", () => {
+	const done = (runId: string): StreamEvent =>
+		({ type: "done", threadId: "t", requestId: "r", runId, responseTime: 1, toolsUsed: [] }) as StreamEvent;
+
+	test("done does not overwrite the id the stream delivered", () => {
+		let state = applyStreamEvent(initialReducerState(), { type: "run_id", runId: "01a0-trace-root" } as StreamEvent);
+		state = applyStreamEvent(state, done("local-correlator"));
+		expect(state.lastRunId).toBe("01a0-trace-root");
+	});
+
+	// A stream that never emits run_id (an early failure, a stubbed transport) still leaves
+	// something correlatable rather than nothing.
+	test("done still supplies an id when the stream emitted none", () => {
+		const state = applyStreamEvent(initialReducerState(), done("local-correlator"));
+		expect(state.lastRunId).toBe("local-correlator");
+	});
+
+	test("a fresh turn starts with no id, so none leaks across turns", () => {
+		expect(initialReducerState().lastRunId).toBeUndefined();
+	});
+});

@@ -614,7 +614,12 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 				threadId: event.threadId,
 				lastResponseTime: event.responseTime,
 				lastToolsUsed: event.toolsUsed ?? [],
-				lastRunId: event.runId,
+				// SIO-1835: `done.runId` is the route's local request correlator, NOT the
+				// LangSmith trace root. Taking it here overwrote the real id that the
+				// `run_id` event delivered mid-stream, so feedback went on filing against an
+				// id LangSmith never created -- defeating the fix. Keep whatever the stream
+				// gave us; fall back only when no run_id event arrived at all.
+				lastRunId: state.lastRunId ?? event.runId,
 				lastRequestId: event.requestId,
 				lastConfidence: event.confidence,
 				// SIO-1194: absent fields RESET (an uncapped turn must not inherit a
