@@ -5,6 +5,7 @@
 // replies are rendered as data by the card and are never fed back into the LLM.
 import { getLogger } from "@devops-agent/observability";
 import {
+	investigationFromDiagnoses,
 	type PendingAction,
 	PI_INVESTIGATION_RESPONSE_SCHEMA,
 	PI_VERDICT_RESPONSE_SCHEMA,
@@ -14,6 +15,7 @@ import {
 	type PiComsEnvironment,
 	PiComsEnvironmentSchema,
 	type PiComsHubConfig,
+	PiDiagnosesReplySchema,
 	PiInvestigationSchema,
 	type PiVerdict,
 	PiVerdictSchema,
@@ -509,6 +511,14 @@ function queuedOutcome(estate: string, target: string, msgId: string): PiActionO
 	return { status: "success", result: { kind: "queued", target, estate, msg_id: msgId } };
 }
 
+// SIO-1830: KEY NAMES only, never values. Diagnosing the production mismatch meant
+// hand-pulling the message from the hub, and it had aged out within the hour -- the keys
+// alone would have named the cause instantly. The body carries account ids, arns and
+// trace ids, so it must never be logged.
+function replyKeys(response: unknown): string[] {
+	return response && typeof response === "object" && !Array.isArray(response) ? Object.keys(response) : [];
+}
+
 // The reply half: validate against the analyzer's OWN schema, remember a verdict as
 // structured fields, and propose the investigate follow-up. One implementation for
 // both execution shapes.
@@ -520,7 +530,10 @@ function finalizePiAction(
 	if (tool === "verify-with-pi") {
 		const verdict = PiVerdictSchema.safeParse(reply.response);
 		if (!verdict.success) {
-			logger.warn({ target: reply.target, msg_id: reply.msg_id }, "pi verdict did not match schema");
+			logger.warn(
+				{ target: reply.target, msg_id: reply.msg_id, responseKeys: replyKeys(reply.response) },
+				"pi verdict did not match schema",
+			);
 			return { status: "error", error: `pi agent ${reply.target} replied with an unusable verdict (schema mismatch)` };
 		}
 		// SIO-1651: remember the verdict as structured fields (enums, counts, ids).
@@ -551,22 +564,46 @@ function finalizePiAction(
 		return result;
 	}
 	const investigation = PiInvestigationSchema.safeParse(reply.response);
-	if (!investigation.success) {
-		logger.warn({ target: reply.target, msg_id: reply.msg_id }, "pi investigation did not match schema");
+	if (investigation.success) {
 		return {
-			status: "error",
-			error: `pi agent ${reply.target} replied with an unusable investigation (schema mismatch)`,
+			status: "success",
+			result: {
+				kind: "investigation",
+				target: reply.target,
+				estate: params.estate,
+				msg_id: reply.msg_id,
+				investigation: investigation.data,
+			},
 		};
 	}
+	// SIO-1830: a spoke may answer in its native "diagnoses" vocabulary even though the
+	// analyzer injected PI_INVESTIGATION_RESPONSE_SCHEMA into its turn content -- that
+	// happened in production and a correct diagnosis was discarded with only a warn. Adapt
+	// the known dialect rather than lose the answer; anything else still fails below.
+	const diagnoses = PiDiagnosesReplySchema.safeParse(reply.response);
+	if (diagnoses.success) {
+		logger.info(
+			{ target: reply.target, msg_id: reply.msg_id, diagnosisCount: diagnoses.data.diagnoses.length },
+			"pi investigation arrived as a diagnoses envelope; adapted to the investigation shape",
+		);
+		return {
+			status: "success",
+			result: {
+				kind: "investigation",
+				target: reply.target,
+				estate: params.estate,
+				msg_id: reply.msg_id,
+				investigation: investigationFromDiagnoses(diagnoses.data),
+			},
+		};
+	}
+	logger.warn(
+		{ target: reply.target, msg_id: reply.msg_id, responseKeys: replyKeys(reply.response) },
+		"pi investigation did not match schema",
+	);
 	return {
-		status: "success",
-		result: {
-			kind: "investigation",
-			target: reply.target,
-			estate: params.estate,
-			msg_id: reply.msg_id,
-			investigation: investigation.data,
-		},
+		status: "error",
+		error: `pi agent ${reply.target} replied with an unusable investigation (schema mismatch)`,
 	};
 }
 

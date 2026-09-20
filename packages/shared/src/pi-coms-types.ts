@@ -39,6 +39,58 @@ export const PiInvestigationSchema = z.object({
 });
 export type PiInvestigation = z.infer<typeof PiInvestigationSchema>;
 
+// SIO-1830: the spoke's NATIVE reply shape. A spoke persona is built around "diagnoses"
+// (the monitor's finding vocabulary), and on 2026-09-20 an eu-oit-prd spoke answered an
+// investigate request in that shape even though the analyzer had injected
+// PI_INVESTIGATION_RESPONSE_SCHEMA into its turn content. Both schemas rejected it and a
+// correct, well-evidenced diagnosis was silently discarded.
+//
+// The schema nudge is already in place (pi-coms/extensions/coms-net.ts puts it in the
+// turn text, noting "both account agents guessed the same wrong shape"), so it has failed
+// in production at least once. This adapter makes the READER tolerant rather than relying
+// on the writer complying: an answer the operator can use must not be lost to a dialect.
+//
+// Deliberately a SEPARATE schema, not a loosening of PiInvestigationSchema: a genuinely
+// malformed reply must still fail.
+export const PiDiagnosesReplySchema = z.object({
+	diagnoses: z
+		.array(
+			z.object({
+				probable_cause: z.string(),
+				affected_resources: z.array(z.string()).optional(),
+				suggested_action: z.string().optional(),
+				evidence: z.array(z.object({ command: z.string().optional(), observation: z.string() })).optional(),
+				confidence: z.number().min(0).max(1).optional(),
+			}),
+		)
+		.min(1),
+});
+
+// Folds the diagnoses envelope into the investigation shape the rest of the pipeline reads.
+// Field mapping, from the live payload:
+//   probable_cause    -> summary AND root_cause_hypothesis (the spoke writes one prose field)
+//   evidence[].command -> resource  (the spoke records the COMMAND it ran, not a resource arn;
+//                                    affected_resources carries the arns, so they are prepended
+//                                    as their own evidence lines rather than being lost)
+//   suggested_action  -> suggested_actions[]  (singular string -> array)
+//   confidence        -> confidence, defaulting to 0.5 when the spoke omits it: absent
+//                        confidence must not read as certainty.
+export function investigationFromDiagnoses(reply: z.infer<typeof PiDiagnosesReplySchema>): PiInvestigation {
+	const d = reply.diagnoses[0];
+	if (!d) throw new Error("PiDiagnosesReplySchema guarantees at least one diagnosis");
+	const evidence = [
+		...(d.affected_resources ?? []).map((resource) => ({ resource, observation: "named as an affected resource" })),
+		...(d.evidence ?? []).map((e) => ({ resource: e.command ?? "(command not recorded)", observation: e.observation })),
+	];
+	return {
+		summary: d.probable_cause,
+		root_cause_hypothesis: d.probable_cause,
+		evidence,
+		suggested_actions: d.suggested_action ? [d.suggested_action] : [],
+		confidence: d.confidence ?? 0.5,
+	};
+}
+
 export const PI_VERDICT_RESPONSE_SCHEMA = {
 	type: "object",
 	required: ["verdict", "summary", "claims"],
