@@ -11,7 +11,16 @@
 // Extracted from tool-call-metrics.ts, which solved this first (SIO-1643). The
 // evidence index (SIO-1688) copied only the bun half and was silently dead in dev.
 
-export type SqliteParams = Record<string, string | number>;
+// SIO-1858: `null` is part of the contract, not a widening of convenience. The
+// first consumers (tool-call metrics, evidence index) bind only non-null counter
+// columns, so the narrower type held; decision_metrics has nullable columns and
+// a NULL is the correct value for "this run had no latency to report".
+// Measured on both drivers before widening: null binds and reads back as null
+// under bun:sqlite (strict) and node:sqlite (bare named params) alike, while
+// `undefined` throws "Provided value cannot be bound" on node:sqlite and is
+// silently stored as NULL by bun -- which is why callers normalize to null
+// rather than leaving a field off.
+export type SqliteParams = Record<string, string | number | null>;
 
 export interface SqliteStatement {
 	run(params?: SqliteParams): void;
