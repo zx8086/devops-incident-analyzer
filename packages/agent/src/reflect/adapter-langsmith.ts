@@ -4,25 +4,7 @@
 // locally (the checkpointer is in-memory, the daily log keeps failure CATEGORIES only by
 // design, SIO-1687), so LangSmith is the only place a past turn survives.
 //
-// SHAPE, as measured on the live project 2026-09-20 (do not infer it from the SDK types):
-//
-//   root run: name="agent.request", isRoot, tags ["chat","thread:<id>","datasources:a,b"]
-//     inputs.messages[]        LangChain-serialized: {id,kwargs:{content},lc,type}
-//     outputs.messages[]       either {type:"ai",content} or an unresolved {type:"constructor"}
-//     outputs.dataSourceResults[]  {dataSourceId,status,duration,toolOutputs[],toolErrors[]?}
-//       toolErrors[]           {toolName,category,message,retryable} -- the TYPED failure,
-//                              carrying a real ToolErrorCategory
-//       toolOutputs[]          {toolName,rawJson,toolArgs}
-//
-// Why the root's own outputs rather than the child runs: a trace has 300-400 children, and a
-// tool child's `error` is a free-text string whose category is only sometimes embedded (2 of
-// 5 sampled). dataSourceResults is what the app already built -- typed, deduped, and one
-// fetch instead of hundreds. Child runs are never listed here, which is also what keeps a
-// 230-run window affordable.
-//
-// listRuns is deprecated in favour of client.runs.query() after Jan 2027, but that method
-// does NOT exist in the installed langsmith@0.6.3 (verified: typeof c.runs?.query ===
-// "undefined"). Revisit when the dependency is upgraded.
+// Shapes here were MEASURED on the live project (2026-09-20), not inferred from SDK types.
 import { ToolErrorCategorySchema } from "@devops-agent/shared";
 import { Client } from "langsmith";
 import type { RawMessage, RawPart, RawSession } from "./schema.ts";
@@ -108,6 +90,11 @@ function isHeadless(tags: unknown): boolean {
 		.includes("chat");
 }
 
+// Reads the ROOT run's own outputs, never its child runs. A trace has 300-400 children and
+// a tool child's `error` is free text whose category is only sometimes embedded (2 of 5
+// sampled), whereas outputs.dataSourceResults is what the app already built: typed
+// toolErrors {toolName,category,message,retryable} plus toolOutputs {toolName,rawJson,
+// toolArgs}. One fetch instead of hundreds, which is what keeps a 230-run window affordable.
 export function runToRawSession(run: LangSmithRun): RawSession {
 	const inputs = asRecord(run.inputs);
 	const outputs = asRecord(run.outputs);
@@ -116,8 +103,17 @@ export function runToRawSession(run: LangSmithRun): RawSession {
 
 	const created = asString(run.start_time) ?? (run.start_time instanceof Date ? run.start_time.toISOString() : null);
 
-	for (const message of asArray(inputs.messages)) {
-		const text = messageContent(message);
+	// ONLY the turn this run introduced -- the LAST input message. `inputs.messages` carries
+	// the thread's accumulated user history, so a follow-up run repeats the turns of the runs
+	// before it (measured: one thread's two runs carried 1 then 2 messages, both `human`).
+	// Taking them all would re-emit an earlier reaction as a fresh signal in every later run
+	// of that thread, and aggregation would read one correction as a recurring gap.
+	//
+	// Nothing is lost: the earlier turn was already scanned as part of its own run.
+	const inputMessages = asArray(inputs.messages);
+	const ownTurn = inputMessages[inputMessages.length - 1];
+	if (ownTurn !== undefined) {
+		const text = messageContent(ownTurn);
 		if (text) messages.push({ role: "user", created, parts: [{ type: "text", text }] });
 	}
 
@@ -203,6 +199,9 @@ export async function listSessions(options: ListOptions): Promise<{ sessions: Ra
 	const warnings: string[] = [];
 
 	try {
+		// listRuns is deprecated in favour of client.runs.query() after Jan 2027, but that
+		// method does NOT exist in the installed langsmith@0.6.3 (verified: typeof
+		// c.runs?.query === "undefined"). Revisit on upgrade.
 		for await (const run of client.listRuns({
 			projectName: options.projectName ?? process.env.LANGSMITH_PROJECT,
 			isRoot: true,

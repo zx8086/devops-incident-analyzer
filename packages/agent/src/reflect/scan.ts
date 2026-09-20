@@ -24,8 +24,11 @@ const MIN_REQUEST_WORDS = 8;
 
 // Tuned on another author's sessions in the xskills source; treat every match as a lead to
 // verify, not a verdict (SIO-1834 risk table). Re-measure before letting these rank anything.
+// The delimiter accepts terminal punctuation, not just a comma or space: "Wrong. Use the
+// other index", "No! Use production" and "Stop; use staging" are corrections too, and the
+// comma-only form missed all three.
 const CORRECTION_RE =
-	/^(no|nope|wrong|not quite|actually|i said|i meant|that's not|thats not|stop|don't|dont|again|still)\b[,\s]/i;
+	/^(no|nope|wrong|not quite|actually|i said|i meant|that's not|thats not|stop|don't|dont|again|still)\b[,.!;:?\s-]/i;
 const REPROMPT_RE = /^(continue|go on|try again|retry|proceed|keep going|next|again)\b[.!]?$/i;
 const REDO_RE =
 	/\b(once again|another (full )?(round|pass|go)|one more time|re-?do|start over|from scratch|do it (again|properly|right)|again check|check again)\b/i;
@@ -230,15 +233,21 @@ export function scanSession(session: NormalizedSession): Scan {
 	// Headless runs have no user to react, and a replay's scripted prompts would otherwise
 	// read as corrections.
 	if (!session.source.headless) {
-		// Reactions are read only AFTER the opening turn: a session that opens by re-asking
-		// earlier work is not this session's failure (that is a cross-session retry, which
-		// A4 detects across scans rather than inside one).
+		// Reactions are read only AFTER the opening turn: a run that OPENS by re-asking
+		// earlier work is not that run's own failure. That case is a cross-session retry,
+		// which anchors.ts detects across runs.
 		//
 		// The boundary is the FIRST user turn, not `request`. `request` requires
-		// MIN_REQUEST_WORDS because it is the handle for cross-session matching, where a
-		// short opener produces meaningless overlap. A shorter opener is still the opener,
-		// so anchoring on `request` would let a brief "redo it from scratch" first turn
-		// blame this session for work a previous one failed at.
+		// MIN_REQUEST_WORDS because it is the handle for cross-run matching, where a short
+		// opener produces meaningless overlap. A shorter opener is still the opener, so
+		// anchoring on `request` would let a brief "redo it from scratch" first turn blame
+		// this run for work a previous one failed at.
+		//
+		// NOTE: the adapter keeps only the turn a run introduced, so today a LangSmith run
+		// has exactly one user turn and nothing survives this filter -- the within-run
+		// reaction lane is inert on that source, and cross-session retry carries the signal
+		// instead. The lane stays because it is source-agnostic: a transcript source with
+		// genuine multi-turn sessions feeds it directly.
 		const opening = turns[0];
 		const afterOpening = opening ? turns.filter(({ message }) => message.index > opening.message.index) : turns;
 

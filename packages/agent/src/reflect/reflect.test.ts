@@ -52,6 +52,27 @@ describe("adapter", () => {
 		expect(session.messages.length).toBe(1);
 	});
 
+	// Greptile P1 (PR #862), verified on real traces: inputs.messages carries the thread's
+	// accumulated user history (one thread's consecutive runs held 1 then 2 messages, both
+	// human). Taking them all would re-emit an earlier turn as a fresh signal in every later
+	// run of that thread.
+	test("only the turn this run introduced is kept, not the thread's history", () => {
+		const session = runToRawSession(
+			fakeRun({
+				inputs: {
+					messages: [
+						{ kwargs: { content: "the turn from the previous run of this thread" } },
+						{ kwargs: { content: "the turn this run actually introduced" } },
+					],
+				},
+			}),
+		);
+		const userTexts = session.messages
+			.filter((m) => m.role === "user")
+			.flatMap((m) => m.parts.map((p) => (p.type === "text" ? p.text : "")));
+		expect(userTexts).toEqual(["the turn this run actually introduced"]);
+	});
+
 	test("reads typed toolErrors into failed tool_result parts", () => {
 		const session = runToRawSession(
 			fakeRun({
@@ -94,6 +115,38 @@ describe("normalize", () => {
 		expect(clipped.length).toBe(TOOL_RESULT_CLIP + 3); // 600 + the "..." marker
 		expect(clipped).toContain("...");
 		expect(clip("short", TOOL_RESULT_CLIP)).toBe("short");
+	});
+
+	// Greptile P2 (PR #862): redacting only tool results left user text and tool arguments
+	// unredacted, and both reach a report -- user text as Scan.request.text and a reaction's
+	// evidence, tool args as a repeat-call's evidence.
+	test("redacts user text and tool arguments, not just tool results", () => {
+		const raw: RawSession = {
+			meta: { host: "x", id: "r", threadId: null, created: null, headless: false, datasources: [] },
+			messages: [
+				{ role: "user", created: null, parts: [{ type: "text", text: "contact me at alice@example.com" }] },
+				{
+					role: "assistant",
+					created: null,
+					parts: [
+						{ type: "tool_call", toolCallId: null, name: "t", input: '{"email":"bob@example.com"}' },
+						{
+							type: "tool_result",
+							toolCallId: null,
+							name: "t",
+							content: "failed for carol@example.com",
+							failed: true,
+							category: "bad-query",
+						},
+					],
+				},
+			],
+		};
+		const flat = JSON.stringify(normalizeSession(raw));
+		// redactPiiContent keeps hostnames and ids by design (SIO-861); emails are redacted.
+		expect(flat).not.toContain("alice@example.com");
+		expect(flat).not.toContain("bob@example.com");
+		expect(flat).not.toContain("carol@example.com");
 	});
 
 	test("assigns a message index", () => {
@@ -254,22 +307,57 @@ describe("scan", () => {
 		expect(scan.signals.some((s) => s.kind === "repeat-call")).toBe(false);
 	});
 
+	// The within-run reaction lane is source-agnostic, so it is exercised directly with a
+	// multi-turn normalized session. A LangSmith run cannot produce one (the adapter keeps
+	// only the turn that run introduced), which is why this does not go through fakeRun.
 	test("a user redo after the opening request is high and names the run's datasources", () => {
-		const scan = scanSession(
-			sessionFrom(
-				fakeRun({
-					inputs: {
-						messages: [
-							{ kwargs: { content: "please investigate the checkout latency spike this morning" } },
-							{ kwargs: { content: "no, start over from scratch please" } },
-						],
-					},
-				}),
-			),
-		);
+		const scan = scanSession({
+			source: {
+				host: "x",
+				id: "r",
+				threadId: null,
+				created: null,
+				headless: false,
+				datasources: ["aws", "elastic"],
+			},
+			messages: [
+				{
+					index: 0,
+					role: "user",
+					created: null,
+					parts: [{ type: "text", text: "please investigate the checkout latency spike this morning" }],
+				},
+				{ index: 1, role: "assistant", created: null, parts: [{ type: "text", text: "here is the report" }] },
+				{
+					index: 2,
+					role: "user",
+					created: null,
+					parts: [{ type: "text", text: "no, start over from scratch please" }],
+				},
+			],
+		});
 		const redo = scan.signals.find((s) => s.kind === "user-redo");
 		expect(redo?.severity).toBe("high");
 		expect(redo?.suspects).toEqual(["aws", "elastic"]);
+	});
+
+	// Greptile P2 (PR #862): the comma-only delimiter missed every punctuated correction.
+	test("a punctuated correction is a correction", () => {
+		for (const text of ["Wrong. Query the other index instead", "No! Use production", "Stop; use staging please"]) {
+			const scan = scanSession({
+				source: { host: "x", id: "r", threadId: null, created: null, headless: false, datasources: ["aws"] },
+				messages: [
+					{
+						index: 0,
+						role: "user",
+						created: null,
+						parts: [{ type: "text", text: "look at the checkout service errors this morning" }],
+					},
+					{ index: 1, role: "user", created: null, parts: [{ type: "text", text }] },
+				],
+			});
+			expect(scan.signals.some((s) => s.kind === "user-correction")).toBe(true);
+		}
 	});
 
 	test("the opening request itself never counts as a reaction", () => {
@@ -289,18 +377,18 @@ describe("scan", () => {
 	// opener (it just cannot serve as the cross-session matching handle), while a genuine
 	// reaction after it must still register.
 	test("a short opener is excluded but a later reaction still registers", () => {
-		const scan = scanSession(
-			sessionFrom(
-				fakeRun({
-					inputs: {
-						messages: [
-							{ kwargs: { content: "redo it from scratch" } },
-							{ kwargs: { content: "no, start over from scratch again" } },
-						],
-					},
-				}),
-			),
-		);
+		const scan = scanSession({
+			source: { host: "x", id: "r", threadId: null, created: null, headless: false, datasources: ["aws"] },
+			messages: [
+				{ index: 0, role: "user", created: null, parts: [{ type: "text", text: "redo it from scratch" }] },
+				{
+					index: 1,
+					role: "user",
+					created: null,
+					parts: [{ type: "text", text: "no, start over from scratch again" }],
+				},
+			],
+		});
 		expect(scan.request).toBeNull(); // too short to be a matching handle
 		const redo = scan.signals.find((s) => s.kind === "user-redo");
 		expect(redo?.count).toBe(1); // the later turn only, not the opener
