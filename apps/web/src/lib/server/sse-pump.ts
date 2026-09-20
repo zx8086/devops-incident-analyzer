@@ -134,8 +134,19 @@ export async function pumpEventStream(
 	let capReasons: string[] | undefined;
 	let lowConfidence: boolean | undefined;
 	const toolsUsed = new Set<string>();
+	// SIO-1835: the real LangSmith root run id, learned from the stream rather than invented.
+	let traceRunId: string | undefined;
 
 	for await (const event of eventStream) {
+		// SIO-1835: the FIRST event's run_id is the trace root LangSmith actually created.
+		// The app cannot choose it -- RunnableConfig has no top-level runId, and the
+		// `configurable.run_id` we pass is graph config that never reaches the tracer, so it
+		// survives only as extra.metadata.run_id. Feedback filed against that invented id
+		// resolved to no run at all (5 of 5 sampled), which is what this repairs.
+		if (traceRunId === undefined && event.run_id) {
+			traceRunId = event.run_id;
+			send({ type: "run_id", runId: traceRunId });
+		}
 		if (event.event === "on_chain_start" && event.name === HIL_LEARNING_ENTRY_NODE) {
 			hilLearningTurn = true;
 		}
