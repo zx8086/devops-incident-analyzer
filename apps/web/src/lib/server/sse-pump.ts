@@ -32,6 +32,10 @@ type EventStream = AsyncIterable<{
 	event?: string;
 	name?: string;
 	tags?: string[];
+	// SIO-1835: LangChain's StreamEvent declares run_id as required (core
+	// dist/tracers/event_stream.d.ts:69); optional here because this local type is a
+	// hand-narrowed view of it and the resume path's stub events do not set it.
+	run_id?: string;
 	// SIO-1271: `role` is stamped on every model instance by buildChatModel (packages/agent/src/llm.ts).
 	metadata?: { langgraph_node?: string; role?: string };
 	data?: {

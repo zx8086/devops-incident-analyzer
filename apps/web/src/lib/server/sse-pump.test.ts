@@ -8,6 +8,8 @@ type LangGraphEvent = {
 	event?: string;
 	name?: string;
 	tags?: string[];
+	// SIO-1835: the trace root id the client files feedback against.
+	run_id?: string;
 	// SIO-1271: mirrors the production EventStream type -- buildChatModel stamps `role` on every
 	// model instance, and the pump prefers it over the node name.
 	metadata?: { langgraph_node?: string; role?: string };
@@ -906,8 +908,8 @@ describe("pumpEventStream run_id", () => {
 
 	test("emits the first event's run_id, which is the trace root", async () => {
 		const ids = await runIdsFrom([
-			{ event: "on_chain_start", name: "classify", run_id: "01a0-root" } as unknown as LangGraphEvent,
-			{ event: "on_chain_end", name: "classify", run_id: "01a0-root" } as unknown as LangGraphEvent,
+			{ event: "on_chain_start", name: "classify", run_id: "01a0-root" },
+			{ event: "on_chain_end", name: "classify", run_id: "01a0-root" },
 		]);
 		expect(ids).toEqual(["01a0-root"]);
 	});
@@ -916,15 +918,15 @@ describe("pumpEventStream run_id", () => {
 	// node rather than the turn.
 	test("emits exactly once, ignoring child run ids", async () => {
 		const ids = await runIdsFrom([
-			{ event: "on_chain_start", name: "classify", run_id: "01a0-root" } as unknown as LangGraphEvent,
-			{ event: "on_chain_start", name: "aggregate", run_id: "child-1" } as unknown as LangGraphEvent,
-			{ event: "on_chain_end", name: "aggregate", run_id: "child-2" } as unknown as LangGraphEvent,
+			{ event: "on_chain_start", name: "classify", run_id: "01a0-root" },
+			{ event: "on_chain_start", name: "aggregate", run_id: "child-1" },
+			{ event: "on_chain_end", name: "aggregate", run_id: "child-2" },
 		]);
 		expect(ids).toEqual(["01a0-root"]);
 	});
 
 	test("a stream with no run_id emits none rather than an invented one", async () => {
-		const ids = await runIdsFrom([{ event: "on_chain_start", name: "classify" } as unknown as LangGraphEvent]);
+		const ids = await runIdsFrom([{ event: "on_chain_start", name: "classify" }]);
 		expect(ids).toEqual([]);
 	});
 });
