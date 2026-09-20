@@ -50,24 +50,27 @@ describe("SIO-1855 field discovery is reachable from the search action", () => {
 	// This agent is read-only (compliance/allowed-actions.yaml). Discovery must not have
 	// smuggled a data- or index-mutating tool into the search path.
 	//
-	// Named explicitly rather than pattern-matched: `elasticsearch_async_search_delete`
-	// releases a search CONTEXT the agent itself opened, which is read-only in effect and
-	// was already in this group. A /_(delete|put|...)/ regex flags it and teaches the next
-	// reader that the rule is about the verb rather than about mutating stored data.
+	// Derived from the NAME SHAPE, with one documented exception, rather than a hand-listed
+	// set (Greptile, PR #864): a list only catches the tools someone remembered, so adding
+	// elasticsearch_update_index_settings or _rollover to this group would leave a listed
+	// assertion green while breaking the guarantee in its name. A pattern catches anything
+	// new by default and has to be argued down, which is the safer direction to fail in.
+	//
+	// The single exception is `elasticsearch_async_search_delete`: it releases a search
+	// CONTEXT this agent itself opened, mutating no stored data, and predates this change.
 	test("no data- or index-mutating tool entered the search group", () => {
 		const { toolNames } = resolveActionTools(elasticLogsTool(), ["search"]);
-		const mutating = [
-			"elasticsearch_put_mapping",
-			"elasticsearch_index_document",
-			"elasticsearch_delete_document",
-			"elasticsearch_delete_index",
-			"elasticsearch_create_index",
-			"elasticsearch_update_document",
-			"elasticsearch_delete_by_query",
-			"elasticsearch_update_by_query",
-			"elasticsearch_bulk_operations",
-			"elasticsearch_reindex_documents",
-		];
-		for (const name of mutating) expect(toolNames).not.toContain(name);
+		const READ_ONLY_EXCEPTIONS = new Set(["elasticsearch_async_search_delete"]);
+		const MUTATING_VERB = /_(put|create|update|delete|reindex|bulk|rollover|restore|clone|shrink|split)(_|$)/;
+
+		const offenders = toolNames.filter((name) => MUTATING_VERB.test(name) && !READ_ONLY_EXCEPTIONS.has(name));
+		expect(offenders).toEqual([]);
+	});
+
+	// The exception must stay narrow: if the tool it names ever leaves the group, the
+	// carve-out should go with it rather than silently covering something else later.
+	test("the read-only exception still applies to a tool that is actually present", () => {
+		const { toolNames } = resolveActionTools(elasticLogsTool(), ["search"]);
+		expect(toolNames).toContain("elasticsearch_async_search_delete");
 	});
 });
