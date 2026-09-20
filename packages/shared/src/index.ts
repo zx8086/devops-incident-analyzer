@@ -197,6 +197,15 @@ export {
 	type KonnectConfig,
 	KonnectConfigSchema,
 } from "./datasource.ts";
+export {
+	createDecisionMetricsRecorder,
+	type DecisionMetricsLogger,
+	type DecisionMetricsRecorder,
+	type DecisionOutcome,
+	type DecisionRecord,
+	rankCorrelation,
+	resolveDecisionMetricsDbPath,
+} from "./decision-metrics.ts";
 export { embeddingMaxChars, truncateForEmbedding } from "./embedding-truncate.ts";
 export { type EnvLogger, readPositiveIntEnv, readPositiveMsEnv } from "./env-validation.ts";
 export { matchesFocus, normalize, tokenize } from "./focus-match.ts";
