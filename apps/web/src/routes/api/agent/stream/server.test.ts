@@ -364,7 +364,7 @@ describe("POST /api/agent/stream -- clientTimeZone", () => {
 });
 
 describe("POST /api/agent/stream — SSE stream", () => {
-	test("emits run_id, forwards aggregator chunks, then done", async () => {
+	test("forwards aggregator chunks, then done", async () => {
 		invokeAgentMock.mockImplementationOnce(async () => ({
 			async *[Symbol.asyncIterator]() {
 				yield {
@@ -404,7 +404,11 @@ describe("POST /api/agent/stream — SSE stream", () => {
 		const events = await collectSse(response);
 		const types = events.map((e) => e.type);
 
-		expect(types[0]).toBe("run_id");
+		// SIO-1835: run_id is no longer minted by the route and sent first. It is the trace
+		// root LangSmith created, learned from the first stream event -- these fixture events
+		// carry none, so none is emitted. Feedback filed against the old invented id resolved
+		// to no run at all; the run_id contract is covered in sse-pump.test.ts.
+		expect(types).not.toContain("run_id");
 		expect(types).toContain("node_start");
 		expect(types).toContain("node_end");
 		expect(types.filter((t) => t === "message")).toHaveLength(2);

@@ -8,6 +8,8 @@ type LangGraphEvent = {
 	event?: string;
 	name?: string;
 	tags?: string[];
+	// SIO-1835: the trace root id the client files feedback against.
+	run_id?: string;
 	// SIO-1271: mirrors the production EventStream type -- buildChatModel stamps `role` on every
 	// model instance, and the pump prefers it over the node name.
 	metadata?: { langgraph_node?: string; role?: string };
@@ -890,5 +892,41 @@ describe("pumpEventStream fleet_inbox", () => {
 		expect(await run({ fleetInboxDigest: { ...digest, estates: [] } })).toHaveLength(0);
 		expect(await run({ fleetInboxDigest: { nope: true } })).toHaveLength(0);
 		expect(await run({})).toHaveLength(0);
+	});
+});
+
+// SIO-1835: the run id the client files feedback against must be the trace root LangSmith
+// actually created. The app cannot choose it -- RunnableConfig has no top-level runId, and
+// the configurable.run_id we pass never reaches the tracer -- so feedback was being filed
+// against an invented UUID that resolved to no run at all (5 of 5 sampled).
+describe("pumpEventStream run_id", () => {
+	async function runIdsFrom(events: LangGraphEvent[]): Promise<string[]> {
+		const captured: Record<string, unknown>[] = [];
+		await pumpEventStream(fromArray(events), (e) => captured.push(e));
+		return captured.filter((e) => e.type === "run_id").map((e) => String(e.runId));
+	}
+
+	test("emits the first event's run_id, which is the trace root", async () => {
+		const ids = await runIdsFrom([
+			{ event: "on_chain_start", name: "classify", run_id: "01a0-root" },
+			{ event: "on_chain_end", name: "classify", run_id: "01a0-root" },
+		]);
+		expect(ids).toEqual(["01a0-root"]);
+	});
+
+	// Child runs carry their own ids. Emitting a later one would file feedback against a
+	// node rather than the turn.
+	test("emits exactly once, ignoring child run ids", async () => {
+		const ids = await runIdsFrom([
+			{ event: "on_chain_start", name: "classify", run_id: "01a0-root" },
+			{ event: "on_chain_start", name: "aggregate", run_id: "child-1" },
+			{ event: "on_chain_end", name: "aggregate", run_id: "child-2" },
+		]);
+		expect(ids).toEqual(["01a0-root"]);
+	});
+
+	test("a stream with no run_id emits none rather than an invented one", async () => {
+		const ids = await runIdsFrom([{ event: "on_chain_start", name: "classify" }]);
+		expect(ids).toEqual([]);
 	});
 });

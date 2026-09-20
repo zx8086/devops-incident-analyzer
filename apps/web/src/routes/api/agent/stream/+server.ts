@@ -126,8 +126,12 @@ export const POST: RequestHandler = async ({ request }) => {
 							async () => {
 								const startTime = Date.now();
 
-								// Send run_id immediately so client can submit feedback before graph output
-								send({ type: "run_id", runId });
+								// SIO-1835: the run_id the client files feedback against is no longer sent
+								// here. This one is minted locally and is NOT the trace root -- feedback
+								// filed against it resolved to no run at all. pumpEventStream now emits
+								// the real root id from the first stream event instead, a few hundred ms
+								// later. `runId` below still flows into configurable/metadata as the
+								// app-side request correlator, which is all it was ever valid for.
 
 								// Send attachment warnings if any
 								if (processedAttachments?.warnings.length) {
