@@ -78,9 +78,75 @@ describe("SIO-1656 array parameters on proxied tools", () => {
 		expect(shape.include?.safeParse(["diffs"]).success).toBe(true);
 		expect(shape.include?.safeParse(["diffs", "pipelines"]).success).toBe(false);
 		expect(shape.labels?.safeParse([]).success).toBe(false);
-		// No bound declared, no bound invented.
+		// Without a tool name there is nothing to look up, so a schema that declares no
+		// bound gets none. SIO-1854 supplies the bound by TOOL, not by guessing from a key.
 		const unbounded = buildZodShapeFromJsonSchema(GET_MERGE_REQUEST_SCHEMA);
 		expect(unbounded.include?.safeParse(["diffs", "pipelines"]).success).toBe(true);
+	});
+
+	// SIO-1854. The regression this closes: SIO-1656 carried maxItems through faithfully,
+	// but GitLab ENFORCES the one-facet limit without DECLARING it, so the bound never bound.
+	// Measured in the SIO-1834 reflection window: 4 sessions, 2 of them after SIO-1656 shipped.
+	// Note GET_MERGE_REQUEST_SCHEMA is the real upstream shape -- no maxItems anywhere in it.
+	describe("caps GitLab enforces but does not declare", () => {
+		test("the real upstream schema still refuses a two-facet include, once the tool is named", () => {
+			const shape = buildZodShapeFromJsonSchema(GET_MERGE_REQUEST_SCHEMA, "get_merge_request");
+			expect(shape.include?.safeParse(["commits"]).success).toBe(true);
+			// The exact call GitLab answered with "include cannot contain more than 1 items".
+			expect(shape.include?.safeParse(["diffs", "pipelines"]).success).toBe(false);
+		});
+
+		test("the prefixed tool name resolves too, since callers use either form", () => {
+			const shape = buildZodShapeFromJsonSchema(GET_MERGE_REQUEST_SCHEMA, "gitlab_get_merge_request");
+			expect(shape.include?.safeParse(["diffs", "pipelines"]).success).toBe(false);
+		});
+
+		test("get_pipeline carries the same one-facet limit", () => {
+			const schema = {
+				type: "object" as const,
+				properties: { include: { type: "array", items: { type: "string", enum: ["jobs", "variables"] } } },
+			};
+			const shape = buildZodShapeFromJsonSchema(schema, "get_pipeline");
+			expect(shape.include?.safeParse(["jobs"]).success).toBe(true);
+			expect(shape.include?.safeParse(["jobs", "variables"]).success).toBe(false);
+		});
+
+		// The table must decay on its own: when GitLab starts declaring the bound, its
+		// number wins, so a later upstream change cannot be silently overridden from here.
+		test("an upstream-declared bound wins over the table", () => {
+			const schema = {
+				type: "object" as const,
+				properties: {
+					include: { ...GET_MERGE_REQUEST_SCHEMA.properties.include, maxItems: 3 },
+				},
+			};
+			const shape = buildZodShapeFromJsonSchema(schema, "get_merge_request");
+			expect(shape.include?.safeParse(["diffs", "commits", "notes"]).success).toBe(true);
+			expect(shape.include?.safeParse(["diffs", "commits", "notes", "pipelines"]).success).toBe(false);
+		});
+
+		test("a tool with no known cap is untouched", () => {
+			const schema = {
+				type: "object" as const,
+				properties: { include: { type: "array", items: { type: "string" } } },
+			};
+			const shape = buildZodShapeFromJsonSchema(schema, "list_projects");
+			expect(shape.include?.safeParse(["a", "b", "c"]).success).toBe(true);
+		});
+
+		// Only the named key is capped: a sibling array on the same tool stays unbounded.
+		test("a different array on a capped tool is unaffected", () => {
+			const schema = {
+				type: "object" as const,
+				properties: {
+					include: { type: "array", items: { type: "string" } },
+					labels: { type: "array", items: { type: "string" } },
+				},
+			};
+			const shape = buildZodShapeFromJsonSchema(schema, "get_merge_request");
+			expect(shape.labels?.safeParse(["a", "b", "c"]).success).toBe(true);
+			expect(shape.include?.safeParse(["a", "b"]).success).toBe(false);
+		});
 	});
 
 	test("required vs optional is preserved", () => {
