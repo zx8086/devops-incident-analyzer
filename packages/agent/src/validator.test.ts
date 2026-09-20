@@ -101,3 +101,56 @@ describe("validate() catches a DDL-backstop-only answer (SIO-1273 follow-up, 202
 		expect(result.validationResult).not.toBe("fail");
 	});
 });
+
+// SIO-1857: the timestamp check normalized by STRIPPING a "+02:00" suffix textually, so
+// 2026-09-19T22:10:46+02:00 and 2026-09-19T20:10:46Z -- the same instant, and exactly how
+// Kibana's CET display relates to the UTC log line behind it -- produced different keys.
+// A correctly converted timestamp was then reported as fabricated. Observed on a live run
+// (2026-09-20) in a repo whose incidents are routinely anchored from a CET console.
+//
+// The warning is logged, not returned in state, so these assert the OBSERVABLE outcome:
+// a clean answer passes, an unsourced timestamp downgrades to pass_with_warnings.
+describe("SIO-1857 an offset timestamp is converted, not stripped", () => {
+	const sourceWithUtcLog = (ts: string): DataSourceResult[] =>
+		[
+			{
+				dataSourceId: "elastic",
+				status: "success",
+				data: `ERROR at ${ts} in localcore-service`,
+				duration: 100,
+				toolErrors: [],
+			},
+		] as DataSourceResult[];
+
+	function resultFor(answer: string, sourceTs: string) {
+		return validate(makeState({ finalAnswer: answer, retryCount: 0, dataSourceResults: sourceWithUtcLog(sourceTs) }));
+	}
+
+	test("the same instant in CET and UTC passes clean", () => {
+		// The answer quotes the operator-facing CET form; the log carries UTC.
+		const result = resultFor(
+			"The elastic log shows the error at 2026-09-19T22:10:46+02:00 for localcore-service.",
+			"2026-09-19T20:10:46Z",
+		);
+		expect(result.validationResult).toBe("pass");
+	});
+
+	test("a genuinely unsourced timestamp still downgrades the result", () => {
+		const result = resultFor(
+			"The elastic log shows a second failure at 2026-09-19T23:59:00Z for localcore-service.",
+			"2026-09-19T20:10:46Z",
+		);
+		expect(result.validationResult).toBe("pass_with_warnings");
+	});
+
+	test("the AWS space form and a negative offset both match their UTC source", () => {
+		expect(
+			resultFor("The elastic log shows it at 2026-09-19 20:10:46 for localcore-service.", "2026-09-19T20:10:46Z")
+				.validationResult,
+		).toBe("pass");
+		expect(
+			resultFor("The elastic log shows it at 2026-09-19T15:10:46-05:00 for localcore-service.", "2026-09-19T20:10:46Z")
+				.validationResult,
+		).toBe("pass");
+	});
+});

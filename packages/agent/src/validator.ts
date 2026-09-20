@@ -86,11 +86,24 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 
 	// Collapse AWS/ISO/precision variants to a single canonical key so source and
 	// answer matches compare equal regardless of which form each side used.
-	const normalizeTimestamp = (ts: string): string =>
-		ts
-			.replace(" ", "T")
-			.replace(/\.\d+/, "")
-			.replace(/(Z|GMT|UTC|[+-]\d{2}:?\d{2})$/, "");
+	//
+	// SIO-1857: an OFFSET is converted, not stripped. Dropping "+02:00" textually made
+	// 2026-09-19T22:10:46+02:00 and 2026-09-19T20:10:46Z -- the same instant, and exactly
+	// how Kibana's CET display relates to the UTC log line behind it -- normalize to
+	// different keys, so a correctly converted timestamp was reported as fabricated.
+	// A bare timestamp (no suffix) is read as UTC, which is what the old behaviour assumed
+	// and what every source in this repo emits.
+	const normalizeTimestamp = (ts: string): string => {
+		const spaceless = ts.replace(" ", "T");
+		const hasZone = /(Z|GMT|UTC|[+-]\d{2}:?\d{2})$/.test(spaceless);
+		const parsed = new Date(hasZone ? spaceless.replace(/(GMT|UTC)$/, "Z") : `${spaceless}Z`);
+		// An unparseable match falls back to the old textual key rather than throwing:
+		// the regex is looser than Date, and a bad key only costs a false warning.
+		if (Number.isNaN(parsed.getTime())) {
+			return spaceless.replace(/\.\d+/, "").replace(/(Z|GMT|UTC|[+-]\d{2}:?\d{2})$/, "");
+		}
+		return parsed.toISOString().replace(/\.\d+Z$/, "");
+	};
 
 	const answerTimestamps = answer.match(timestampPattern) ?? [];
 	const sourceTimestamps = new Set((sourceData.match(timestampPattern) ?? []).map(normalizeTimestamp));
