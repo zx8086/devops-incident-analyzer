@@ -37,9 +37,23 @@ if (!dbPath) {
 	process.exit(1);
 }
 
-const since = argValue("--since");
+const sinceArg = argValue("--since");
 const seam = argValue("--seam");
-// `at` is ISO-8601, so a string comparison IS a chronological one.
+// Greptile PR #868: `at` is written by Date.toISOString(), so a string compare is
+// chronological ONLY against that exact format. A user-supplied --since is not:
+// "2026-09-20T12:00:00+02:00" is the same instant as a stored
+// "2026-09-20T10:00:00.000Z" but sorts after it, and even "...T10:00:00Z" sorts
+// after "...T10:00:00.000Z" and drops the boundary row. Verified both by running
+// them. Normalizing through Date gives the comparison the same shape as the data.
+let since: string | undefined;
+if (sinceArg !== undefined) {
+	const parsed = new Date(sinceArg);
+	if (Number.isNaN(parsed.getTime())) {
+		console.error(`--since is not a valid date: ${sinceArg}`);
+		process.exit(1);
+	}
+	since = parsed.toISOString();
+}
 const where: string[] = [];
 const params: Record<string, string> = {};
 if (since) {

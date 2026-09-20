@@ -14,6 +14,7 @@ import {
 	rankCorrelation,
 	resolveDecisionMetricsDbPath,
 } from "./decision-metrics.ts";
+import { openSqlite } from "./sqlite-open.ts";
 
 let dir: string;
 
@@ -92,13 +93,22 @@ describe("rankCorrelation", () => {
 		expect(rankCorrelation([1, 1, 1], [0, 1, 2])).toBeUndefined();
 	});
 
-	test("handles ties without the no-ties shortcut formula", () => {
-		// The 6*sum(d^2) shortcut is invalid with ties; tied model scores are
-		// expected here, so the general form must be used.
+	test("ties get average ranks, so the result is Spearman and not raw Pearson", () => {
+		// Greptile PR #868: the two agree without ties, which is why an earlier
+		// raw-Pearson implementation passed. With a tie they do not, and the exact
+		// value below is the one a correct average-rank transform produces:
+		// [0,1,1,3] -> [1,2.5,2.5,4], [0,1,2,3] -> [1,2,3,4]. Raw Pearson over the
+		// untransformed inputs gives 0.923381 instead.
 		const rho = rankCorrelation([0, 1, 1, 3], [0, 1, 2, 3]);
-		expect(rho).toBeDefined();
-		expect(rho as number).toBeGreaterThan(0.9);
-		expect(rho as number).toBeLessThan(1);
+		expect(rho).toBeCloseTo(0.948683, 6);
+		expect(rho).not.toBeCloseTo(0.923381, 6);
+	});
+
+	test("is invariant to scale, because it ranks before correlating", () => {
+		// Ranks, not magnitudes: a caller may pass positions, scores, or anything
+		// monotonically related to them and get the same answer.
+		expect(rankCorrelation([1, 2, 3, 4], [10, 20, 30, 40])).toBeCloseTo(1, 10);
+		expect(rankCorrelation([1, 2, 3, 4], [5, 500, 5000, 50000])).toBeCloseTo(1, 10);
 	});
 });
 
@@ -186,6 +196,44 @@ describe("createDecisionMetricsRecorder", () => {
 		second?.close();
 
 		expect(readRows(dbPath)).toHaveLength(2);
+	});
+
+	test("closes the handle when setup fails after the open succeeds", async () => {
+		// Greptile PR #868. Seed a `decision_metrics` object of the wrong kind so the
+		// open succeeds and CREATE INDEX then fails: open ok, setup not, and
+		// returning undefined leaves the caller no handle to release.
+		//
+		// The check is that close() was CALLED, not that a second connection is
+		// blocked -- measured, bun:sqlite lets another connection read and write
+		// while the first is open, so a leak is invisible from outside the handle.
+		// The only honest observation is the handle's own close, hence the counter.
+		const dbPath = join(dir, "leak.sqlite");
+		const seed = new Database(dbPath, { create: true });
+		seed.run("CREATE TABLE other (a TEXT)");
+		seed.run("CREATE VIEW decision_metrics AS SELECT a FROM other");
+		seed.close(false);
+
+		let closes = 0;
+		const { logger, messages } = collectingLogger();
+		const recorder = await createDecisionMetricsRecorder({
+			dbPath,
+			logger,
+			openDb: async (path) => {
+				const db = await openSqlite(path, { bareNamedParameters: true });
+				return {
+					exec: (sql: string) => db.exec(sql),
+					prepare: (sql: string) => db.prepare(sql),
+					close: () => {
+						closes += 1;
+						db.close();
+					},
+				};
+			},
+		});
+
+		expect(recorder).toBeUndefined();
+		expect(messages[0]).toContain("cannot open database");
+		expect(closes).toBe(1);
 	});
 
 	test("returns undefined and warns when the database cannot be opened", async () => {
