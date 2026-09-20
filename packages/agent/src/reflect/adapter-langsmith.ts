@@ -7,6 +7,7 @@
 // Shapes here were MEASURED on the live project (2026-09-20), not inferred from SDK types.
 import { ToolErrorCategorySchema } from "@devops-agent/shared";
 import { Client } from "langsmith";
+import { z } from "zod";
 import type { RawMessage, RawPart, RawSession } from "./schema.ts";
 import { RawSessionSchema } from "./schema.ts";
 
@@ -28,6 +29,40 @@ interface LangSmithRun {
 	outputs?: unknown;
 	extra?: unknown;
 }
+
+// SIO-1834: the shapes this adapter actually consumes from a LangSmith run. Validated at the
+// boundary rather than only on the way out, because the coercion helpers below turn a
+// malformed field into an empty one -- and in THIS pipeline an empty result is not a safe
+// default: a run whose dataSourceResults failed to parse would silently contribute no tool
+// calls and read as a clean session, which is the failure mode the whole report exists to
+// avoid. `.catch()` keeps one bad run from losing the window; the caller records a warning.
+//
+// Deliberately permissive about fields we never read: LangSmith owns this payload and adds
+// to it, so an unknown key is normal and must not fail the run.
+const ToolOutputSchema = z
+	.object({ toolName: z.string().optional(), rawJson: z.unknown().optional(), toolArgs: z.unknown().optional() })
+	.loose();
+
+const ToolErrorEntrySchema = z
+	.object({ toolName: z.string().optional(), category: z.unknown().optional(), message: z.string().optional() })
+	.loose();
+
+const DataSourceResultSchema = z
+	.object({
+		dataSourceId: z.string().optional(),
+		toolOutputs: z.array(ToolOutputSchema).optional(),
+		toolErrors: z.array(ToolErrorEntrySchema).optional(),
+	})
+	.loose();
+
+export const RunOutputsSchema = z
+	.object({
+		dataSourceResults: z.array(DataSourceResultSchema).optional(),
+		messages: z.array(z.unknown()).optional(),
+	})
+	.loose();
+
+export const RunInputsSchema = z.object({ messages: z.array(z.unknown()).optional() }).loose();
 
 function asRecord(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -144,8 +179,11 @@ function isHeadless(tags: unknown): boolean {
 // toolErrors {toolName,category,message,retryable} plus toolOutputs {toolName,rawJson,
 // toolArgs}. One fetch instead of hundreds, which is what keeps a 230-run window affordable.
 export function runToRawSession(run: LangSmithRun): RawSession {
-	const inputs = asRecord(run.inputs);
-	const outputs = asRecord(run.outputs);
+	// Validated, not coerced: a run whose outputs are the wrong shape THROWS here and is
+	// reported as a warning by listSessions, instead of silently yielding a session with no
+	// tool calls that would read as a clean run.
+	const inputs = RunInputsSchema.parse(asRecord(run.inputs));
+	const outputs = RunOutputsSchema.parse(asRecord(run.outputs));
 	const tags = run.tags;
 	const messages: RawMessage[] = [];
 

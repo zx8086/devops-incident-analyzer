@@ -73,6 +73,31 @@ describe("adapter", () => {
 		expect(userTexts).toEqual(["the turn this run actually introduced"]);
 	});
 
+	// Greptile (PR #862): the coercion helpers turned a malformed field into an empty one
+	// BEFORE RawSessionSchema saw it, so a corrupt run yielded a session with no tool calls
+	// -- indistinguishable from a clean one, in a pipeline whose entire job is spotting
+	// failures. It must be reported, not silently emptied.
+	test("a malformed run is rejected rather than quietly read as empty", () => {
+		expect(() => runToRawSession(fakeRun({ outputs: { dataSourceResults: "not-an-array" } }))).toThrow();
+		expect(() => runToRawSession(fakeRun({ outputs: { dataSourceResults: [{ toolOutputs: 42 }] } }))).toThrow();
+	});
+
+	// LangSmith owns this payload and adds fields to it, so an unknown key is normal and
+	// must never fail a run.
+	test("an unknown field from LangSmith is tolerated", () => {
+		const session = runToRawSession(
+			fakeRun({
+				outputs: {
+					someFutureField: { nested: true },
+					dataSourceResults: [
+						{ dataSourceId: "aws", somethingNew: 1, toolOutputs: [{ toolName: "aws_x", toolArgs: {} }] },
+					],
+				},
+			}),
+		);
+		expect(session.messages.some((m) => m.parts.some((p) => p.type === "tool_call"))).toBe(true);
+	});
+
 	test("reads typed toolErrors into failed tool_result parts", () => {
 		const session = runToRawSession(
 			fakeRun({
