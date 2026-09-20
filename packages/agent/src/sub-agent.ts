@@ -2113,19 +2113,36 @@ ${state.correlationFetchDirective}`
 					},
 					observe: observeEcsPage,
 					blocker: () => runSignals.absenceBlockedBy,
+					deadlineAt: getGraphDeadlineAt(config),
 				});
 				if (walked.length > 0) {
-					log.info(
-						{
-							event: "subagent.aws_absence_completed",
-							deploymentId,
-							clustersWalked: walked,
-							durationMs: Date.now() - startedAt,
-							provenAfter: runSignals.serviceAbsent,
-							blockedByAfter: runSignals.absenceBlockedBy,
-						},
-						"Completed the ECS enumeration the model left unfinished",
-					);
+					// Greptile P1 on #855: the report text is finalized before this runs, so a
+					// completion that CONTRADICTS it cannot edit the prose. That is survivable in
+					// one direction only, and the asymmetry is worth stating. serviceAbsent is a
+					// suppression-only signal (pi-verifier.ts:180 adds to `absent`, never asserts
+					// presence): proving absence suppresses the card and agrees with a report that
+					// said absent, while finding a MATCH leaves serviceAbsent false, so the verify
+					// card is still proposed and the operator gets the live cross-check. The prose
+					// can still read "absent" in that case, so log it loudly rather than as a
+					// success -- this is the one case where the report and the ledger disagree.
+					const contradicted = runSignals.absenceBlockedBy === "matched";
+					const entry = {
+						event: "subagent.aws_absence_completed",
+						deploymentId,
+						clustersWalked: walked,
+						durationMs: Date.now() - startedAt,
+						provenAfter: runSignals.serviceAbsent,
+						blockedByAfter: runSignals.absenceBlockedBy,
+						...(contradicted && { contradictsReport: true }),
+					};
+					if (contradicted) {
+						log.warn(
+							entry,
+							"Completion found the focus service in a cluster the model left unwalked; the report text may still call it absent",
+						);
+					} else {
+						log.info(entry, "Completed the ECS enumeration the model left unfinished");
+					}
 				}
 			} catch (error) {
 				log.warn(
