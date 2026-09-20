@@ -133,17 +133,33 @@ function fingerprint(value: unknown): string {
 }
 
 // LangChain serializes a message as {kwargs:{content}} when hydrated, and leaves a bare
-// {type:"constructor"} when it could not resolve the class. Both appear in real traces.
+// {type:"constructor"} when it could not resolve the class. Both appear in real traces, and
+// `content` is legitimately a string, or an array of blocks, in either form.
+//
+// A UNION rather than one shape: all three are valid LangChain output, so rejecting any of
+// them would drop real turns. Anything else yields "" -- correct here, because a message
+// whose content this adapter cannot read contributes no text, and the run itself has
+// already passed RunInputsSchema / RunOutputsSchema at the boundary.
+const ContentBlocksSchema = z.array(z.object({ text: z.string() }).loose());
+const MessageContentSchema = z.union([
+	z.object({ content: z.string() }).loose(),
+	z.object({ content: ContentBlocksSchema }).loose(),
+	z.object({ kwargs: z.object({ content: z.string() }).loose() }).loose(),
+	z.object({ kwargs: z.object({ content: ContentBlocksSchema }).loose() }).loose(),
+]);
+
 function messageContent(message: unknown): string {
-	const record = asRecord(message);
-	const direct = asString(record.content);
-	if (direct) return direct;
-	const kwargs = asRecord(record.kwargs);
-	const content = kwargs.content;
-	if (typeof content === "string") return content;
-	// A content array is the multi-part form: keep only the text blocks.
-	return asArray(content)
-		.map((block) => asString(asRecord(block).text) ?? "")
+	const parsed = MessageContentSchema.safeParse(message);
+	if (!parsed.success) return "";
+	// `.loose()` keeps unknown keys, which widens the extracted value to `unknown`. Parsing
+	// it against the content schema narrows it without a cast -- and the union above has
+	// already established that one of these two forms is present.
+	const raw = "content" in parsed.data ? parsed.data.content : parsed.data.kwargs.content;
+	const content = z.union([z.string(), ContentBlocksSchema]).safeParse(raw);
+	if (!content.success) return "";
+	if (typeof content.data === "string") return content.data;
+	return content.data
+		.map((block) => block.text)
 		.filter(Boolean)
 		.join("\n");
 }

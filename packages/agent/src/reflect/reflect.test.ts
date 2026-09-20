@@ -98,6 +98,26 @@ describe("adapter", () => {
 		expect(session.messages.some((m) => m.parts.some((p) => p.type === "tool_call"))).toBe(true);
 	});
 
+	// LangChain emits all four of these, so the content reader is a Zod UNION rather than one
+	// shape: rejecting any would drop real turns. Anything else reads as empty, which is safe
+	// because the run has already passed the boundary schemas.
+	test("every LangChain message shape is read, and an unreadable one is empty", () => {
+		const shapes: Array<[string, unknown]> = [
+			["hydrated string", { kwargs: { content: "hello" } }],
+			["direct string", { content: "hello" }],
+			["direct blocks", { content: [{ type: "text", text: "hello" }] }],
+			["hydrated blocks", { kwargs: { content: [{ type: "text", text: "hello" }] } }],
+		];
+		for (const [label, message] of shapes) {
+			const session = runToRawSession(fakeRun({ inputs: { messages: [message] } }));
+			const text = session.messages.find((m) => m.role === "user")?.parts[0];
+			expect(text && text.type === "text" ? text.text : `MISSED: ${label}`).toBe("hello");
+		}
+		// Unreadable content contributes no turn rather than throwing away the run.
+		const odd = runToRawSession(fakeRun({ inputs: { messages: [{ kwargs: { content: 42 } }] } }));
+		expect(odd.messages.some((m) => m.role === "user")).toBe(false);
+	});
+
 	test("reads typed toolErrors into failed tool_result parts", () => {
 		const session = runToRawSession(
 			fakeRun({
