@@ -160,6 +160,63 @@ export function parseDiagnoses(raw: unknown): Map<string, Diagnosis> | null {
 const SEV_ORDER: Record<Severity, number> = { critical: 0, warn: 1, info: 2 };
 const NOTABLE_CAP = 10;
 
+// SIO-1832: every header names the account the same way -- `aws-<id>` alone, or
+// `aws-<id> (<name>)` when the host knows its friendly name. One helper so the
+// four shapes cannot drift apart, and so the form stays the one
+// contracts/report.ts parses.
+function accountLabel(accountId: string, accountName?: string): string {
+	return accountName ? `aws-${accountId} (${accountName})` : `aws-${accountId}`;
+}
+
+// The name reaches the monitor as an env var written by the bootstrap from
+// Terraform's agent_name, so it is operator-supplied and must be treated as
+// untrusted: anything outside the contract's charset would produce a header
+// that parseMonitorHeader rejects outright, silently emptying the fleet inbox.
+// Rejected rather than sanitised -- a mangled name in every subject is worse
+// than no name.
+//
+// `aws-<id>` is dropped too: that is Terraform's own fallback when agent_name is
+// empty, and repeating it would render as `aws-<id> (aws-<id>)`.
+const ACCOUNT_NAME_OK = /^[a-z0-9-]{1,64}$/;
+
+export function accountNameFromEnv(value: string | undefined, accountId: string): string | undefined {
+	const name = (value ?? "").trim();
+	if (name === "" || name === `aws-${accountId}`) return undefined;
+	return ACCOUNT_NAME_OK.test(name) ? name : undefined;
+}
+
+// SIO-1832: a finding summary is wrapped onto its own indented line(s) instead
+// of being truncated mid-token on the resource line. Wrapped on whitespace so a
+// Java FQN or a log group path stays readable; a single token longer than the
+// width is left over-long rather than cut, because half an exception class name
+// is worse than one wide line.
+//
+// Newlines are FOLDED first: the summary carries untrusted log text, and a raw
+// newline would let one log event forge extra digest lines (the same reason
+// summariseLogSample folds them at the source).
+const SUMMARY_WRAP = 76;
+
+function wrapSummary(summary: string, width = SUMMARY_WRAP): string[] {
+	const flat = summary.replace(/\s+/g, " ").trim();
+	if (flat === "") return [];
+	const out: string[] = [];
+	let line = "";
+	for (const word of flat.split(" ")) {
+		if (line === "") line = word;
+		else if (line.length + 1 + word.length <= width) line += ` ${word}`;
+		// A word that cannot fit on a line of its own would otherwise strand the
+		// short word before it ("at" alone above a 120-char Java frame). Keep them
+		// together and let the line run long -- it was going to run long anyway.
+		else if (word.length > width) line += ` ${word}`;
+		else {
+			out.push(line);
+			line = word;
+		}
+	}
+	if (line !== "") out.push(line);
+	return out;
+}
+
 export function formatIncidentReport(
 	accountId: string,
 	// skipped: a per-finding reason it was left out of the investigation batch
@@ -169,10 +226,11 @@ export function formatIncidentReport(
 	items: { finding: Finding; diagnosis: Diagnosis | null; skipped?: string; reusedFrom?: string }[],
 	investigationFailure?: string | null,
 	suppressedCount = 0,
+	accountName?: string,
 ): string {
 	const sorted = [...items].sort((a, b) => SEV_ORDER[a.finding.severity] - SEV_ORDER[b.finding.severity]);
 	const top = sorted[0]?.finding.severity ?? "info";
-	const lines: string[] = [`[${top}] aws-${accountId}: ${sorted.length} finding(s)`, ""];
+	const lines: string[] = [`[${top}] ${accountLabel(accountId, accountName)}: ${sorted.length} finding(s)`, ""];
 	for (const { finding, diagnosis, skipped, reusedFrom } of sorted) {
 		lines.push(formatFindingLine(finding));
 		if (diagnosis) {
@@ -339,10 +397,14 @@ export function suppressionReviewFromJournal(
 // the window, so accepted noise gets re-examined instead of forgotten.
 export function formatSuppressionReview(input: {
 	accountId: string;
+	accountName?: string;
 	windowDays: number;
 	entries: SuppressionReviewEntry[];
 }): string {
-	const lines = [`[info] aws-${input.accountId} suppression review (last ${input.windowDays}d)`, ""];
+	const lines = [
+		`[info] ${accountLabel(input.accountId, input.accountName)} suppression review (last ${input.windowDays}d)`,
+		"",
+	];
 	if (input.entries.length === 0) {
 		lines.push("suppression ledger is empty; nothing is being masked.");
 		return lines.join("\n");
@@ -362,6 +424,9 @@ export function formatSuppressionReview(input: {
 
 export type DigestInput = {
 	accountId: string;
+	// SIO-1832: undefined on a host whose bootstrap predates the env var, so the
+	// header falls back to the bare account id.
+	accountName?: string;
 	since: string;
 	findingCounts: Record<string, number>;
 	checkErrors: number;
@@ -389,19 +454,12 @@ export function formatDigest(d: DigestInput): string {
 		: "";
 	const degradedNote = d.checkErrors > 0 ? `DEGRADED: ${d.checkErrors} check error(s) (since ${d.since})` : "";
 	const notes = [pausedNote, degradedNote].filter(Boolean);
+	const account = accountLabel(d.accountId, d.accountName);
 	const header =
 		notes.length > 0
-			? `[warn] aws-${d.accountId} daily digest ${notes.join("; ")}`
-			: `[info] aws-${d.accountId} daily digest (since ${d.since})`;
+			? `[warn] ${account} daily digest ${notes.join("; ")}`
+			: `[info] ${account} daily digest (since ${d.since})`;
 	const lines: string[] = [header, ""];
-	if (total === 0) {
-		lines.push("- findings: no findings in the last 24h");
-	} else {
-		const parts = Object.entries(d.findingCounts)
-			.map(([k, v]) => `${k}=${v}`)
-			.join(" ");
-		lines.push(`- findings: ${total} (${parts})`);
-	}
 	// Counts alone hide what actually needs follow-up: name every warn+
 	// finding so the digest is reviewable without a journal round-trip.
 	// Uninvestigated findings lead so they always survive the display cap: an
@@ -412,29 +470,30 @@ export function formatDigest(d: DigestInput): string {
 		.sort(
 			(a, b) => Number(b.uninvestigated) - Number(a.uninvestigated) || SEV_ORDER[a.severity] - SEV_ORDER[b.severity],
 		);
-	if (notables.length > 0) {
-		lines.push("- notable warn+ findings (last 24h):");
-		for (const n of notables.slice(0, NOTABLE_CAP)) {
-			const marker = n.uninvestigated ? " [uninvestigated]" : "";
-			// A repeat count only when there IS a repeat, so the common
-			// single-occurrence line is unchanged.
-			const repeat = n.occurrences > 1 ? ` (x${n.occurrences})` : "";
-			lines.push(`  - (${n.severity}/${n.family}) ${n.resource}: ${n.summary}${repeat}${marker}`);
-		}
-		if (notables.length > NOTABLE_CAP) {
-			lines.push(`  - +${notables.length - NOTABLE_CAP} more warn+ finding(s) in the journal`);
-		}
-		const uninvestigated = notables.filter((n) => n.uninvestigated).length;
-		if (uninvestigated > 0) lines.push(`- uninvestigated: ${uninvestigated}`);
+	const uninvestigated = notables.filter((n) => n.uninvestigated).length;
+
+	// SIO-1832: what decides whether to read on, before the detail. Same
+	// `- label: value` shape as every other line so the web pane
+	// (apps/web/src/lib/digest-emphasis.ts) still bolds the label.
+	//
+	// Only NON-ZERO attention items are named, and the line is omitted entirely
+	// on a clean day: "0 uninvestigated, 0 check error(s)" is precisely the noise
+	// a quiet digest must not carry, and a digest that reads quiet at a glance is
+	// the point of the dead-man signal.
+	const attention = [
+		uninvestigated > 0 ? `${uninvestigated} uninvestigated` : "",
+		d.checkErrors > 0 ? `${d.checkErrors} check error(s)` : "",
+		(d.suppressedCount ?? 0) > 0 ? `${d.suppressedCount} suppressed` : "",
+	].filter(Boolean);
+	if (attention.length > 0) lines.push(`- needs attention: ${attention.join(", ")}`);
+	if (total === 0) {
+		lines.push("- findings: no findings in the last 24h");
+	} else {
+		const parts = Object.entries(d.findingCounts)
+			.map(([k, v]) => `${k}=${v}`)
+			.join(" ");
+		lines.push(`- findings: ${total} (${parts})`);
 	}
-	// DEGRADED must be self-explanatory from the mailbox: name the failing
-	// family, not just the count.
-	const byCheck = Object.entries(d.checkErrorsByCheck ?? {});
-	lines.push(
-		byCheck.length > 0
-			? `- check errors: ${d.checkErrors} (${byCheck.map(([k, v]) => `${k}=${v}`).join(" ")})`
-			: `- check errors: ${d.checkErrors}`,
-	);
 	const scaling = d.scalingTriggersInAlarm ?? 0;
 	const scalingNote = scaling > 0 ? ` (${scaling} autoscaling trigger(s) in ALARM not listed)` : "";
 	lines.push(
@@ -443,11 +502,59 @@ export function formatDigest(d: DigestInput): string {
 			: `- alarms in ALARM: ${d.activeAlarms.join(", ")}${scalingNote}`,
 	);
 	if (d.yesterdayUsd != null) {
-		const base = d.baselineUsd != null ? ` vs 14d baseline $${d.baselineUsd.toFixed(2)}` : "";
+		// A ratio is the thing an operator reacts to; "$2.18 vs $0.58" makes them
+		// do the division. Guarded on a POSITIVE baseline: a zero or absent one
+		// (a first-run account) would print Infinity.
+		const base =
+			d.baselineUsd != null && d.baselineUsd > 0
+				? ` (${(d.yesterdayUsd / d.baselineUsd).toFixed(1)}x the 14d baseline of $${d.baselineUsd.toFixed(2)})`
+				: d.baselineUsd != null
+					? ` vs 14d baseline $${d.baselineUsd.toFixed(2)}`
+					: "";
 		lines.push(`- spend yesterday: $${d.yesterdayUsd.toFixed(2)}${base}`);
 	} else {
 		lines.push("- spend: no cost data yet");
 	}
+
+	if (notables.length > 0) {
+		lines.push("", "- notable warn+ findings (last 24h):");
+		// Consecutive entries sharing a resource print it once, so several
+		// signatures from one log group read as one problem rather than several
+		// unrelated ones. Display only: notablesFromJournal has already collapsed
+		// on dedup_key, so those entries are genuinely distinct signatures and
+		// each keeps its own line. The cap counts ENTRIES, not printed lines.
+		//
+		// The repeat keeps the severity/family tag rather than a "same as above"
+		// marker: the tag is what the web pane badges, and a reader scrolling a
+		// long digest should not have to look upwards to identify a line.
+		let lastResource: string | null = null;
+		for (const n of notables.slice(0, NOTABLE_CAP)) {
+			const marker = n.uninvestigated ? " [uninvestigated]" : "";
+			// A repeat count only when there IS a repeat, so the common
+			// single-occurrence line is unchanged.
+			const repeat = n.occurrences > 1 ? ` (x${n.occurrences})` : "";
+			const resource = n.resource === lastResource ? `${n.resource} (also)` : n.resource;
+			lines.push(`  - (${n.severity}/${n.family}) ${resource}${repeat}${marker}`);
+			lastResource = n.resource;
+			// The message goes on its own indented line(s) rather than being
+			// squeezed onto the resource line and cut mid-token.
+			for (const line of wrapSummary(n.summary)) lines.push(`      ${line}`);
+		}
+		if (notables.length > NOTABLE_CAP) {
+			lines.push(`  - +${notables.length - NOTABLE_CAP} more warn+ finding(s) in the journal`);
+		}
+		if (uninvestigated > 0) lines.push(`- uninvestigated: ${uninvestigated}`);
+	}
+
+	lines.push("");
+	// DEGRADED must be self-explanatory from the mailbox: name the failing
+	// family, not just the count.
+	const byCheck = Object.entries(d.checkErrorsByCheck ?? {});
+	lines.push(
+		byCheck.length > 0
+			? `- check errors: ${d.checkErrors} (${byCheck.map(([k, v]) => `${k}=${v}`).join(" ")})`
+			: `- check errors: ${d.checkErrors}`,
+	);
 	if ((d.suppressedCount ?? 0) > 0) lines.push(`- suppressed by ledger: ${d.suppressedCount}`);
 	// Deploy canary: a stale bundle silently drops capabilities; the digest is
 	// where the operator sees the version without an SSM round-trip.

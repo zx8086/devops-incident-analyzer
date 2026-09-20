@@ -71,7 +71,13 @@ export function logsWindow(
 // The excerpt is untrusted log text: newlines are folded so one event cannot
 // forge extra digest lines, and it is hard-capped well inside the summary's own
 // budget.
-const SAMPLE_EXCERPT = 80;
+// SIO-1832: 80 cut the excerpt mid-token on real traffic
+// (`...Cannot invoke "java.util.UUID.toString()" bec...`), which defeats the
+// purpose above -- an excerpt that stops before the distinguishing part tells
+// two signatures apart no better than the hash did. The digest now wraps the
+// summary onto its own lines, so a wider excerpt costs no readability: 200 over
+// NOTABLE_CAP is ~2 KB against a 256 KiB message budget.
+const SAMPLE_EXCERPT = 200;
 
 export function summariseLogSample(sample: string, max = SAMPLE_EXCERPT): string {
 	const oneLine = sample.replace(/\s+/g, " ").trim();

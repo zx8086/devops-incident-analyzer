@@ -228,6 +228,10 @@ describe("parseMonitorReport and classifyMessage", () => {
 			"- alarm:noisy-alarm -- known flapper (since 2026-09-01T00:00:00Z)",
 		].join("\n");
 
+		// SIO-1832: the same four shapes carrying the friendly account name. Built
+		// from the pinned strings above so the two can never drift apart.
+		const named = (text: string) => text.replace("aws-111122223333", "aws-111122223333 (eu-oit-prd)");
+
 		test.each([
 			["daily digest", DIGEST, "daily-digest"],
 			["degraded digest", DEGRADED_DIGEST, "daily-digest"],
@@ -238,6 +242,23 @@ describe("parseMonitorReport and classifyMessage", () => {
 			expect(report?.kind).toBe(kind === "daily-digest" ? "daily-digest" : "suppression-review");
 			expect(report?.accountId).toBe("111122223333");
 			expect(classifyMessage(message({ prompt: text })).kind).toBe(kind as never);
+		});
+
+		// The un-named cases above must KEEP passing: the fleet rolls out host by
+		// host, so during a rollout both shapes are in the mailbox at once, and a
+		// required name group would empty the inbox for every account still on the
+		// old bundle -- SIO-1825 all over again.
+		test.each([
+			["daily digest", DIGEST, "daily-digest"],
+			["degraded digest", DEGRADED_DIGEST, "daily-digest"],
+			["paused digest", PAUSED_DIGEST, "daily-digest"],
+			["suppression review", SUPPRESSION, "suppression-review"],
+		])("parses a %s that also names the account", (_label, text, kind) => {
+			const report = parseMonitorReport(named(text));
+			expect(report?.kind).toBe(kind === "daily-digest" ? "daily-digest" : "suppression-review");
+			// The id is what every downstream attribution keys on; the name is extra.
+			expect(report?.accountId).toBe("111122223333");
+			expect(classifyMessage(message({ prompt: named(text) })).kind).toBe(kind as never);
 		});
 
 		// A digest's counts are a 24 h rollup and its notable lines are findings already

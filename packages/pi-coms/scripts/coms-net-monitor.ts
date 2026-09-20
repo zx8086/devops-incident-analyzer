@@ -68,6 +68,7 @@ import {
 import { errorMessage } from "./monitor/errors.ts";
 import { formatHistory, parseHistoryArgs } from "./monitor/history.ts";
 import {
+	accountNameFromEnv,
 	checkErrorCountsFromJournal,
 	DIAGNOSIS_RESPONSE_SCHEMA,
 	type Diagnosis,
@@ -85,6 +86,10 @@ import { publishReportToSns, snsTopicFromEnv } from "./monitor/report-email.ts";
 import { MonitorState } from "./monitor/state.ts";
 
 const ACCOUNT_ID = process.env.AWS_ACCOUNT_ID ?? "unknown";
+// SIO-1832: the friendly account name (a fleet.yaml spoke key, reaching the host
+// as AGENT_NAME via Terraform). Undefined on a host whose bootstrap predates the
+// export, so every header falls back to the bare account id and stays parseable.
+const ACCOUNT_NAME = accountNameFromEnv(process.env.PI_MONITOR_ACCOUNT_NAME, ACCOUNT_ID);
 const MONITOR_NAME = process.env.PI_MONITOR_NAME ?? `monitor-aws-${ACCOUNT_ID}`;
 const REPORT_TO = process.env.PI_MONITOR_REPORT_TO ?? "laptop";
 const REPORT_TTL_MS = Number(process.env.PI_MONITOR_REPORT_TTL_MS ?? 1_209_600_000);
@@ -345,6 +350,7 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 			})),
 			investigationFailure,
 			suppressed,
+			ACCOUNT_NAME,
 		);
 		try {
 			await deps.report(text);
@@ -643,6 +649,7 @@ function main(): void {
 		const latest = state.latestCost();
 		return formatDigest({
 			accountId: ACCOUNT_ID,
+			accountName: ACCOUNT_NAME,
 			since: new Date(Date.now() - day).toISOString(),
 			findingCounts: counts,
 			checkErrors: errorRows.length,
@@ -661,6 +668,7 @@ function main(): void {
 	const buildSuppressionReview = (): string =>
 		formatSuppressionReview({
 			accountId: ACCOUNT_ID,
+			accountName: ACCOUNT_NAME,
 			windowDays: REVIEW_WINDOW_DAYS,
 			entries: suppressionReviewFromJournal(
 				state.listSuppressions(),

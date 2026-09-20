@@ -261,10 +261,23 @@ describe("summariseLogSample", () => {
 		expect(summariseLogSample("NullPointerException at Foo.bar")).toBe("NullPointerException at Foo.bar");
 	});
 
+	// SIO-1832: asserted against the function's OWN cap rather than a hard-coded
+	// 80, so widening the excerpt is not a test edit. The invariant is that the
+	// cap bounds the whole excerpt, ellipsis included.
 	test("truncates a long message to the cap with an ellipsis", () => {
-		const out = summariseLogSample("x".repeat(200));
-		expect(out.length).toBe(80);
+		const cap = 32;
+		const out = summariseLogSample("x".repeat(200), cap);
+		expect(out.length).toBe(cap);
 		expect(out.endsWith("...")).toBe(true);
+	});
+
+	// The default cap has to be wide enough for the thing it exists to
+	// distinguish: an exception line cut at 80 read "...Cannot invoke
+	// "java.util.UUID.toString()" bec..." in a live digest.
+	test("the default cap keeps a real exception line intact", () => {
+		const sample =
+			'java.lang.NullPointerException: Cannot invoke "java.util.UUID.toString()" because the return value of com.pvh.b2b.OrderService.getId() is null';
+		expect(summariseLogSample(sample)).toBe(sample);
 	});
 
 	// A log line is untrusted: a newline would otherwise forge extra digest rows.
