@@ -1,4 +1,5 @@
 // extensions/turnReply.ts
+import { Value } from "typebox/value";
 import { extractJsonPayload } from "./jsonPayload.ts";
 
 export interface TurnReplyInbound {
@@ -145,6 +146,66 @@ export function notJsonError(turn: FinalAssistant): string {
 	return `response not valid JSON (${facts}; starts: ${head} ... ends: ${tail})`;
 }
 
+// SIO-1831: the reply parsed as JSON, but does it match the schema it was HANDED?
+// Until now nothing checked. `buildTurnReplies` already had `response_schema` in hand
+// and only verified the text WAS JSON, so any shape passed as `error: null` and failed
+// ~90 s later at the sender, which can do nothing but log a warn (SIO-1830). Validating
+// here turns a silent discard into an actionable error the sender can read.
+//
+// typebox is already a dependency of this package and is already imported by
+// coms-net.ts, so this adds no install weight to `pi install` (SIO-1632).
+const MISMATCH_MAX_KEYS = 12;
+
+// The missing REQUIRED top-level keys, which is the diagnosis that actually helps:
+// a diagnoses envelope against the investigate schema is missing all five of them.
+// typebox reports a bare "(root)" path for that case, so derive the names instead.
+function missingRequiredKeys(schema: object, payload: unknown): string[] {
+	const required = (schema as { required?: unknown }).required;
+	if (!Array.isArray(required)) return [];
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+	const present = new Set(Object.keys(payload));
+	return required.filter((k): k is string => typeof k === "string" && !present.has(k));
+}
+
+// KEY NAMES only, never values: the payload carries account ids, arns and trace ids,
+// the same rule the analyzer's replyKeys follows (SIO-1830).
+export function schemaMismatchError(schema: object, payload: unknown): string {
+	const missing = missingRequiredKeys(schema, payload);
+	const got =
+		payload && typeof payload === "object" && !Array.isArray(payload)
+			? Object.keys(payload).slice(0, MISMATCH_MAX_KEYS)
+			: [];
+	const gotPart =
+		got.length > 0 ? `got keys: ${got.join(", ")}` : `got ${Array.isArray(payload) ? "an array" : typeof payload}`;
+	const missingPart = missing.length > 0 ? `; missing required: ${missing.slice(0, MISMATCH_MAX_KEYS).join(", ")}` : "";
+	return `response did not match the requested schema (${gotPart}${missingPart})`;
+}
+
+// Guard: a schema this validator cannot interpret must NEVER make a spoke fail every
+// reply. Measured, not assumed -- typebox does not throw on an exotic schema, it returns
+// `false`, so a try/catch guard is useless here: `{$ref}` and `{type:"not-a-real-type"}`
+// both come back false and would have rejected every well-formed answer.
+//
+// So enforce only what is unambiguously enforceable: an object schema that names its
+// required keys. Anything else (a bare $ref, an unknown type, the `{type:"object"}`
+// placeholder with no `required`) passes through with the pre-SIO-1831 behaviour, and
+// the analyzer-side adapter stays the net for it.
+function isEnforceable(schema: object): boolean {
+	const s = schema as { type?: unknown; required?: unknown };
+	return s.type === "object" && Array.isArray(s.required) && s.required.length > 0;
+}
+
+function matchesSchema(schema: object, payload: unknown): boolean {
+	if (!isEnforceable(schema)) return true;
+	// Required keys are checked directly; typebox then covers types and nested shape.
+	if (missingRequiredKeys(schema, payload).length > 0) return false;
+	try {
+		return Value.Check(schema as never, payload);
+	} catch {
+		return true;
+	}
+}
+
 // One turn can cover several stacked inbound prompts (followUps merge into the
 // running turn), so every unfulfilled inbound gets the turn's final assistant
 // text as its reply -- oldest first, each under its own response_schema rule.
@@ -158,9 +219,14 @@ export function buildTurnReplies(inbounds: TurnReplyInbound[], turn: string | Fi
 		if (failure !== null) {
 			replies.push({ msg_id: inbound.msg_id, response: null, error: failure });
 		} else if (inbound.response_schema && typeof inbound.response_schema === "object") {
+			const schema = inbound.response_schema;
 			const parsed = extractJsonPayload(lastAssistantText);
 			if (parsed === undefined) {
 				replies.push({ msg_id: inbound.msg_id, response: null, error: notJsonError(final) });
+			} else if (!matchesSchema(schema, parsed)) {
+				// SIO-1831: fail HERE, naming the mismatch, rather than sending a shape the
+				// caller cannot read and letting it discard the answer silently.
+				replies.push({ msg_id: inbound.msg_id, response: null, error: schemaMismatchError(schema, parsed) });
 			} else {
 				replies.push({ msg_id: inbound.msg_id, response: parsed, error: null });
 			}
