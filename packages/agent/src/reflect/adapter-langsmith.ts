@@ -41,6 +41,46 @@ function asString(value: unknown): string | null {
 	return typeof value === "string" ? value : null;
 }
 
+// SIO-1856: tools whose ENTIRE input is scalar, so the recorded args really do identify the
+// call and a repeat is provable. Everything else takes a nested object somewhere (a query
+// body, a filter, a document) that toolArgs never records, which makes two different calls
+// look identical.
+//
+// An allowlist, not a heuristic: "no args recorded" is ambiguous on its own -- it means
+// either "this tool takes none" or "this tool's input was dropped", and those need opposite
+// treatment. Listing the first case is the only way to tell them apart from a trace.
+const SCALAR_INPUT_TOOLS = new Set([
+	"aws_ecs_list_clusters",
+	"aws_sqs_list_queues",
+	"aws_logs_describe_log_groups",
+	"aws_ecs_list_services",
+	"kafka_list_topics",
+	"kafka_list_consumer_groups",
+	"kafka_list_dlq_topics",
+	"capella_get_buckets",
+	"capella_get_scopes_and_collections",
+	"capella_get_document_type_examples",
+	"capella_get_schema_for_collection",
+	"elasticsearch_list_indices",
+	"elasticsearch_get_cluster_health",
+	"gitlab_list_projects",
+	"konnect_list_control_planes",
+]);
+
+export function argsCanIdentify(toolName: string, args: Record<string, unknown>): boolean {
+	// The allowlist is AUTHORITATIVE, not a shortcut past a scalar check. "Every recorded
+	// value is scalar" looked like a safe fallback and is not: elasticsearch_search records
+	// {"index":"logs-*","size":10} -- all scalar, and the QUERY BODY still missing. Two
+	// searches of the same index for different things pass that test identically, which is
+	// exactly the false repeat this ticket exists to remove.
+	//
+	// So a tool earns trust by being known to take scalars ONLY, never by what one call
+	// happened to record.
+	if (!SCALAR_INPUT_TOOLS.has(toolName)) return false;
+	// On the list, a nested value would mean the entry is wrong; refuse rather than trust it.
+	return Object.values(args).every((v) => v === null || ["string", "number", "boolean"].includes(typeof v));
+}
+
 // A short, stable digest of a tool result, used only to tell "same call, same answer" from
 // "same call, new answer". Never reversible into the payload and never shown: rawJson holds
 // real log lines, hostnames and account ids.
@@ -140,14 +180,24 @@ export function runToRawSession(run: LangSmithRun): RawSession {
 			//
 			// A HASH, never the payload: rawJson carries real log lines, hostnames and account
 			// ids, and an excerpt of it would reach a report.
+			const args = asRecord(tool.toolArgs);
 			parts.push({
 				type: "tool_call",
 				toolCallId: null,
 				name,
-				input: JSON.stringify({
-					args: tool.toolArgs ?? {},
-					result: fingerprint(tool.rawJson),
-				}),
+				input: JSON.stringify({ args, result: fingerprint(tool.rawJson) }),
+				// SIO-1856: toolArgs is scalars-only by construction (tool-trajectory.ts's
+				// privacy invariant), so a tool whose real input is a nested object records
+				// nothing that identifies the call. Measured: of 1084 elasticsearch_search
+				// calls, 831 recorded NO args and the rest only [index,size] -- the query
+				// body never appears. Two different searches are indistinguishable, and 31
+				// dispatches had "identical" searches returning DIFFERENT results.
+				//
+				// Empty args are only trustworthy for a tool that genuinely takes none
+				// (aws_ecs_list_clusters, kafka_list_topics), and those are exactly the ones
+				// whose declared input is empty everywhere. We cannot tell the two cases
+				// apart from one call, so the flag is set per tool below.
+				argsIdentifyTheCall: argsCanIdentify(name, args),
 			});
 		}
 

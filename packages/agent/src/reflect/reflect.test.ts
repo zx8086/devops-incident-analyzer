@@ -3,7 +3,7 @@
 // SIO-1834: the A1-A3 checks from the handover's section 13 table. Each is the smallest
 // thing that fails if the logic breaks.
 import { describe, expect, test } from "bun:test";
-import { datasourcesFromTags, runToRawSession, threadFromTags } from "./adapter-langsmith.ts";
+import { argsCanIdentify, datasourcesFromTags, runToRawSession, threadFromTags } from "./adapter-langsmith.ts";
 import { clip, normalizeSession, TOOL_RESULT_CLIP } from "./normalize.ts";
 import { datasourceForTool, scanSession } from "./scan.ts";
 import type { RawSession } from "./schema.ts";
@@ -129,7 +129,13 @@ describe("normalize", () => {
 					role: "assistant",
 					created: null,
 					parts: [
-						{ type: "tool_call", toolCallId: null, name: "t", input: '{"email":"bob@example.com"}' },
+						{
+							type: "tool_call",
+							toolCallId: null,
+							name: "t",
+							input: '{"email":"bob@example.com"}',
+							argsIdentifyTheCall: true,
+						},
 						{
 							type: "tool_result",
 							toolCallId: null,
@@ -230,7 +236,8 @@ describe("scan", () => {
 	});
 
 	test("repeat call: identical input AND identical result 3x is one medium signal", () => {
-		const call = { toolName: "aws_logs_start_query", toolArgs: { q: "fields @m" }, rawJson: '{"same":1}' };
+		// A scalar-input tool: SIO-1856 makes a repeat provable only for these.
+		const call = { toolName: "aws_ecs_list_services", toolArgs: { cluster: "prod" }, rawJson: '{"same":1}' };
 		const scan = scanSession(
 			sessionFrom(
 				fakeRun({ outputs: { dataSourceResults: [{ dataSourceId: "aws", toolOutputs: [call, call, call] }] } }),
@@ -241,7 +248,7 @@ describe("scan", () => {
 		expect(repeat?.severity).toBe("medium");
 		expect(repeat?.suspects).toEqual(["aws"]);
 		// The evidence shows the args, not the {args,result} envelope or the result hash.
-		expect(repeat?.evidence[0]?.excerpt).toContain("fields @m");
+		expect(repeat?.evidence[0]?.excerpt).toContain("prod");
 		expect(repeat?.evidence[0]?.excerpt).not.toContain("result");
 	});
 
@@ -284,6 +291,49 @@ describe("scan", () => {
 		);
 		expect(scan.signals.some((s) => s.kind === "repeat-call")).toBe(false);
 		expect(scan.stats.toolCalls).toBe(2);
+	});
+
+	// SIO-1856. toolArgs is scalars-only, so a tool whose real input is a nested object
+	// records nothing that identifies the call: 831 of 1084 elasticsearch_search calls had
+	// NO args, and 31 dispatches had "identical" searches returning DIFFERENT results.
+	// Reporting those as repeats would justify caching two different searches together.
+	test("a search with an unrecordable query is never reported as a repeat", () => {
+		const call = { toolName: "elasticsearch_search", toolArgs: {}, rawJson: '{"same":1}' };
+		const scan = scanSession(
+			sessionFrom(
+				fakeRun({
+					outputs: { dataSourceResults: [{ dataSourceId: "elastic", toolOutputs: [call, call, call] }] },
+				}),
+			),
+		);
+		expect(scan.signals.some((s) => s.kind === "repeat-call")).toBe(false);
+		expect(scan.stats.repeats).toBe(0);
+		// and the report says what it could not measure, rather than staying silent
+		expect(scan.notes.join(" ")).toContain("cannot identify the call");
+	});
+
+	test("a genuinely no-arg listing is still a provable repeat", () => {
+		const call = { toolName: "aws_ecs_list_clusters", toolArgs: {}, rawJson: '{"clusters":[]}' };
+		const scan = scanSession(
+			sessionFrom(
+				fakeRun({ outputs: { dataSourceResults: [{ dataSourceId: "aws", toolOutputs: [call, call, call] }] } }),
+			),
+		);
+		const repeat = scan.signals.find((s) => s.kind === "repeat-call");
+		expect(repeat?.count).toBe(3);
+	});
+
+	test("argsCanIdentify trusts the allowlist, never a call's recorded shape", () => {
+		// On the allowlist: takes no args by nature, so an empty bag IS the whole input.
+		expect(argsCanIdentify("aws_ecs_list_clusters", {})).toBe(true);
+		// Off it: an empty bag means the input was DROPPED, not that there was none.
+		expect(argsCanIdentify("elasticsearch_search", {})).toBe(false);
+
+		// The case that broke an "all recorded values are scalar" fallback, found on a real
+		// report: every value here IS scalar, and the query body is still missing, so two
+		// searches of the same index for different things look identical.
+		expect(argsCanIdentify("elasticsearch_search", { index: "logs-*,logs-apm.*", size: 10 })).toBe(false);
+		expect(argsCanIdentify("elasticsearch_search", { index: "logs-*", query: { match_all: {} } })).toBe(false);
 	});
 
 	test("differing input is not a repeat", () => {

@@ -201,9 +201,19 @@ export function scanSession(session: NormalizedSession): Scan {
 	// WITHIN one dispatch is. Keying across the whole session reported 78% of calls as
 	// repeats on a real window.
 	const calls = new Map<string, { count: number; evidence: Evidence[]; name: string }>();
+	let unprovableRepeats = 0;
 	for (const message of session.messages) {
 		for (const part of message.parts) {
 			if (part.type !== "tool_call") continue;
+			// SIO-1856: a repeat is only PROVABLE when the recorded args identify the call.
+			// For a tool whose real input is a nested object (a search body, a filter), the
+			// args record nothing that distinguishes two calls, so "identical" means "we
+			// cannot see the difference" -- not "there was none". Counted, never reported:
+			// acting on it would mean caching two genuinely different searches together.
+			if (!part.argsIdentifyTheCall) {
+				unprovableRepeats += 1;
+				continue;
+			}
 			const key = `${message.index}\x1f${part.name}\x1f${part.input}`;
 			const entry = calls.get(key) ?? { count: 0, evidence: [], name: part.name };
 			entry.count += 1;
@@ -299,6 +309,14 @@ export function scanSession(session: NormalizedSession): Scan {
 		}
 	} else {
 		notes.push("headless run: user-reaction detectors skipped");
+	}
+
+	// Say what could not be measured. Silently dropping these would let a window full of
+	// unverifiable repeats read as a window with none.
+	if (unprovableRepeats > 0) {
+		notes.push(
+			`${unprovableRepeats} tool call(s) skipped for repeat detection: their recorded arguments cannot identify the call (SIO-1856)`,
+		);
 	}
 
 	const signals: Signal[] = drafts.map((draft, index) => ({ id: `S${index + 1}`, ...draft }));

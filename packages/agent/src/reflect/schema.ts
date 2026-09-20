@@ -54,6 +54,11 @@ export const RawPartSchema = z.discriminatedUnion("type", [
 		toolCallId: z.string().nullable(),
 		name: z.string(),
 		input: z.string().describe("JSON-encoded tool arguments, kept whole for repeat-call comparison"),
+		argsIdentifyTheCall: z
+			.boolean()
+			.describe(
+				"SIO-1856: false when the recorded args cannot distinguish two calls of this tool, so a repeat is unprovable",
+			),
 	}),
 	z.object({
 		type: z.literal("tool_result"),
