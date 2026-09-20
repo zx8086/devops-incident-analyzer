@@ -67,13 +67,17 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 	// Build source data: sub-agent results + prior assistant messages on follow-ups.
 	// The aggregator can legitimately reference values from earlier conversation turns,
 	// so the validator must include those in its comparison set.
-	let sourceData = results.map((r) => String(r.data)).join(" ");
+	// Kept as separate texts as well as joined: a bare time carries no date of its own, so it
+	// may only be paired with a date stated by the SAME narrative (see SIO-1859 below). The
+	// joined form remains what the full-timestamp and metric checks compare against.
+	const sourceTexts = results.map((r) => String(r.data));
+	let sourceData = sourceTexts.join(" ");
 	if (state.isFollowUp) {
 		const priorAssistantContent = state.messages
 			.filter((m) => m._getType() === "ai" && extractTextFromContent(m.content) !== answer)
-			.map((m) => extractTextFromContent(m.content))
-			.join(" ");
-		sourceData = `${sourceData} ${priorAssistantContent}`;
+			.map((m) => extractTextFromContent(m.content));
+		sourceTexts.push(...priorAssistantContent);
+		sourceData = `${sourceData} ${priorAssistantContent.join(" ")}`;
 	}
 
 	// SIO-768: Match BOTH ISO-8601 (`T` separator) and AWS-style string formats
@@ -124,8 +128,43 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 		return parsed.toISOString().replace(/\.\d+Z$/, "");
 	};
 
+	// SIO-1859: a sub-agent writes its own timeline as a table with the date in the COLUMN
+	// HEADER ("| Time (UTC) | Event |") and bare `17:35:00` in each row, so nothing on the
+	// row carries a date for the pattern above to match. The aggregator then qualifies it
+	// into the report as 2026-09-19T17:35:00Z, which matches, finds no counterpart, and is
+	// reported as fabricated -- while the time is genuinely in the evidence.
+	//
+	// So the SOURCE side also collects bare times and keys them against the days the source
+	// itself mentions. Answer-side collection is unchanged: a bare time in a REPORT still
+	// has no date to verify, and inventing one for it would weaken the check.
+	// The first lookbehind rejects a time already preceded by a DATE, so a dated timestamp is
+	// not ALSO harvested as bare. Without it, a time stated on one day would be paired with
+	// every other day the source mentions, and a hallucinated 09:00 on the 19th could be
+	// grounded by a real 09:00 on the 18th -- weakening the very check this sharpens. It
+	// tests for a date specifically rather than for any separator, so a genuinely bare
+	// "at 17:35:00 UTC" still counts.
+	const bareTimePattern = /(?<!\d{4}-\d{2}-\d{2}[T ])(?<![\d:-])\d{2}:\d{2}:\d{2}(?![\d:])/g;
+
 	const answerTimestamps = answer.match(timestampPattern) ?? [];
 	const sourceTimestamps = new Set((sourceData.match(timestampPattern) ?? []).map(normalizeTimestamp));
+
+	// Cap the pairing: a narrative naming many days would otherwise let one bare time ground a
+	// timestamp on any of them. In practice an incident window spans one or two days.
+	const MAX_SOURCE_DAYS_FOR_BARE_TIMES = 3;
+
+	// Greptile (PR #867): pair a bare time only with a date from the SAME narrative. Pairing
+	// across the joined sourceData let a date mentioned by one datasource qualify a time
+	// stated by another -- so a fabricated 2026-09-19T17:35:00Z was accepted because 17:35:00
+	// came from an aws timeline dated the 18th while the 19th appeared only in an unrelated
+	// elastic line. Each r.data is one sub-agent's own self-consistent timeline, which is the
+	// only scope in which "the date this time belongs to" is a meaningful question.
+	for (const text of sourceTexts) {
+		const days = [...new Set((text.match(/\d{4}-\d{2}-\d{2}/g) ?? []).filter(isRealCalendarDate))];
+		if (days.length === 0 || days.length > MAX_SOURCE_DAYS_FOR_BARE_TIMES) continue;
+		for (const time of new Set(text.match(bareTimePattern) ?? [])) {
+			for (const day of days) sourceTimestamps.add(normalizeTimestamp(`${day}T${time}Z`));
+		}
+	}
 
 	// The aggregator prompt injects a "Report generation timestamp" which the LLM
 	// echoes in the report header. Timestamps within 5 minutes of now are legitimate.
