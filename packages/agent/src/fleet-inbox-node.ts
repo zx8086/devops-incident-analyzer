@@ -81,6 +81,7 @@ async function readInbox(client: PiComsClient, inbox: string, budgetMs: number, 
 		// One deadline for the whole walk, so paging cannot extend the per-estate
 		// budget: each page gets whatever is left of it.
 		const deadline = Date.now() + budgetMs;
+		const windowEnd = Date.parse(window.to);
 		const messages: PiInboxMessage[] = [];
 		let cursor = since;
 		let truncated = false;
@@ -90,17 +91,35 @@ async function readInbox(client: PiComsClient, inbox: string, budgetMs: number, 
 				truncated = true;
 				break;
 			}
-			const batch = await withTimeout(
-				client.mailbox(inbox, { limit: MAILBOX_READ_LIMIT, since: cursor }),
-				remaining,
-				`mailbox ${inbox}`,
-			);
+			// A page that times out truncates the walk; it does not discard the pages
+			// already in hand (Greptile, PR #858). Losing them would report zero
+			// messages for an estate whose window data had already been fetched --
+			// the silent-empty failure this ticket exists to remove, made worse.
+			let batch: PiInboxMessage[];
+			try {
+				batch = await withTimeout(
+					client.mailbox(inbox, { limit: MAILBOX_READ_LIMIT, since: cursor }),
+					remaining,
+					`mailbox ${inbox}`,
+				);
+			} catch (error) {
+				// Nothing read at all is a failed read, as before. A later page failing
+				// keeps what the earlier ones returned and says the read was capped.
+				if (messages.length === 0) return { inbox, error: describeError(error) };
+				truncated = true;
+				break;
+			}
 			messages.push(...batch);
 			// A short page means the forward scan reached the end of the mailbox.
 			if (batch.length < MAILBOX_READ_LIMIT) break;
 			const last = batch[batch.length - 1];
 			// Defensive: a page whose last row carries no id would loop on one cursor.
 			if (!last?.msg_id) break;
+			// The scan is ascending, so once the newest row of a page is past the
+			// window there is nothing left to find: stop rather than page through
+			// post-window traffic and then call a COMPLETE window capped.
+			const newest = Date.parse(last.created_at);
+			if (Number.isFinite(newest) && Number.isFinite(windowEnd) && newest > windowEnd) break;
 			cursor = last.msg_id;
 			// A full last page means rows may remain beyond the page cap.
 			if (page === MAILBOX_MAX_PAGES - 1) truncated = true;

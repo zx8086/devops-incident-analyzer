@@ -287,6 +287,53 @@ describe("SIO-1828 window paging", () => {
 		expect(prd?.error).toContain("read capped before the end of the window");
 	});
 
+	// Greptile P1, PR #858: a page that times out mid-walk used to reject out of the
+	// loop, so the catch discarded every page already fetched and the estate reported a
+	// failed read with zero messages -- strictly worse than the bug this ticket fixes,
+	// because the rows were already in hand.
+	test("a page that times out keeps the pages already read and marks the walk capped", async () => {
+		let call = 0;
+		const rows = deepMailbox(250);
+		const { fetchImpl } = hubFake((url) => {
+			if (!url.searchParams.get("name")?.includes("ops")) return { body: { ok: true, name: "x", messages: [] } };
+			call++;
+			// Two full pages, then a hang that burns the rest of the budget.
+			if (call >= 3) return "hang";
+			return { body: { ok: true, name: "ops", messages: rows.slice((call - 1) * 100, call * 100) } };
+		});
+		const out = await runFetchFleetInbox(
+			{ ...state, awsTargetEstates: ["eu-oit-prd"] },
+			{ env: { ...env, PI_COMS_INBOX_TIMEOUT_MS: "150" }, fetchImpl, now },
+		);
+
+		const prd = out.fleetInboxDigest?.estates.find((e) => e.estate === "eu-oit-prd");
+		// The 200 rows already fetched survive the timeout.
+		expect(prd?.counts.total).toBe(200);
+		expect(prd?.error).toContain("read capped before the end of the window");
+	});
+
+	// Greptile P2, PR #858: `truncated` keyed only off a full fifth page, so post-window
+	// traffic on a busy inbox stamped a COMPLETE window as capped (and paged through
+	// rows that could not match the window anyway).
+	test("a window fully covered before the page cap is not reported as capped", async () => {
+		// 700 rows, but the window ends at 12:00 and rows run well past it.
+		const { calls, fetchImpl } = pagingHub({ ops: deepMailbox(700), "eu-oit-prd": [] });
+		const out = await runFetchFleetInbox(
+			{
+				...state,
+				awsTargetEstates: ["eu-oit-prd"],
+				normalizedIncident: { timeWindow: { from: "2026-09-06T00:00:00.000Z", to: "2026-09-06T03:00:00.000Z" } },
+			},
+			{ env: { ...env, PI_COMS_INBOX_TIMEOUT_MS: "5000" }, fetchImpl, now },
+		);
+
+		const prd = out.fleetInboxDigest?.estates.find((e) => e.estate === "eu-oit-prd");
+		// The walk stopped once a page's newest row passed 03:00, so no false warning...
+		expect(prd?.error).toBeNull();
+		// ...and it did not burn all five pages getting there.
+		expect(calls.filter((c) => c.url.includes("name=ops")).length).toBeLessThan(MAILBOX_MAX_PAGES);
+	});
+
 	test("a window the hub's cursor cannot express falls back to the newest-first read", async () => {
 		const { calls, fetchImpl } = pagingHub({ ops: deepMailbox(250), "eu-oit-prd": [] });
 		const out = await runFetchFleetInbox(
