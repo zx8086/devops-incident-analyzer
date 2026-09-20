@@ -2,7 +2,7 @@
 // SIO-1635: proposal rules, target routing, prompt shaping and the two execute
 // flows, with the hub scripted at the fetch boundary.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { PiVerdict } from "@devops-agent/shared";
+import { PiDiagnosesReplySchema, type PiVerdict } from "@devops-agent/shared";
 import { PI_COMS_AWAIT_SLICE_MS, type PiAgentCard } from "./pi-coms-client.ts";
 import {
 	buildInvestigateFollowUp,
@@ -386,7 +386,31 @@ describe("SIO-1829: an unusable verdict says what arrived and what to do next", 
 		expect(unusableVerdictMessage("eu-oit-prd", { summary: "s", oops: 1 })).toContain("keys: summary, oops");
 		// A diagnoses envelope with extra keys is NOT the known dialect: the specific
 		// advice would be a guess, so it degrades to the generic shape report.
-		expect(unusableVerdictMessage("eu-oit-prd", { diagnoses: [], extra: 1 })).toContain("keys: diagnoses, extra");
+		expect(unusableVerdictMessage("eu-oit-prd", { diagnoses: [1], extra: 1 })).toContain("keys: diagnoses, extra");
+	});
+
+	// Greptile, PR #856: the advice must be advice that WORKS. These three have `diagnoses`
+	// as their sole key but PiDiagnosesReplySchema rejects every one, so investigate-with-pi
+	// would fail on them too -- pointing the operator there wastes a hub round trip.
+	// Mutation check: dropping the safeParse from the guard turns each of these red.
+	test.each([
+		["an empty array", { diagnoses: [] }],
+		["null", { diagnoses: null }],
+		["a string", { diagnoses: "nope" }],
+		// probable_cause is the one REQUIRED field of an entry (everything else is
+		// optional), so an entry without it is the minimal invalid diagnosis.
+		["an entry without probable_cause", { diagnoses: [{ confidence: 0.8 }] }],
+	])("does not recommend investigate-with-pi when diagnoses is %s", (_label, response) => {
+		const msg = unusableVerdictMessage("eu-oit-prd", response);
+		expect(msg).not.toContain("investigate-with-pi");
+		expect(msg).toContain("keys: diagnoses");
+		// The guard and the investigate path must agree on what the dialect is.
+		expect(PiDiagnosesReplySchema.safeParse(response).success).toBe(false);
+	});
+
+	test("the recommendation holds only for a reply investigate-with-pi accepts", () => {
+		expect(PiDiagnosesReplySchema.safeParse(diagnosesReply).success).toBe(true);
+		expect(unusableVerdictMessage("eu-oit-prd", diagnosesReply)).toContain("investigate-with-pi");
 	});
 
 	test.each([

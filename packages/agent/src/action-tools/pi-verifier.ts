@@ -533,7 +533,14 @@ function replyKeys(response: unknown): string[] {
 // KEY NAMES only, never values -- same rule as replyKeys, for the same reason.
 export function unusableVerdictMessage(target: string, response: unknown): string {
 	const keys = replyKeys(response);
-	if (keys.length === 1 && keys[0] === "diagnoses") {
+	// Greptile, PR #856: the advice must be advice that WORKS. `{diagnoses: []}`,
+	// `{diagnoses: null}` and `{diagnoses: "nope"}` all have `diagnoses` as their sole key,
+	// but PiDiagnosesReplySchema requires a non-empty array of valid entries -- so
+	// investigate-with-pi would reject them too, and sending the operator there wastes a
+	// hub round trip on a reply nothing can read. Parse with the SAME schema the investigate
+	// path uses, so the two can never disagree about what it accepts; anything else falls
+	// through to the generic key report.
+	if (keys.length === 1 && keys[0] === "diagnoses" && PiDiagnosesReplySchema.safeParse(response).success) {
 		return `pi agent ${target} answered with a diagnosis, not a verdict on the report's claims; use investigate-with-pi, which reads that shape`;
 	}
 	const shape = keys.length > 0 ? `keys: ${keys.join(", ")}` : "no object body";
