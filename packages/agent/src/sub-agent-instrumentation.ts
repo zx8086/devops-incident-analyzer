@@ -25,6 +25,7 @@ import {
 	isObservedTool,
 	LOOP_GUARD_STOP_MARKER,
 	type LoopGuardState,
+	observeEcsListResult,
 	recordResult,
 	reserveSignature,
 	shouldShortCircuit,
@@ -165,7 +166,17 @@ export interface InstrumentContext {
 	// SIO-1777: out-param (same escape pattern as rawOutputs). The ECS absence proof lives
 	// in this module's per-run closure; without this it was only ever logged, so the pi
 	// card proposer kept offering cards for estates the run had proven irrelevant.
-	runSignals?: { serviceAbsent: boolean; absenceBlockedBy?: string | null };
+	runSignals?: {
+		serviceAbsent: boolean;
+		absenceBlockedBy?: string | null;
+		// SIO-1784: folds ONE ECS list page fetched OUTSIDE the ReAct loop into this run's
+		// ledger. The completion cannot go back through the instrumented proxies: a cluster the
+		// model only partly paginated is still unwalked, but re-listing its page 1 is an exact
+		// duplicate signature and shouldShortCircuit refuses it (the seenSignatures check sits
+		// BEFORE the RUN_BACKSTOP_EXEMPT_TOOLS carve-out), and the ledger stores no cursor to
+		// resume from. So the caller uses the uninstrumented tools and hands the pages back here.
+		observeEcsPage?: (toolName: string, content: unknown, arg: unknown) => void;
+	};
 	// SIO-1688: when provided, an oversized result is indexed at FULL fidelity before
 	// the LLM-facing copy is truncated, and the truncated copy gains a line naming
 	// search_evidence. Indexing happens HERE rather than at the SIO-1248 persist site
@@ -202,7 +213,18 @@ export function instrumentTools(tools: StructuredToolInterface[], ctx: Instrumen
 	// SIO-1783 (Greptile, PR #817): seed the blocker from the fresh ledger. It was only written
 	// after an observed result, so an AWS run with no successful tool call (or one salvaged before
 	// any) had an enabled ledger, no proof, and no subagent.aws_absence_not_proven event.
-	if (ctx.runSignals) ctx.runSignals.absenceBlockedBy = awsEcsAbsenceBlocker(runState.loopGuard);
+	if (ctx.runSignals) {
+		const signals = ctx.runSignals;
+		signals.absenceBlockedBy = awsEcsAbsenceBlocker(runState.loopGuard);
+		// SIO-1784: the ledger is private to this closure, so the completion reaches it through
+		// this seam rather than by exporting run state. Same re-evaluation as the in-loop path
+		// below, so a match or a failure discovered during completion still lands fail-closed.
+		signals.observeEcsPage = (toolName, content, arg) => {
+			observeEcsListResult(runState.loopGuard, toolName, content, arg);
+			signals.serviceAbsent = awsEcsAbsenceProven(runState.loopGuard);
+			signals.absenceBlockedBy = awsEcsAbsenceBlocker(runState.loopGuard);
+		};
+	}
 	return tools.map((tool) => instrumentTool(tool, ctx, runState));
 }
 

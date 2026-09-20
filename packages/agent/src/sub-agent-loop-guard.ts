@@ -130,7 +130,8 @@ const GITLAB_CORRELATION_RECENT_WINDOW_MS = 25 * 3600_000;
 const GENERIC_GUARD_EXEMPT_TOOLS = new Set<string>([AWS_GET_QUERY_RESULTS, AWS_DESCRIBE_LOG_GROUPS]);
 
 const AWS_ECS_LIST_CLUSTERS = "aws_ecs_list_clusters";
-const AWS_ECS_LIST_SERVICES = "aws_ecs_list_services";
+// SIO-1784: exported so the out-of-loop completion names the same tool this ledger observes.
+export const AWS_ECS_LIST_SERVICES = "aws_ecs_list_services";
 
 // SIO-1272: the two ECS ENUMERATION tools are exempt from the COUNTER-driven generic rules --
 // the per-tool cap and the run-wide backstop -- but NOT from the absence block or the duplicate
@@ -721,11 +722,19 @@ const ECS_TOKEN_FIELDS = ["nextToken", "NextToken", "Marker", "NextMarker", "Pag
 
 function isFinalListPage(obj: Record<string, unknown>): boolean {
 	if ("_truncated" in obj) return false;
+	return nextEcsToken(obj) === null;
+}
+
+// SIO-1784: the continuation token of one ECS list page, or null when the page is the last.
+// Exported so the out-of-loop completion pages with the SAME field list this module uses to
+// decide finality -- two lists would drift, and a missed field would silently mark a partial
+// enumeration complete, which is the false positive the whole absence proof must not produce.
+export function nextEcsToken(obj: Record<string, unknown>): string | null {
 	for (const field of ECS_TOKEN_FIELDS) {
 		const v = obj[field];
-		if (typeof v === "string" && v.length > 0) return false;
+		if (typeof v === "string" && v.length > 0) return v;
 	}
-	return true;
+	return null;
 }
 
 function parseEcsListResult(content: unknown): Record<string, unknown> | null {
