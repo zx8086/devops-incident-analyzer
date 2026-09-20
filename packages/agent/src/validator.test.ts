@@ -174,3 +174,74 @@ describe("SIO-1857 an offset timestamp is converted, not stripped", () => {
 		).toBe("pass");
 	});
 });
+
+// SIO-1859: the AWS sub-agent writes its own timeline as a markdown table with the date in
+// the COLUMN HEADER and a bare `17:35:00` in each row, so no row carries a date for the
+// timestamp pattern to match. The aggregator qualifies the row into the report as
+// 2026-09-19T17:35:00Z, which then finds no counterpart in the source and is reported as
+// fabricated -- although the time is genuinely in the evidence. Observed on a live run.
+describe("SIO-1859 a bare time in a dated source grounds a qualified answer", () => {
+	// The shape the sub-agent actually emits: date in the header, bare times in the rows.
+	// The prose line carries one FULLY DATED timestamp, as a real sub-agent report does. That
+	// is load-bearing for the test, not decoration: the fabrication check is skipped outright
+	// when a source yields no timestamps at all, so a table-only fixture would make these
+	// tests pass on that guard whether or not bare-time harvesting works.
+	const timelineTable = [
+		"Fee calculation timeline for 2026-09-19 (all times UTC)",
+		"Window opened at 2026-09-19T17:00:00Z.",
+		"| Time (UTC) | Event |",
+		"|---|---|",
+		"| `17:35:00` | Fee calculation started |",
+		"| `17:41:12` | Fee calculation completed |",
+	].join("\n");
+
+	function resultFor(answer: string, data: string) {
+		return validate(
+			makeState({
+				finalAnswer: answer,
+				retryCount: 0,
+				dataSourceResults: [
+					{ dataSourceId: "aws", status: "success", data, duration: 100, toolErrors: [] },
+				] as DataSourceResult[],
+			}),
+		);
+	}
+
+	test("a row time qualified onto the header's date is not called fabricated", () => {
+		const result = resultFor("The aws timeline shows fee calculation started at 2026-09-19T17:35:00Z.", timelineTable);
+		expect(result.validationResult).toBe("pass");
+	});
+
+	test("a time absent from the table still downgrades the result", () => {
+		const result = resultFor("The aws timeline shows fee calculation started at 2026-09-19T03:02:01Z.", timelineTable);
+		expect(result.validationResult).toBe("pass_with_warnings");
+	});
+
+	// The lookbehind must reject a time that already carries a date, or a real 09:00 on one
+	// day would ground a hallucinated 09:00 on every other day the source mentions --
+	// inverting the check. Both days appear here; only the dated pairing is real.
+	test("a dated time is not re-harvested as bare onto another day the source names", () => {
+		const twoDays = "Error at 2026-09-18T09:00:00Z. A separate incident is tracked for 2026-09-19.";
+		expect(
+			resultFor("The aws evidence shows the failure occurred at 2026-09-18T09:00:00Z.", twoDays).validationResult,
+		).toBe("pass");
+		expect(
+			resultFor("The aws evidence shows the failure occurred at 2026-09-19T09:00:00Z.", twoDays).validationResult,
+		).toBe("pass_with_warnings");
+	});
+
+	// Guards the cap: a source ranging over many days must not let one bare time ground a
+	// timestamp on any of them. Four days is over MAX_SOURCE_DAYS_FOR_BARE_TIMES.
+	// The source carries one real timestamp so the fabrication check is LIVE -- it is skipped
+	// entirely when a source has no timestamps at all, and without this the test would pass on
+	// that pre-existing guard instead of on the cap.
+	test("a source spanning many days does not ground bare times at all", () => {
+		const manyDays = [
+			"Deploys on 2026-09-16, 2026-09-17, 2026-09-18 and 2026-09-19.",
+			"Pipeline started at 2026-09-16T08:00:00Z. Rollback at 17:35:00.",
+		].join(" ");
+		expect(
+			resultFor("The aws evidence shows the rollback ran at 2026-09-19T17:35:00Z.", manyDays).validationResult,
+		).toBe("pass_with_warnings");
+	});
+});

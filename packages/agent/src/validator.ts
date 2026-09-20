@@ -124,8 +124,36 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 		return parsed.toISOString().replace(/\.\d+Z$/, "");
 	};
 
+	// SIO-1859: a sub-agent writes its own timeline as a table with the date in the COLUMN
+	// HEADER ("| Time (UTC) | Event |") and bare `17:35:00` in each row, so nothing on the
+	// row carries a date for the pattern above to match. The aggregator then qualifies it
+	// into the report as 2026-09-19T17:35:00Z, which matches, finds no counterpart, and is
+	// reported as fabricated -- while the time is genuinely in the evidence.
+	//
+	// So the SOURCE side also collects bare times and keys them against the days the source
+	// itself mentions. Answer-side collection is unchanged: a bare time in a REPORT still
+	// has no date to verify, and inventing one for it would weaken the check.
+	// The first lookbehind rejects a time already preceded by a DATE, so a dated timestamp is
+	// not ALSO harvested as bare. Without it, a time stated on one day would be paired with
+	// every other day the source mentions, and a hallucinated 09:00 on the 19th could be
+	// grounded by a real 09:00 on the 18th -- weakening the very check this sharpens. It
+	// tests for a date specifically rather than for any separator, so a genuinely bare
+	// "at 17:35:00 UTC" still counts.
+	const bareTimePattern = /(?<!\d{4}-\d{2}-\d{2}[T ])(?<![\d:-])\d{2}:\d{2}:\d{2}(?![\d:])/g;
+
+	const sourceDays = [...new Set((sourceData.match(/\d{4}-\d{2}-\d{2}/g) ?? []).filter(isRealCalendarDate))];
+
 	const answerTimestamps = answer.match(timestampPattern) ?? [];
 	const sourceTimestamps = new Set((sourceData.match(timestampPattern) ?? []).map(normalizeTimestamp));
+
+	// Cap the pairing: a source naming many days would otherwise let one bare time ground a
+	// timestamp on any of them. In practice an incident window spans one or two days.
+	const MAX_SOURCE_DAYS_FOR_BARE_TIMES = 3;
+	if (sourceDays.length > 0 && sourceDays.length <= MAX_SOURCE_DAYS_FOR_BARE_TIMES) {
+		for (const time of new Set(sourceData.match(bareTimePattern) ?? [])) {
+			for (const day of sourceDays) sourceTimestamps.add(normalizeTimestamp(`${day}T${time}Z`));
+		}
+	}
 
 	// The aggregator prompt injects a "Report generation timestamp" which the LLM
 	// echoes in the report header. Timestamps within 5 minutes of now are legitimate.
