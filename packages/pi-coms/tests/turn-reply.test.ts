@@ -329,20 +329,29 @@ test("runHealth treats a length stop as healthy", () => {
 	expect(h.consecutive_run_errors).toBe(0);
 });
 
-// SIO-1831 ------------------------------------------------------------------
-// The spoke validates against the schema it was HANDED. Before this, any JSON
-// passed as `error: null` and the sender discarded it ~90 s later with only a warn.
+// SIO-1831: the spoke validates against the schema it was HANDED. Before this, any
+// JSON passed as `error: null` and the sender discarded it ~90 s later with only a warn.
 
-// The investigate schema the analyzer actually sends (PI_INVESTIGATION_RESPONSE_SCHEMA).
+// PI_INVESTIGATION_RESPONSE_SCHEMA, copied VERBATIM from packages/shared/src/pi-coms-types.ts.
+// Greptile on #859: an abbreviated copy (no evidence item requirements, no item types, no
+// confidence bounds) meant every rejection exited through missingRequiredKeys before
+// Value.Check ran, so the typebox call was never actually under test.
 const investigateSchema = {
 	type: "object",
 	required: ["summary", "root_cause_hypothesis", "evidence", "suggested_actions", "confidence"],
 	properties: {
 		summary: { type: "string" },
 		root_cause_hypothesis: { type: "string" },
-		evidence: { type: "array" },
-		suggested_actions: { type: "array" },
-		confidence: { type: "number" },
+		evidence: {
+			type: "array",
+			items: {
+				type: "object",
+				required: ["resource", "observation"],
+				properties: { resource: { type: "string" }, observation: { type: "string" } },
+			},
+		},
+		suggested_actions: { type: "array", items: { type: "string" } },
+		confidence: { type: "number", minimum: 0, maximum: 1 },
 	},
 };
 
@@ -423,4 +432,58 @@ test("SIO-1831: schemaMismatchError caps the key list and never prints values", 
 	// A non-object payload is described by its type, not dumped.
 	expect(schemaMismatchError({ type: "object", required: ["a"] }, ["secret-value"])).toContain("got an array");
 	expect(schemaMismatchError({ type: "object", required: ["a"] }, ["secret-value"])).not.toContain("secret-value");
+});
+
+// Greptile on #859: these are the cases that actually exercise Value.Check. Every
+// required top-level key is present, so missingRequiredKeys returns empty and the
+// typebox call is the only thing that can reject them. Replacing Value.Check with
+// `true` turns each of these red.
+const wellFormedExcept = (patch: Record<string, unknown>) => ({
+	summary: "s",
+	root_cause_hypothesis: "r",
+	evidence: [{ resource: "arn:x", observation: "o" }],
+	suggested_actions: ["do a thing"],
+	confidence: 0.5,
+	...patch,
+});
+
+test.each([
+	["a string confidence", { confidence: "high" }],
+	["confidence above the maximum", { confidence: 1.5 }],
+	["confidence below the minimum", { confidence: -0.1 }],
+	["an evidence item missing observation", { evidence: [{ resource: "arn:x" }] }],
+	["a non-string suggested action", { suggested_actions: [42] }],
+	["evidence that is not an array", { evidence: "none" }],
+])("SIO-1831: rejects %s, with every required key present", (_label, patch) => {
+	const payload = wellFormedExcept(patch);
+	// Precondition: this case must NOT be caught by the required-key check, or it
+	// would not test Value.Check at all.
+	expect(Object.keys(payload)).toEqual(
+		expect.arrayContaining(["summary", "root_cause_hypothesis", "evidence", "suggested_actions", "confidence"]),
+	);
+
+	const replies = buildTurnReplies(
+		[{ msg_id: "m1", fulfilled: false, response_schema: investigateSchema }],
+		JSON.stringify(payload),
+	);
+
+	expect(replies[0]?.response).toBeNull();
+	expect(replies[0]?.error).toContain("did not match the requested schema");
+	// Names WHERE it failed, not just which keys arrived.
+	expect(replies[0]?.error).toContain("failed at:");
+	expect(replies[0]?.error).not.toContain("missing required");
+});
+
+test("SIO-1831: a nested failure names the path and never prints the offending value", () => {
+	const replies = buildTurnReplies(
+		[{ msg_id: "m1", fulfilled: false, response_schema: investigateSchema }],
+		JSON.stringify(wellFormedExcept({ evidence: [{ resource: "arn:super-secret-account-id", observation: 7 }] })),
+	);
+
+	const error = replies[0]?.error ?? "";
+	expect(error).toContain("failed at:");
+	expect(error).toContain("/evidence/0/observation");
+	// The payload value must never reach the error string.
+	expect(error).not.toContain("arn:super-secret-account-id");
+	expect(error).not.toContain("7");
 });

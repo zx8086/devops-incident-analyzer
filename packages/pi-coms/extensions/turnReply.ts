@@ -167,6 +167,34 @@ function missingRequiredKeys(schema: object, payload: unknown): string[] {
 	return required.filter((k): k is string => typeof k === "string" && !present.has(k));
 }
 
+// The failing schema PATHS, for the case every required top-level key is present and
+// the break is a wrong type or a missing nested field. Greptile on #859: without this
+// the error named only the key list, so a reply rejected on `confidence: "high"` or an
+// evidence item missing `observation` told the sender nothing while its body was
+// discarded. Paths and expected types only -- never the offending value, which is
+// payload data (account ids, arns, trace ids).
+function failingSchemaPaths(schema: object, payload: unknown): string[] {
+	try {
+		const seen = new Set<string>();
+		// Field names verified against typebox at runtime, not assumed: an issue carries
+		// `instancePath` (where in the payload) and `message` (what was expected).
+		for (const issue of Value.Errors(schema as never, payload) as Iterable<{
+			instancePath?: unknown;
+			message?: unknown;
+		}>) {
+			const rawPath = typeof issue.instancePath === "string" ? issue.instancePath : "";
+			const path = rawPath === "" ? "(root)" : rawPath;
+			// `message` is schema-derived ("must be string", "must be <= 1"), never payload text.
+			const why = typeof issue.message === "string" ? issue.message : "";
+			seen.add(why ? `${path} (${why})` : path);
+			if (seen.size >= MISMATCH_MAX_KEYS) break;
+		}
+		return [...seen];
+	} catch {
+		return [];
+	}
+}
+
 // KEY NAMES only, never values: the payload carries account ids, arns and trace ids,
 // the same rule the analyzer's replyKeys follows (SIO-1830).
 export function schemaMismatchError(schema: object, payload: unknown): string {
@@ -177,8 +205,13 @@ export function schemaMismatchError(schema: object, payload: unknown): string {
 			: [];
 	const gotPart =
 		got.length > 0 ? `got keys: ${got.join(", ")}` : `got ${Array.isArray(payload) ? "an array" : typeof payload}`;
-	const missingPart = missing.length > 0 ? `; missing required: ${missing.slice(0, MISMATCH_MAX_KEYS).join(", ")}` : "";
-	return `response did not match the requested schema (${gotPart}${missingPart})`;
+	if (missing.length > 0) {
+		return `response did not match the requested schema (${gotPart}; missing required: ${missing.slice(0, MISMATCH_MAX_KEYS).join(", ")})`;
+	}
+	// Every required key is present, so the break is deeper: name the paths.
+	const paths = failingSchemaPaths(schema, payload);
+	const wherePart = paths.length > 0 ? `; failed at: ${paths.join(", ")}` : "";
+	return `response did not match the requested schema (${gotPart}${wherePart})`;
 }
 
 // Guard: a schema this validator cannot interpret must NEVER make a spoke fail every
