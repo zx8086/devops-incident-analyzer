@@ -1,7 +1,8 @@
 // tests/report.test.ts
 import { describe, expect, test } from "bun:test";
-import { FINDING_LINE_RE, parseMonitorHeader } from "../contracts/report.ts";
+import { FINDING_LINE_RE, type MonitorMessageKind, parseMonitorHeader } from "../contracts/report.ts";
 import {
+	accountNameFromEnv,
 	checkErrorCountsFromJournal,
 	DIAGNOSIS_RESPONSE_SCHEMA,
 	DiagnosisSchema,
@@ -17,6 +18,7 @@ import {
 	parseDiagnoses,
 	suppressionReviewFromJournal,
 } from "../scripts/monitor/report.ts";
+import { subjectFor } from "../scripts/monitor/report-email.ts";
 
 const finding = {
 	family: "alarm" as const,
@@ -237,10 +239,12 @@ describe("digest notables", () => {
 				notable(),
 			],
 		});
-		expect(text).toContain(
-			"(critical/cert) cert-example.example.test: Certificate cert-example.example.test expires in -979 day(s)",
-		);
-		expect(text).toContain("(warn/drift) i-059a799316e6d8f5d: instance changed state running -> terminated");
+		// SIO-1832: the resource leads the line and the summary follows on its own
+		// indented line, so a long message is readable instead of cut mid-token.
+		expect(text).toContain("  - (critical/cert) cert-example.example.test\n");
+		expect(text).toContain("      Certificate cert-example.example.test expires in -979 day(s)");
+		expect(text).toContain("  - (warn/drift) i-059a799316e6d8f5d\n");
+		expect(text).toContain("      instance changed state running -> terminated");
 	});
 
 	test("shows a repeat count only when a finding recurred", () => {
@@ -282,7 +286,8 @@ describe("digest notables", () => {
 		const notables = Array.from({ length: 13 }, (_, i) => notable({ resource: `i-${i}` }));
 		const text = formatDigest({ ...quietDigest, findingCounts: { drift: 13 }, notables });
 		expect(text).toContain("i-9");
-		expect(text).not.toContain("i-10:");
+		// The resource now ends its line, so the cap is checked on that shape.
+		expect(text).not.toContain("i-10\n");
 		expect(text).toContain("+3 more warn+ finding(s)");
 	});
 
@@ -293,7 +298,7 @@ describe("digest notables", () => {
 		const notables = Array.from({ length: 12 }, (_, i) => notable({ resource: `i-${i}`, uninvestigated: i === 11 }));
 		const text = formatDigest({ ...quietDigest, findingCounts: { drift: 12 }, notables });
 		expect(text).toContain("uninvestigated: 1");
-		const line = text.split("\n").find((l) => l.includes("i-11:"));
+		const line = text.split("\n").find((l) => l.includes("i-11"));
 		expect(line).toContain("[uninvestigated]");
 		expect(text).toContain("+2 more warn+ finding(s)");
 	});
@@ -689,7 +694,13 @@ describe("SIO-1825: every formatter's header parses through the shared contract"
 		const header = parseMonitorHeader(
 			formatIncidentReport("111122223333", [{ finding, diagnosis: null }]).split("\n")[0] ?? "",
 		);
-		expect(header).toEqual({ kind: "incident-report", severity: "warn", accountId: "111122223333", findingCount: 1 });
+		expect(header).toEqual({
+			kind: "incident-report",
+			severity: "warn",
+			accountId: "111122223333",
+			accountName: undefined,
+			findingCount: 1,
+		});
 	});
 
 	test.each([
@@ -718,5 +729,166 @@ describe("SIO-1825: every formatter's header parses through the shared contract"
 	test("a spoke conversation is not a monitor header", () => {
 		expect(parseMonitorHeader("please check the ALB")).toBeUndefined();
 		expect(parseMonitorHeader("[warn] something else entirely")).toBeUndefined();
+	});
+});
+
+// SIO-1832: the subject named only the 12-digit account, so an inbox holding
+// eight spokes was unreadable. The name is additive on the wire.
+describe("account name in the header", () => {
+	const NAME = "eu-shared-services-prd";
+	const digestBase = {
+		accountId: "111122223333",
+		since: "2026-08-29T00:00:00Z",
+		findingCounts: { logs: 2 },
+		checkErrors: 0,
+		activeAlarms: [],
+		yesterdayUsd: null,
+		baselineUsd: null,
+	};
+	const finding: Finding = {
+		severity: "warn",
+		family: "drift",
+		resource: "i-1",
+		summary: "changed",
+		evidence: {},
+		dedup_key: "drift:i-1",
+		at: "2026-08-29T00:00:00Z",
+	};
+
+	// THE rollout guarantee. The fleet updates host by host, so for the duration
+	// of a rollout the mailbox holds both shapes; if the un-named one stopped
+	// parsing, the fleet inbox would silently report "0 monitor report(s)" for
+	// every account still on the old bundle (the SIO-1825 failure).
+	test.each([
+		["digest", (n?: string) => formatDigest({ ...digestBase, accountName: n }), "daily-digest"],
+		[
+			"degraded digest",
+			(n?: string) => formatDigest({ ...digestBase, accountName: n, checkErrors: 2 }),
+			"daily-digest",
+		],
+		[
+			"paused digest",
+			(n?: string) =>
+				formatDigest({ ...digestBase, accountName: n, paused: { reason: "maint", since: "2026-08-29T00:00:00Z" } }),
+			"daily-digest",
+		],
+		[
+			"incident report",
+			(n?: string) => formatIncidentReport("111122223333", [{ finding, diagnosis: null }], null, 0, n),
+			"incident-report",
+		],
+		[
+			"suppression review",
+			(n?: string) =>
+				formatSuppressionReview({ accountId: "111122223333", accountName: n, windowDays: 7, entries: [] }),
+			"suppression-review",
+		],
+	] as [string, (n?: string) => string, MonitorMessageKind][])(
+		"%s parses with and without a name, and the account id never moves",
+		(_label, make, kind) => {
+			const without = parseMonitorHeader(make().split("\n")[0] ?? "");
+			expect(without?.kind).toBe(kind);
+			expect(without?.accountId).toBe("111122223333");
+			expect(without?.accountName).toBeUndefined();
+
+			const withName = parseMonitorHeader(make(NAME).split("\n")[0] ?? "");
+			expect(withName?.kind).toBe(kind);
+			expect(withName?.accountId).toBe("111122223333");
+			expect(withName?.accountName).toBe(NAME);
+			// The count is read from a group that shifts when the name group is added.
+			expect(withName?.findingCount).toBe(without?.findingCount);
+		},
+	);
+
+	test("the name appears after the id, where the contract expects it", () => {
+		const text = formatDigest({ ...digestBase, accountName: NAME });
+		expect(text.split("\n")[0]).toBe(`[info] aws-111122223333 (${NAME}) daily digest (since ${digestBase.since})`);
+	});
+
+	// SNS refuses a subject over 100 characters, and the longest real account
+	// name plus a full ISO timestamp sits close to it.
+	test("the quiet digest subject stays inside the SNS limit", () => {
+		const text = formatDigest({ ...digestBase, accountName: NAME, since: "2026-09-19T06:15:04.595Z" });
+		expect(subjectFor(text).length).toBeLessThanOrEqual(100);
+		expect(subjectFor(text)).toContain(NAME);
+	});
+
+	// A subject that overflows must still show WHY it is a warn at a glance.
+	test("a degraded subject keeps the keyword when it truncates", () => {
+		const text = formatDigest({ ...digestBase, accountName: NAME, checkErrors: 3, since: "2026-09-19T06:15:04.595Z" });
+		const subject = subjectFor(text);
+		expect(subject.length).toBeLessThanOrEqual(100);
+		expect(subject).toContain("DEGRADED");
+	});
+});
+
+describe("accountNameFromEnv", () => {
+	const digestBase = {
+		accountId: "111122223333",
+		since: "2026-08-29T00:00:00Z",
+		findingCounts: { logs: 2 },
+		checkErrors: 0,
+		activeAlarms: [],
+		yesterdayUsd: null,
+		baselineUsd: null,
+	};
+
+	test("keeps a well-formed fleet spoke key", () => {
+		expect(accountNameFromEnv("eu-shared-services-prd", "111122223333")).toBe("eu-shared-services-prd");
+		expect(accountNameFromEnv("  eu-oit-dev  ", "111122223333")).toBe("eu-oit-dev");
+	});
+
+	test("drops an absent or empty value", () => {
+		expect(accountNameFromEnv(undefined, "111122223333")).toBeUndefined();
+		expect(accountNameFromEnv("   ", "111122223333")).toBeUndefined();
+	});
+
+	// Terraform derives `aws-<id>` when agent_name is empty; repeating it would
+	// render as `aws-111122223333 (aws-111122223333)`.
+	test("drops Terraform's aws-<id> fallback rather than repeating it", () => {
+		expect(accountNameFromEnv("aws-111122223333", "111122223333")).toBeUndefined();
+	});
+
+	// A name outside the contract's charset would produce a header that
+	// parseMonitorHeader rejects outright, emptying the fleet inbox.
+	test.each(["Bad_Name", "has space", "UPPER", "sym!bol"])("drops %p", (bad) => {
+		expect(accountNameFromEnv(bad, "111122223333")).toBeUndefined();
+	});
+
+	// An over-long name is SHORTENED, not dropped: it still identifies the
+	// account, where no name sends the operator back to memorising ids.
+	test("truncates an over-long name instead of dropping it", () => {
+		const long = `${"a".repeat(40)}-tail`;
+		const out = accountNameFromEnv(long, "111122223333");
+		expect(out).toBe("a".repeat(32));
+		expect(out?.length).toBe(32);
+	});
+
+	test("a truncated name never ends on a hyphen", () => {
+		expect(accountNameFromEnv(`${"a".repeat(31)}-more`, "111122223333")).toBe("a".repeat(31));
+	});
+
+	// Greptile P1 on PR #860, reproduced before fixing: the account label sits
+	// BEFORE the status in the header, and SNS cuts the subject at 100 chars from
+	// the end -- so a long name pushed the keyword off the line. Measured on the
+	// pre-fix code: DEGRADED was lost at a 50-char name, PAUSED at 52, leaving an
+	// alarming email whose subject said only that a digest existed.
+	test.each([22, 32, 50, 52, 64, 80])("a %i-char name still leaves DEGRADED and PAUSED in the subject", (len) => {
+		const name = accountNameFromEnv("a".repeat(len), "111122223333");
+		const degraded = subjectFor(formatDigest({ ...digestBase, accountName: name, checkErrors: 3 }));
+		const paused = subjectFor(
+			formatDigest({ ...digestBase, accountName: name, paused: { reason: "", since: digestBase.since } }),
+		);
+		expect(degraded).toContain("DEGRADED");
+		expect(paused).toContain("PAUSED");
+		expect(degraded.length).toBeLessThanOrEqual(100);
+		expect(paused.length).toBeLessThanOrEqual(100);
+	});
+
+	test("a rejected name still yields a parseable header", () => {
+		const name = accountNameFromEnv("Bad_Name", "111122223333");
+		const header = parseMonitorHeader(formatDigest({ ...digestBase, accountName: name }).split("\n")[0] ?? "");
+		expect(header?.kind).toBe("daily-digest");
+		expect(header?.accountId).toBe("111122223333");
 	});
 });

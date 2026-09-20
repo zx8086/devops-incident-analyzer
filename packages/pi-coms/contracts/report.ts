@@ -37,14 +37,37 @@ export const FINDING_LINE_RE = /^- \((info|warn|critical)\/([a-z-]+)\) (.+?): (.
 // treat `findingCount` as present only on an incident report (see MonitorMessageKind).
 export type MonitorMessageKind = "incident-report" | "daily-digest" | "suppression-review";
 
-const INCIDENT_HEADER_RE = /^\[(info|warn|critical)\] aws-(\d+): (\d+) finding\(s\)/;
-const DIGEST_HEADER_RE = /^\[(info|warn|critical)\] aws-(\d+) daily digest\b/;
-const SUPPRESSION_HEADER_RE = /^\[(info|warn|critical)\] aws-(\d+) suppression review\b/;
+// SIO-1832: the header may carry the friendly account name after the id --
+// `[info] aws-123456789012 (eu-oit-prd) daily digest (since <ts>)` -- because an
+// inbox list of eight numeric accounts is unreadable.
+//
+// OPTIONAL on purpose, and it must stay that way. The fleet rolls out host by
+// host, so during a rollout both shapes sit in the mailbox at once; a REQUIRED
+// group would drop every report from a spoke still on the old bundle, which is
+// the SIO-1825 failure again. The name also stays AFTER the id so the id keeps
+// capture group 2 and no caller's indexing moves.
+//
+// The charset is deliberately tight (lowercase, digits, hyphen -- the shape of a
+// fleet.yaml spoke key): a looser group could swallow the rest of the header and
+// make `daily digest` match inside a name.
+const ACCOUNT_NAME_RE = String.raw`(?: \(([a-z0-9-]+)\))?`;
+
+const INCIDENT_HEADER_RE = new RegExp(
+	String.raw`^\[(info|warn|critical)\] aws-(\d+)${ACCOUNT_NAME_RE}: (\d+) finding\(s\)`,
+);
+const DIGEST_HEADER_RE = new RegExp(String.raw`^\[(info|warn|critical)\] aws-(\d+)${ACCOUNT_NAME_RE} daily digest\b`);
+const SUPPRESSION_HEADER_RE = new RegExp(
+	String.raw`^\[(info|warn|critical)\] aws-(\d+)${ACCOUNT_NAME_RE} suppression review\b`,
+);
 
 export type MonitorHeader = {
 	kind: MonitorMessageKind;
 	severity: string;
 	accountId: string;
+	// The friendly account name when the writing monitor knew one (SIO-1832).
+	// undefined for an older monitor, so a reader must fall back to accountId
+	// rather than treating its absence as a parse failure.
+	accountName: string | undefined;
 	// Incident reports only: the count the header states. null on the other two,
 	// so a digest can never be read as "N fresh findings".
 	findingCount: number | null;
@@ -59,12 +82,20 @@ export function parseMonitorHeader(line: string): MonitorHeader | undefined {
 			kind: "incident-report",
 			severity: incident[1] ?? "",
 			accountId: incident[2] ?? "",
-			findingCount: Number(incident[3]),
+			accountName: incident[3],
+			// The name is group 3 now, so the count moved to 4.
+			findingCount: Number(incident[4]),
 		};
 	}
 	const digest = DIGEST_HEADER_RE.exec(line);
 	if (digest) {
-		return { kind: "daily-digest", severity: digest[1] ?? "", accountId: digest[2] ?? "", findingCount: null };
+		return {
+			kind: "daily-digest",
+			severity: digest[1] ?? "",
+			accountId: digest[2] ?? "",
+			accountName: digest[3],
+			findingCount: null,
+		};
 	}
 	const suppression = SUPPRESSION_HEADER_RE.exec(line);
 	if (suppression) {
@@ -72,6 +103,7 @@ export function parseMonitorHeader(line: string): MonitorHeader | undefined {
 			kind: "suppression-review",
 			severity: suppression[1] ?? "",
 			accountId: suppression[2] ?? "",
+			accountName: suppression[3],
 			findingCount: null,
 		};
 	}

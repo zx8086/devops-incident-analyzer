@@ -310,6 +310,11 @@ ENV_FILE="$AGENT_HOME/.coms-env"
   echo "export PI_COMS_NET_PROJECT='$COMS_PROJECT'"
   echo "export PI_MONITOR_NAME='monitor-$AGENT_NAME'"
   echo "export PI_MONITOR_INVESTIGATE_TARGET='$AGENT_NAME'"
+  # SIO-1832: the same friendly name in the report header and so the SNS email
+  # subject, which otherwise names only the 12-digit account. The monitor drops
+  # a value that is empty or Terraform's own aws-<id> fallback, so a host with
+  # no agent_name keeps the numeric header.
+  echo "export PI_MONITOR_ACCOUNT_NAME='$AGENT_NAME'"
   # Reports and the daily digest need an owner that is not the operator's
   # laptop (only online when the operator is); ops is the named owner (O10).
   echo "export PI_MONITOR_REPORT_TO='${MONITOR_REPORT_TO:-ops}'"
