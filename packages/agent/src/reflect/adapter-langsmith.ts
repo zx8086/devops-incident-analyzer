@@ -140,7 +140,12 @@ function fingerprint(value: unknown): string {
 // them would drop real turns. Anything else yields "" -- correct here, because a message
 // whose content this adapter cannot read contributes no text, and the run itself has
 // already passed RunInputsSchema / RunOutputsSchema at the boundary.
-const ContentBlocksSchema = z.array(z.object({ text: z.string() }).loose());
+// Every block is accepted and only the text ones are READ. Requiring `text` on all of them
+// made a single image_url or file block reject the whole array, so an attachment turn that
+// also carried readable text was dropped entirely -- taking the scan's request with it, and
+// with it cross-session retry detection (Greptile, PR #862; the hand-rolled version this
+// replaced had skipped non-text blocks, and my tests only covered uniform ones).
+const ContentBlocksSchema = z.array(z.union([z.object({ text: z.string() }).loose(), z.unknown()]));
 const MessageContentSchema = z.union([
 	z.object({ content: z.string() }).loose(),
 	z.object({ content: ContentBlocksSchema }).loose(),
@@ -158,8 +163,10 @@ function messageContent(message: unknown): string {
 	const content = z.union([z.string(), ContentBlocksSchema]).safeParse(raw);
 	if (!content.success) return "";
 	if (typeof content.data === "string") return content.data;
+	// Read the text blocks, skip the rest: an image or file block alongside them is normal
+	// in an attachment turn and must not cost us the text that came with it.
 	return content.data
-		.map((block) => block.text)
+		.map((block) => (block && typeof block === "object" && "text" in block ? String(block.text) : ""))
 		.filter(Boolean)
 		.join("\n");
 }

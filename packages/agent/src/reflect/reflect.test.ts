@@ -118,6 +118,41 @@ describe("adapter", () => {
 		expect(odd.messages.some((m) => m.role === "user")).toBe(false);
 	});
 
+	// The regression a uniform-blocks test could not see (Greptile, PR #862): an attachment
+	// turn mixes text with image_url/file blocks. Requiring `text` on every block rejected
+	// the whole array, dropping the user's request -- and with it the scan's `request`
+	// handle, which cross-session retry detection depends on.
+	test("a turn mixing text with an image block keeps its text", () => {
+		const session = runToRawSession(
+			fakeRun({
+				inputs: {
+					messages: [
+						{
+							kwargs: {
+								content: [
+									{ type: "text", text: "why is checkout slow" },
+									{ type: "image_url", image_url: { url: "http://example.test/y.png" } },
+									{ type: "text", text: "since this morning" },
+								],
+							},
+						},
+					],
+				},
+			}),
+		);
+		const part = session.messages.find((m) => m.role === "user")?.parts[0];
+		expect(part && part.type === "text" ? part.text : null).toBe("why is checkout slow\nsince this morning");
+	});
+
+	test("a turn of only non-text blocks yields no user turn", () => {
+		const session = runToRawSession(
+			fakeRun({
+				inputs: { messages: [{ kwargs: { content: [{ type: "image_url", image_url: { url: "http://x/y" } }] } }] },
+			}),
+		);
+		expect(session.messages.some((m) => m.role === "user")).toBe(false);
+	});
+
 	test("reads typed toolErrors into failed tool_result parts", () => {
 		const session = runToRawSession(
 			fakeRun({
