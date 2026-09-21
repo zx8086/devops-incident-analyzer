@@ -357,6 +357,12 @@ interface JiraSearchResponse {
 	isLast?: boolean;
 }
 
+// SIO-1863: the window an empty search retries at. 120 rather than "unbounded" because the
+// point is to reach the previous occurrence of a recurring failure, not to trawl the whole
+// backlog: the measured case sat 53 days out, and an unbounded window would put years of
+// closed tickets in front of the reranker for no gain.
+export const WIDENED_WINDOW_DAYS = 120;
+
 export async function findLinkedIncidents(
 	proxy: AtlassianMcpProxy,
 	ctx: FindLinkedIncidentsContext,
@@ -445,6 +451,39 @@ export async function findLinkedIncidents(
 		warnings.push(
 			`More than ${issues.length} incidents matched within ${ctx.withinDays}d; results were truncated to the requested limit. Increase limit or narrow withinDays to see the full set.`,
 		);
+	}
+
+	// SIO-1863: an empty result at the default window is usually the WINDOW, not the query.
+	// Measured live: `pvh-services-styles-v3` returned 0 at 30d and 10 at 120d, and those 10
+	// are DEVOPS incident reports naming the service verbatim in their summaries -- they were
+	// simply 53 days old. The rerank (SIO-1837/1861) then kept 8 of 10 with the two exact
+	// matches at the maximum score, so the evidence was good and only recency hid it.
+	//
+	// Retry WIDER rather than looser. Relaxing the query text instead was measured and is
+	// actively harmful: deriving the token "styles" found 10 tickets inside 30 days and the
+	// rerank dropped ALL of them (they were merchandising tickets), which is the same trap
+	// the SIO-1802 comment above describes -- a generic keyword wins the `limit` race and the
+	// service's own incidents never come back.
+	//
+	// Only on a genuinely empty result, so a service that already returns hits at the narrow
+	// window is untouched, and only once, so the cost is bounded at one extra search.
+	if (issues.length === 0 && ctx.withinDays < WIDENED_WINDOW_DAYS) {
+		log.info(
+			{ service: ctx.service, from: ctx.withinDays, to: WIDENED_WINDOW_DAYS },
+			"No linked incidents in the requested window; retrying wider once",
+		);
+		const wider = await findLinkedIncidents(proxy, { ...ctx, withinDays: WIDENED_WINDOW_DAYS });
+		if (wider.count > 0) {
+			return {
+				...wider,
+				configWarning: [
+					`No incidents matched within ${ctx.withinDays}d, so the search was widened to ${WIDENED_WINDOW_DAYS}d. These tickets are older than the requested window.`,
+					wider.configWarning,
+				]
+					.filter(Boolean)
+					.join(" "),
+			};
+		}
 	}
 
 	return {

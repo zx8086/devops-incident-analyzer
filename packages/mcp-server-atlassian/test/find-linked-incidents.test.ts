@@ -8,6 +8,7 @@ import {
 	findLinkedIncidents,
 	type JiraIssueRaw,
 	shapeIssue,
+	WIDENED_WINDOW_DAYS,
 } from "../src/tools/custom/find-linked-incidents.js";
 
 describe("findLinkedIncidents.descriptionExcerpt", () => {
@@ -671,5 +672,107 @@ describe("findLinkedIncidents (end-to-end with mock proxy)", () => {
 		expect(result.issues[0].key).toBe("INC-1");
 		expect(result.issues[0].url).toBe("https://tommy.atlassian.net/browse/INC-1");
 		expect(result.issues[0].mttrMinutes).toBe(30);
+	});
+});
+
+// SIO-1863: an empty result at the default window is usually the WINDOW, not the query.
+// Measured live: `pvh-services-styles-v3` returned 0 at 30d and 10 at 120d, and those 10 name
+// the service verbatim in their summaries -- they were 53 days old. The rerank then kept 8 of
+// 10. Recency was hiding good evidence.
+describe("SIO-1863: widen the window once when nothing matches", () => {
+	const report = (key: string) => ({
+		key,
+		fields: {
+			summary: `Incident Report: pvh-services-styles-v3 — Couchbase timeout ${key}`,
+			status: { name: "Closed" },
+			created: "2026-07-30T21:11:57.148+0100",
+		},
+	});
+
+	// Returns nothing inside 30 days and the real incident reports at the widened window,
+	// which is exactly what the live Jira does for this service.
+	const proxyByWindow = (seen: string[]) =>
+		({
+			callTool: async (_name: string, a: Record<string, unknown>) => {
+				const jql = String(a.jql);
+				seen.push(jql);
+				const wide = jql.includes(`-${WIDENED_WINDOW_DAYS}d`);
+				return {
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({
+								issues: wide ? [report("DEVOPS-1413"), report("DEVOPS-1412")] : [],
+								isLast: true,
+							}),
+						},
+					],
+				};
+			},
+		}) as unknown as Parameters<typeof findLinkedIncidents>[0];
+
+	test("an empty narrow window retries wider and returns the older reports", async () => {
+		const seen: string[] = [];
+		const out = await findLinkedIncidents(proxyByWindow(seen), {
+			service: "pvh-services-styles-v3",
+			withinDays: 30,
+			limit: 10,
+			incidentProjects: [],
+		});
+
+		expect(out.count).toBe(2);
+		expect(out.issues.map((i) => i.key)).toEqual(["DEVOPS-1413", "DEVOPS-1412"]);
+		// The caller must be able to tell these are outside the window it asked for.
+		expect(out.configWarning).toContain(`widened to ${WIDENED_WINDOW_DAYS}d`);
+		expect(seen.some((j) => j.includes("-30d"))).toBe(true);
+		expect(seen.some((j) => j.includes(`-${WIDENED_WINDOW_DAYS}d`))).toBe(true);
+	});
+
+	test("a window that already returns hits is NOT widened", async () => {
+		const seen: string[] = [];
+		const proxy = {
+			callTool: async (_name: string, a: Record<string, unknown>) => {
+				seen.push(String(a.jql));
+				return {
+					content: [{ type: "text", text: JSON.stringify({ issues: [report("DEVOPS-1500")], isLast: true }) }],
+				};
+			},
+		} as unknown as Parameters<typeof findLinkedIncidents>[0];
+
+		const out = await findLinkedIncidents(proxy, {
+			service: "kafka",
+			withinDays: 30,
+			limit: 10,
+			incidentProjects: [],
+		});
+
+		expect(out.count).toBe(1);
+		expect(out.configWarning).toBeUndefined();
+		// One search only: no retry, so a service that already works costs nothing extra.
+		expect(seen).toHaveLength(1);
+		expect(seen.every((j) => j.includes("-30d"))).toBe(true);
+	});
+
+	test("a genuinely empty corpus retries once and then stops", async () => {
+		const seen: string[] = [];
+		const proxy = {
+			callTool: async (_name: string, a: Record<string, unknown>) => {
+				seen.push(String(a.jql));
+				return { content: [{ type: "text", text: JSON.stringify({ issues: [], isLast: true }) }] };
+			},
+		} as unknown as Parameters<typeof findLinkedIncidents>[0];
+
+		const out = await findLinkedIncidents(proxy, {
+			service: "nothing-matches-this",
+			withinDays: 30,
+			limit: 10,
+			incidentProjects: [],
+		});
+
+		expect(out.count).toBe(0);
+		// Bounded: the narrow search plus exactly one wider retry, never a loop.
+		expect(seen).toHaveLength(2);
+		// An empty result reports the window the CALLER asked for, not the retry's.
+		expect(out.jql).toContain("-30d");
 	});
 });
