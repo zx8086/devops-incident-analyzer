@@ -170,7 +170,12 @@ tool_mapping:
       - document key
     query_execution:
       - n1ql
-      - sql++
+      # Greptile PR #878: NOT "sql++". matchActionsByKeywords builds \b<kw>\b, and "+" is
+      # not a word character, so the trailing \b can never match -- verified: "run a SQL++
+      # query" returned [] while the n1ql form matched. Use the spelled-out form the
+      # Couchbase tool names themselves use (capella_run_sql_plus_plus_query).
+      - sql plus plus
+      - sql query
       - explain plan
       - select query
   action_descriptions:

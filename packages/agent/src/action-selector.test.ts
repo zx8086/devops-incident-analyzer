@@ -199,6 +199,28 @@ describe("SIO-1864: action_keywords coverage", () => {
 		expect(total).toBeGreaterThanOrEqual(72);
 	});
 
+	// Greptile PR #878 (P1): a keyword ending in a non-word character can NEVER match,
+	// because matchActionsByKeywords builds \b<kw>\b and the trailing \b requires a word
+	// character on its left. "sql++" was exactly that -- "run a SQL++ query" returned [].
+	// A dead keyword is worse than a missing one: it reads as coverage while the action
+	// silently never reaches the high-precision tier.
+	test("no keyword is unmatchable because it starts or ends with a non-word character", () => {
+		const agent = loadAgent(INCIDENT_ANALYZER_DIR);
+		const dead: string[] = [];
+		for (const toolDef of agent.tools) {
+			for (const [action, kws] of Object.entries(getActionKeywords(toolDef))) {
+				for (const kw of kws) {
+					// Probe the real matcher rather than re-deriving the regex: a keyword that
+					// cannot match its own text is unmatchable by construction.
+					if (!matchActionsByKeywords(kw, toolDef).includes(action)) {
+						dead.push(`${toolDef.name}.${action}: ${JSON.stringify(kw)}`);
+					}
+				}
+			}
+		}
+		expect(dead).toEqual([]);
+	});
+
 	test("no keyword is claimed by two actions of the same tool", () => {
 		const agent = loadAgent(INCIDENT_ANALYZER_DIR);
 		const collisions: string[] = [];
