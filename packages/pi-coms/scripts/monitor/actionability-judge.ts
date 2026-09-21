@@ -107,7 +107,11 @@ export async function judgeActionability(
 	if (findings.length === 0) return verdicts;
 	const ask = deps.ask ?? askSystemOne;
 	const signal = deps.signal ?? AbortSignal.timeout(JUDGE_DEADLINE_MS);
-	const recent = recentDiagnosed.slice(0, RECENT_CONTEXT);
+	// The NEWEST entries, not the first ones. Greptile PR #871: journalRows is
+	// `ORDER BY id ASC`, so slicing from the front kept the OLDEST eight and, on any
+	// day with more than eight diagnosed findings, compared a current warning
+	// against stale context while ignoring what just happened.
+	const recent = recentDiagnosed.slice(-RECENT_CONTEXT);
 	const questions = questionsFor(recent);
 
 	// allSettled so one failure does not throw away the rest of the round -- but

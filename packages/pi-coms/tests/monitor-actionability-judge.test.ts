@@ -104,7 +104,12 @@ describe("judgeActionability", () => {
 		expect(out.get("a")?.duplicate).toBe(0);
 	});
 
-	test("recent context is capped, so the state cannot grow without bound", async () => {
+	test("keeps the NEWEST eight of the recent context, not the oldest", async () => {
+		// Greptile PR #871. journalRows is ORDER BY id ASC, so slicing from the front
+		// kept the oldest eight and compared a current warning against stale context.
+		// The original test passed 40 identical-shaped entries and only asserted the
+		// LENGTH, so it could not tell the two ends apart -- the entries are numbered
+		// here for exactly that reason.
 		let sent: string[] = [];
 		const ask = (async (o: Parameters<Ask>[0]) => {
 			sent = (o.state as { recent_diagnosed?: string[] }).recent_diagnosed ?? [];
@@ -113,6 +118,8 @@ describe("judgeActionability", () => {
 		const many = Array.from({ length: 40 }, (_, i) => `prior ${i}`);
 		await judgeActionability([finding("a")], many, { apiKey: "k", ask });
 		expect(sent).toHaveLength(8);
+		expect(sent[0]).toBe("prior 32");
+		expect(sent[7]).toBe("prior 39");
 	});
 
 	test("sends only the finding fields the questions name", async () => {
