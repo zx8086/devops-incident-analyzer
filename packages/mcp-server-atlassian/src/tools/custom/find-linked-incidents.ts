@@ -467,7 +467,15 @@ export async function findLinkedIncidents(
 	//
 	// Only on a genuinely empty result, so a service that already returns hits at the narrow
 	// window is untouched, and only once, so the cost is bounded at one extra search.
-	if (issues.length === 0 && ctx.withinDays < WIDENED_WINDOW_DAYS) {
+	//
+	// Greptile, PR #876: "genuinely empty" means BOTH narrow searches came back clean. When one
+	// of them threw, `issues.length === 0` is an artefact of the failure, not evidence about the
+	// window -- reproduced: a 503 on the service query with the keyword query empty returned
+	// older tickets under "No incidents matched within 30d", and the upstream failure vanished
+	// from configWarning entirely. Widening there reports an outage as "nothing recent exists",
+	// which is the silent-degrade this tool's warnings exist to prevent. Fall through instead and
+	// let the failure warning stand.
+	if (issues.length === 0 && warnings.length === 0 && ctx.withinDays < WIDENED_WINDOW_DAYS) {
 		log.info(
 			{ service: ctx.service, from: ctx.withinDays, to: WIDENED_WINDOW_DAYS },
 			"No linked incidents in the requested window; retrying wider once",
@@ -476,7 +484,11 @@ export async function findLinkedIncidents(
 		if (wider.count > 0) {
 			return {
 				...wider,
+				// `warnings` is empty on this path by the guard above, but it is carried anyway:
+				// the guard and this join are the two places a partial failure could be dropped,
+				// and only one of them being right is how the P1 above happened.
 				configWarning: [
+					...warnings,
 					`No incidents matched within ${ctx.withinDays}d, so the search was widened to ${WIDENED_WINDOW_DAYS}d. These tickets are older than the requested window.`,
 					wider.configWarning,
 				]

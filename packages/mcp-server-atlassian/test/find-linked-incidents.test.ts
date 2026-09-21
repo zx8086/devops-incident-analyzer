@@ -753,6 +753,36 @@ describe("SIO-1863: widen the window once when nothing matches", () => {
 		expect(seen.every((j) => j.includes("-30d"))).toBe(true);
 	});
 
+	// Greptile, PR #876 (P1): a partial FAILURE is not an empty window. Reproduced before
+	// fixing -- a 503 on the service query with the keyword query empty returned older tickets
+	// under "No incidents matched within 30d" and dropped the failure warning entirely, so an
+	// outage read as "nothing recent exists".
+	test("a failed narrow query is NOT treated as an empty window", async () => {
+		const seen: string[] = [];
+		const proxy = {
+			callTool: async (_name: string, a: Record<string, unknown>) => {
+				const jql = String(a.jql);
+				seen.push(jql);
+				if (jql.includes("labels =")) throw new Error("upstream 503");
+				return { content: [{ type: "text", text: JSON.stringify({ issues: [], isLast: true }) }] };
+			},
+		} as unknown as Parameters<typeof findLinkedIncidents>[0];
+
+		const out = await findLinkedIncidents(proxy, {
+			service: "svc",
+			errorKeywords: ["boom"],
+			withinDays: 30,
+			limit: 10,
+			incidentProjects: [],
+		});
+
+		// The upstream failure must survive to the caller, not be replaced by a window story.
+		expect(out.configWarning ?? "").toContain("failed");
+		expect(out.configWarning ?? "").not.toContain("widened to");
+		// And no retry happened: only the two narrow searches were issued.
+		expect(seen.every((j) => j.includes("-30d"))).toBe(true);
+	});
+
 	test("a genuinely empty corpus retries once and then stops", async () => {
 		const seen: string[] = [];
 		const proxy = {
