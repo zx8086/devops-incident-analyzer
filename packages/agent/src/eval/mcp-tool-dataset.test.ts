@@ -126,17 +126,29 @@ describe("dataset tool names resolve against the real action maps", () => {
 		}
 	});
 
-	// SIO-1866: the staleness guard. GitLab's `include` enums live UPSTREAM, behind the proxy
-	// to its native /api/v4/mcp -- GitLab can add a value with no commit in this repo to review.
-	// Each new value is a potential false negative: a composite call that satisfies a group the
-	// dataset still describes by the dedicated tool name alone. Checked offline against the
-	// recorded upstream schema so it surfaces in CI rather than as an unexplained metric dip
-	// weeks later (the MR !383 case cost a session to diagnose from scratch).
+	// SIO-1866: the snapshot-consistency guard. GitLab's `include` enums live UPSTREAM, behind
+	// the proxy to its native /api/v4/mcp, and each value is a potential false negative: a
+	// composite call that satisfies a group the dataset still describes by the dedicated tool
+	// name alone.
 	//
-	// When this fails: GitLab changed the enum. Decide per value whether a group needs
-	// anySubResourceOf, then update UPSTREAM_INCLUDE_ENUMS to match. Do NOT just widen the
-	// expected set to silence it -- that is the rot this test exists to catch.
-	test("every upstream include value is either mapped or explicitly waived", () => {
+	// WHAT THIS CATCHES, precisely (Greptile, PR #880): it compares the dataset against the
+	// FROZEN snapshot below, so it fires when the snapshot and the mappings disagree -- when
+	// someone refreshes UPSTREAM_INCLUDE_ENUMS, or edits a group's anySubResourceOf. It does
+	// NOT detect an upstream-only addition: if GitLab adds a value and nobody touches this
+	// file, the value is absent from both sides and the test passes. Verified by simulation --
+	// adding "test_reports" to the snapshot fails the test; leaving the file untouched passes.
+	//
+	// Fetching the live schema here was rejected deliberately: this file's whole property is
+	// that it runs offline and for free (see the header), and a unit test that needs a running
+	// MCP server on :9084 would be skipped in CI, which is a worse guard than an honest one.
+	// The live comparison belongs where the schema is already reachable -- precheck.ts, which
+	// already talks to every server before a run. Until then the snapshot's date is the
+	// expiry: re-probe when touching this mapping.
+	//
+	// When this fails: the snapshot and the mappings disagree. Decide per value whether a group
+	// needs anySubResourceOf, then update UPSTREAM_INCLUDE_ENUMS to match. Do NOT just widen the
+	// waiver set to silence it -- that is the rot this test exists to catch.
+	test("the dataset mapping stays consistent with the recorded upstream snapshot", () => {
 		// Recorded from a live tools/list against the GitLab MCP server, 2026-09-21.
 		const UPSTREAM_INCLUDE_ENUMS: Record<string, string[]> = {
 			gitlab_get_job: ["log", "artifacts"],
