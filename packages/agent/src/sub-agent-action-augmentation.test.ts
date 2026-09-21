@@ -11,6 +11,7 @@ import {
 } from "@devops-agent/gitagent-bridge";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
+	buildPriorityActions,
 	inferClusterHealthActions,
 	mergeKeywordActions,
 	narrowOnHighPrecisionIntent,
@@ -390,6 +391,34 @@ describe("SIO-1781: keyword-matched actions survive the belt cut first", () => {
 		const names = (p?: string[]) =>
 			selectToolsByAction(allTools, "aws", { aws: actions }, awsDef, undefined, p).tools.map((t) => t.name);
 		expect(names([])).toEqual(names(undefined));
+	});
+
+	// SIO-1839 (Greptile PR #872): a Jev-SELECTED action lands in exactly the spot
+	// SIO-1781 was written for. The query below never says "SQS" and carries no
+	// envelope field names, so the keyword pass cannot match messaging_state --
+	// only the model can. If the selection is not also passed as priority, the
+	// capability is identified and then silently cut by declaration rank, which is
+	// worse than never selecting it because the belt looks considered.
+	test("a model-selected action gets the same priority as a keyword-matched one", () => {
+		const awsDef = loadAwsDef();
+		const allTools = fakeTools(getAllActionToolNames(awsDef));
+		const everyAction = Object.keys(awsDef.tool_mapping?.action_tool_map ?? {});
+		const PROSE = "orders are piling up somewhere between the checkout service and the worker";
+
+		// Precondition: the keyword pass is blind to this phrasing.
+		expect(matchActionsByKeywords(PROSE, awsDef)).not.toContain("messaging_state");
+
+		// buildPriorityActions is the CALL-SITE rule, not a re-implementation of it:
+		// an earlier version of this test merged the lists itself, which meant
+		// reverting the fix in runSubAgent left the test green (mutation survived).
+		const jevSelected = ["messaging_state"];
+		const priority = buildPriorityActions(matchActionsByKeywords(PROSE, awsDef), jevSelected);
+
+		const after = selectToolsByAction(allTools, "aws", { aws: everyAction }, awsDef, undefined, priority).tools.map(
+			(t) => t.name,
+		);
+		expect(after).toContain("aws_sqs_list_queues");
+		expect(after.length).toBeLessThanOrEqual(25);
 	});
 });
 

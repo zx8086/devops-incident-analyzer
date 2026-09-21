@@ -1,7 +1,7 @@
 // agent/src/extract-findings.ts
 import { getLogger } from "@devops-agent/observability";
 import type { AtlassianFindings, AtlassianLinkedIssue, DataSourceResult } from "@devops-agent/shared";
-import { createDecisionMetricsRecorder, rankCorrelation, resolveDecisionMetricsDbPath } from "@devops-agent/shared";
+import { rankCorrelation } from "@devops-agent/shared";
 import { buildApplicationTopology, mergeApplicationTopologyOverlay } from "./application-topology.ts";
 import {
 	buildIncidentQuery,
@@ -16,6 +16,7 @@ import { extractElasticFindings } from "./correlation/extractors/elastic.ts";
 import { extractGitLabFindings } from "./correlation/extractors/gitlab.ts";
 import { extractKafkaFindings } from "./correlation/extractors/kafka.ts";
 import { extractOrbitFindings } from "./correlation/extractors/orbit.ts";
+import { recordDecision } from "./decision-recorder.ts";
 import { buildMlAnomalyExplainer } from "./ml-anomaly-explainer.ts";
 import { buildNetworkTopology } from "./network-topology.ts";
 import type { AgentStateType } from "./state.ts";
@@ -184,39 +185,28 @@ function findingsForRerank(
 	return issues.length > 0 ? { findings, issues } : undefined;
 }
 
-// Best-effort, and deliberately not awaited into the turn's critical path beyond
-// the write itself: a metrics failure must never cost a card. The recorder is
-// opened per call because extractFindings is a graph node, not a long-lived
-// service, and DECISION_METRICS_DB_PATH is usually unset (then this is a no-op).
+// SIO-1839: the metrics write now goes through the shared recordDecision helper
+// (decision-recorder.ts) rather than opening its own recorder here -- the second
+// seam needed the same twenty lines, and two copies is how one of them silently
+// stops recording.
 function recordRerankDecision(
 	state: AgentStateType,
 	itemsIn: number,
 	outcome: Awaited<ReturnType<typeof rerankLinkedIssues>>,
 ): void {
-	const dbPath = resolveDecisionMetricsDbPath();
-	if (!dbPath) return;
-	void createDecisionMetricsRecorder({ dbPath, logger: { warn: (m, meta) => logger.warn(meta ?? {}, m) } })
-		.then((recorder) => {
-			if (!recorder) return;
-			recorder.record({
-				seam: "atlassian-rerank",
-				outcome: outcome ? "applied" : "failed",
-				requestId: state.requestId,
-				model: outcome?.model,
-				latencyMs: outcome?.latencyMs,
-				inputTokens: outcome?.inputTokens,
-				itemsIn,
-				itemsDropped: outcome?.dropped,
-				topScore: outcome?.issues[0]?.relevance,
-				bottomScore: outcome?.issues[outcome.issues.length - 1]?.relevance,
-				rankCorrelation: outcome ? rankCorrelation(outcome.deterministicRanks, outcome.jevRanks) : undefined,
-			});
-			recorder.close();
-		})
-		.catch(() => {
-			// createDecisionMetricsRecorder already warns on a failed open; a rejected
-			// promise here must not surface as an unhandled rejection.
-		});
+	recordDecision({
+		seam: "atlassian-rerank",
+		outcome: outcome ? "applied" : "failed",
+		requestId: state.requestId,
+		model: outcome?.model,
+		latencyMs: outcome?.latencyMs,
+		inputTokens: outcome?.inputTokens,
+		itemsIn,
+		itemsDropped: outcome?.dropped,
+		topScore: outcome?.issues[0]?.relevance,
+		bottomScore: outcome?.issues[outcome.issues.length - 1]?.relevance,
+		rankCorrelation: outcome ? rankCorrelation(outcome.deterministicRanks, outcome.jevRanks) : undefined,
+	});
 }
 
 export async function extractFindings(state: AgentStateType): Promise<Partial<AgentStateType>> {

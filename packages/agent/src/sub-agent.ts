@@ -1,7 +1,12 @@
 // agent/src/sub-agent.ts
 
 import type { ToolDefinition } from "@devops-agent/gitagent-bridge";
-import { getAllActionToolNames, matchActionsByKeywords, resolveActionTools } from "@devops-agent/gitagent-bridge";
+import {
+	getActionKeywords,
+	getAllActionToolNames,
+	matchActionsByKeywords,
+	resolveActionTools,
+} from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult, ToolError, ToolErrorCategory, ToolErrorKind, ToolOutput } from "@devops-agent/shared";
 import {
@@ -16,9 +21,11 @@ import { AIMessage, type BaseMessage, HumanMessage, ToolMessage } from "@langcha
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { isActionSelectorEnabled, resolveTypeSafeApiKey, selectActions } from "./action-selector.ts";
 import { fetchAppMapBaseline, isAppMapBaselineEnabled } from "./app-map-baseline.ts";
 import { hasDestinationAggregation } from "./application-topology.ts";
 import { completeEcsEnumeration, unwalkedClustersFrom } from "./aws-absence-completion.ts";
+import { recordDecision } from "./decision-recorder.ts";
 import {
 	buildRunJsOnEvidenceTool,
 	isEvidenceExecEnabled,
@@ -530,6 +537,48 @@ const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }>
 		],
 	},
 ];
+
+// SIO-1839: the Jev action selection for one dispatch. Returns [] for every
+// non-success path -- flag off, no key, no actions declared, any failure -- so
+// the caller's keyword passes stand exactly as they did before this existed.
+async function selectActionsForDispatch(
+	query: string,
+	toolDef: ToolDefinition,
+	dataSourceId: string,
+	requestId: string | undefined,
+	log: LogSink,
+): Promise<string[]> {
+	if (!isActionSelectorEnabled()) return [];
+	const apiKey = resolveTypeSafeApiKey();
+	if (!apiKey) return [];
+	const actionKeywords = getActionKeywords(toolDef);
+	if (Object.keys(actionKeywords).length === 0) return [];
+
+	const result = await selectActions(query, actionKeywords, { apiKey });
+	recordDecision({
+		seam: "action-selector",
+		outcome: result.ok ? "applied" : "failed",
+		requestId,
+		model: result.ok ? result.selection.model : undefined,
+		latencyMs: result.ok ? result.selection.latencyMs : undefined,
+		inputTokens: result.ok ? result.selection.inputTokens : undefined,
+		itemsIn: Object.keys(actionKeywords).length,
+		itemsDropped: result.ok ? Object.keys(actionKeywords).length - result.selection.actions.length : undefined,
+		note: result.ok ? dataSourceId : `${dataSourceId}:${result.reason}`,
+	});
+	if (!result.ok) return [];
+
+	log.info(
+		{
+			event: "action_selector.selected",
+			dataSourceId,
+			selected: result.selection.actions,
+			latencyMs: result.selection.latencyMs,
+		},
+		"Jev selected actions",
+	);
+	return result.selection.actions;
+}
 
 export function classifyToolError(message: string): { category: ToolErrorCategory; retryable: boolean } {
 	const normalized = message.toLowerCase();
@@ -1519,6 +1568,24 @@ function bindTools(
 // SIO-738: Shared merge step so the augmentation test exercises the same
 // dedup logic the production runSubAgent path uses. Returns baseActions
 // reference unchanged when keywordActions is empty (no extra allocation).
+// SIO-1839 (Greptile PR #872): which actions survive the 25-tool cut FIRST.
+//
+// SIO-1781 introduced priority because declaration rank alone dropped both
+// aws_sqs_* tools on run f77ce7dd -- messaging_state is declared ~63rd of 68. A
+// Jev-selected action sits in exactly that position, so it must be priority too:
+// selecting a capability and then cutting its tools by an ordering that never
+// heard about it is worse than not selecting it, because the belt then looks
+// considered while missing the thing the selector asked for.
+//
+// A named function rather than an inline merge at the call site, because
+// runSubAgent needs a live MCP client to reach and an inline expression there is
+// untestable -- the first version of this fix was mutation-checked and SURVIVED,
+// since the test exercised selectToolsByAction directly with an already-merged
+// list and never touched the call site at all.
+export function buildPriorityActions(keywordActions: string[], selectedActions: string[]): string[] {
+	return mergeKeywordActions(keywordActions, selectedActions);
+}
+
 export function mergeKeywordActions(baseActions: string[], keywordActions: string[]): string[] {
 	if (keywordActions.length === 0) return baseActions;
 	return [...new Set([...baseActions, ...keywordActions])];
@@ -1789,7 +1856,20 @@ ${state.correlationFetchDirective}`
 		// SIO-742: cluster-health auto-include for kafka (covers phrasings the
 		// substring augmenter misses, e.g. "Kafka Rest", "related services").
 		const clusterHealthActions = inferClusterHealthActions(query, dataSourceId);
-		const augmentationActions = mergeKeywordActions(keywordActions, clusterHealthActions);
+		// SIO-1839: one Noul per action, asked of the query itself. Union-merged
+		// with the keyword passes rather than replacing them -- the keyword lists
+		// encode real operator vocabulary, and the point is to cover the phrasings
+		// they miss ("noisiest" for a top-N metrics query), not to discard them.
+		// Deliberately kept OUT of `keywordActions`: narrowOnHighPrecisionIntent
+		// below treats a keyword hit as a high-precision signal that may drop other
+		// actions, and a probabilistic match must never trigger that.
+		const selectedActions = toolDef
+			? await selectActionsForDispatch(query, toolDef, dataSourceId, state.requestId, log)
+			: [];
+		const augmentationActions = mergeKeywordActions(
+			mergeKeywordActions(keywordActions, clusterHealthActions),
+			selectedActions,
+		);
 		const preNarrowMerged = mergeKeywordActions(baseActions, augmentationActions);
 		// SIO-785 follow-up (2026-05-18): when the deterministic keyword pass detects
 		// a high-precision intent (currently dlq_messages — "dead letter" / "dlq"),
@@ -1831,7 +1911,14 @@ ${state.correlationFetchDirective}`
 			augmentedToolActions,
 			toolDef,
 			skillToolNames,
-			keywordActions,
+			// SIO-1839 (Greptile PR #872): the Jev-selected actions are priority too,
+			// not just the keyword-matched ones. SIO-1781 added this argument because
+			// declaration rank alone dropped both aws_sqs_* tools on run f77ce7dd --
+			// messaging_state is declared ~63rd of 68 -- and a Jev-only action is in
+			// exactly that position: identified as needed, then cut by an ordering
+			// that never heard about it. Selecting a capability and then dropping its
+			// tools is worse than not selecting it, because the belt looks considered.
+			buildPriorityActions(keywordActions, selectedActions),
 		);
 		log.info(
 			{ toolCount: tools.length, totalTools: allTools.length, filtered, deploymentId },

@@ -27,11 +27,22 @@ const ScoreAnswerSchema = z.object({
 	probabilities: z.record(z.string(), z.number()).optional(),
 });
 
+// SIO-1839: a Noul answer is just a probability -- no confidence field, because
+// for a yes/no the probability IS the confidence. Shape captured from a live
+// jev-1.13.0 call, same as the Score one above.
+const NoulAnswerSchema = z.object({
+	type: z.literal("noul"),
+	noul: z.number(),
+});
+
+// A request may mix the two, and a caller reads back whichever it asked for.
+const AnswerSchema = z.union([ScoreAnswerSchema, NoulAnswerSchema]);
+
 const SystemOneResponseSchema = z.object({
 	// The versioned id that actually answered. Logged rather than assumed equal to
 	// the id we sent, so a server-side change is visible in the metrics.
 	model: z.string(),
-	answers: z.record(z.string(), ScoreAnswerSchema),
+	answers: z.record(z.string(), AnswerSchema),
 	usage: z.object({ input_tokens: z.number(), output_tokens: z.number() }).optional(),
 });
 
@@ -42,6 +53,26 @@ export interface ScoreQuestion {
 	instructions: string;
 	// Ordered level descriptions, index 0 lowest. The API accepts 2 to 10.
 	criteria: string[];
+}
+
+export interface NoulQuestion {
+	type: "noul";
+	instructions: string;
+}
+
+export type Question = ScoreQuestion | NoulQuestion;
+
+export type Answer = z.infer<typeof AnswerSchema>;
+
+// Narrowing helpers. The API returns whichever shape the question asked for, but
+// a response is untrusted input, so a caller reads its answer through one of
+// these rather than asserting the type it expects to get back.
+export function asScore(answer: Answer | undefined): z.infer<typeof ScoreAnswerSchema> | undefined {
+	return answer?.type === "score" ? answer : undefined;
+}
+
+export function asNoul(answer: Answer | undefined): z.infer<typeof NoulAnswerSchema> | undefined {
+	return answer?.type === "noul" ? answer : undefined;
 }
 
 export function resolveTypeSafeApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -63,7 +94,7 @@ export function resolveTypeSafeApiKey(env: NodeJS.ProcessEnv = process.env): str
  */
 export async function askSystemOne(options: {
 	state: unknown;
-	questions: Record<string, ScoreQuestion>;
+	questions: Record<string, Question>;
 	apiKey: string;
 	signal?: AbortSignal;
 	model?: string;
