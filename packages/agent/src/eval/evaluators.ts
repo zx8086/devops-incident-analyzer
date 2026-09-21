@@ -658,6 +658,9 @@ export function expectedToolsFired(run: Run, example?: Example): { key: string; 
 	if (!trajectory || trajectory.totalCalls === 0) return [];
 
 	const called = new Set(trajectory.calls.map((c) => c.toolName));
+	// SIO-1866: every non-empty sub-resource any successful call returned, so a composite tool
+	// can satisfy a group naming only the dedicated tool. Built once per run, not per group.
+	const returnedSubResources = new Set(trajectory.calls.flatMap((c) => c.subResources ?? []));
 	const satisfied: string[] = [];
 	const missing: string[] = [];
 	for (const group of expected.requiredToolGroups) {
@@ -666,8 +669,19 @@ export function expectedToolsFired(run: Run, example?: Example): { key: string; 
 		// length is scored today, but a list naming the wrong tool is a trap for anyone who later
 		// reads it (e.g. to report which alternative the model preferred).
 		const firedMember = group.anyOf.find((name) => called.has(name));
-		if (firedMember !== undefined) satisfied.push(firedMember);
-		else missing.push(`[${group.anyOf.join(" | ")}] (${group.why})`);
+		if (firedMember !== undefined) {
+			satisfied.push(firedMember);
+			continue;
+		}
+		// SIO-1866: no dedicated tool fired, but a composite may have carried the same rows.
+		// Named as "<sub-resource> via composite" so a reader can tell the two routes apart
+		// rather than seeing a tool name that was never called.
+		const viaSubResource = group.anySubResourceOf?.find((name) => returnedSubResources.has(name));
+		if (viaSubResource !== undefined) {
+			satisfied.push(`${viaSubResource} via composite`);
+			continue;
+		}
+		missing.push(`[${group.anyOf.join(" | ")}] (${group.why})`);
 	}
 
 	const forbiddenCalled = (expected.forbiddenTools ?? []).filter((name) => called.has(name));
@@ -677,6 +691,12 @@ export function expectedToolsFired(run: Run, example?: Example): { key: string; 
 	const score = forbiddenCalled.length > 0 ? 0 : groupScore;
 
 	const parts: string[] = [`${satisfied.length}/${expected.requiredToolGroups.length} required tool group(s) fired`];
+	// SIO-1866: name the composite matches. Without this a group satisfied by a composite is
+	// indistinguishable in the comment from one satisfied by the dedicated tool, and the next
+	// reader diagnosing a score has no way to tell which route the model actually took --
+	// exactly the gap that made the MR !383 case cost a session to work out.
+	const viaComposite = satisfied.filter((name) => name.endsWith(" via composite"));
+	if (viaComposite.length > 0) parts.push(`satisfied by composite tool: ${viaComposite.join(", ")}`);
 	if (missing.length > 0) parts.push(`missing: ${missing.join("; ")}`);
 	if (forbiddenCalled.length > 0) parts.push(`FORBIDDEN tool(s) called: ${forbiddenCalled.join(", ")}`);
 	return [{ key: "expected_tools_fired", score, comment: parts.join(" -- ") }];

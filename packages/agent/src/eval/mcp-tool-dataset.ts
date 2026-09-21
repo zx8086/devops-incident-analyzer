@@ -569,11 +569,19 @@ const EXAMPLES: EvalExample[] = [
 					{
 						dataSource: "gitlab",
 						anyOf: ["gitlab_get_merge_request_notes"],
+						// SIO-1866: gitlab_get_merge_request{include:["notes"]} returns the same notes.
+						anySubResourceOf: ["notes"],
 						why: "review discussion is a distinct evidence source from the diff; single-tool group so a miss isolates selection from arguments",
 					},
 					{
 						dataSource: "gitlab",
 						anyOf: ["gitlab_get_merge_request_pipelines", "gitlab_get_pipeline_jobs"],
+						// SIO-1866: the case that exposed this. Observed 2026-09-21 in experiment
+						// mcp-tool-eval-e20fc19c-2a916eff: the sub-agent called
+						// gitlab_get_merge_request{include:["pipelines"]} and got the IDENTICAL
+						// pipeline the dedicated tool returned in the prior run (id 2719503800,
+						// status SUCCESS) -- in one round trip instead of two -- and was scored 0.667.
+						anySubResourceOf: ["pipelines"],
 						why: "pipeline state for a SPECIFIC MR, as opposed to the graph-wide gitlab_pipeline_failures already covered elsewhere",
 					},
 				],
@@ -599,6 +607,8 @@ const EXAMPLES: EvalExample[] = [
 					{
 						dataSource: "gitlab",
 						anyOf: ["gitlab_get_commit_diff"],
+						// SIO-1866: gitlab_get_commit{include:["diff"]} returns the same diff.
+						anySubResourceOf: ["diff"],
 						why: "commit-level drill-down, runbook-cited; needs a sha, so it is unreachable from a question that only asks 'what changed recently'",
 					},
 					{
@@ -633,11 +643,15 @@ const EXAMPLES: EvalExample[] = [
 					{
 						dataSource: "gitlab",
 						anyOf: ["gitlab_get_pipeline_jobs"],
+						// SIO-1866: gitlab_get_pipeline{include:["jobs"]} returns the same jobs.
+						anySubResourceOf: ["jobs"],
 						why: "pipelines action group -- needs pipeline_id, so it is only reachable when one is named or discovered",
 					},
 					{
 						dataSource: "gitlab",
 						anyOf: ["gitlab_get_job_log"],
+						// SIO-1866: gitlab_get_job{include:["log"]} returns the same log.
+						anySubResourceOf: ["log"],
 						why: "job logs are the actual failure evidence in a CI incident; runbook-cited and never exercised",
 					},
 					{
@@ -667,6 +681,8 @@ const EXAMPLES: EvalExample[] = [
 					{
 						dataSource: "gitlab",
 						anyOf: ["gitlab_get_issue"],
+						// SIO-1866: gitlab_get_work_item{include:["notes"]} returns the same issue.
+						anySubResourceOf: ["notes"],
 						why: "issues action group -- the only uncovered member, runbook-cited, and needs issue_iid so a generic question never reaches it. Single-tool group so a miss isolates tool selection",
 					},
 				],
