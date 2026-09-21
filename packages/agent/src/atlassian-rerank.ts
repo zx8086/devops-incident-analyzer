@@ -21,7 +21,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { AtlassianLinkedIssue } from "@devops-agent/shared";
 import { redactPiiContent } from "@devops-agent/shared";
 import type { AgentStateType } from "./state.ts";
-import { askSystemOne, JEV_MODEL, resolveTypeSafeApiKey, type SystemOneResponse } from "./typesafe-client.ts";
+import { askSystemOne, asScore, JEV_MODEL, resolveTypeSafeApiKey, type SystemOneResponse } from "./typesafe-client.ts";
 
 const logger = getLogger("agent:atlassian-rerank");
 
@@ -173,7 +173,11 @@ export async function rerankLinkedIssues(
 	}
 
 	const scored = issues.map((issue, i) => {
-		const answer = responses[i]?.answers[RELEVANCE_QUESTION_ID];
+		// asScore, not a cast: the response is untrusted input, and a Noul answer
+		// under this id would otherwise read as score: undefined and be treated as a
+		// missing verdict rather than a wrong-shaped one. Either way it voids the
+		// round below, but the narrowing is what makes that true by construction.
+		const answer = asScore(responses[i]?.answers[RELEVANCE_QUESTION_ID]);
 		return {
 			issue,
 			score: answer?.score,
