@@ -1568,6 +1568,24 @@ function bindTools(
 // SIO-738: Shared merge step so the augmentation test exercises the same
 // dedup logic the production runSubAgent path uses. Returns baseActions
 // reference unchanged when keywordActions is empty (no extra allocation).
+// SIO-1839 (Greptile PR #872): which actions survive the 25-tool cut FIRST.
+//
+// SIO-1781 introduced priority because declaration rank alone dropped both
+// aws_sqs_* tools on run f77ce7dd -- messaging_state is declared ~63rd of 68. A
+// Jev-selected action sits in exactly that position, so it must be priority too:
+// selecting a capability and then cutting its tools by an ordering that never
+// heard about it is worse than not selecting it, because the belt then looks
+// considered while missing the thing the selector asked for.
+//
+// A named function rather than an inline merge at the call site, because
+// runSubAgent needs a live MCP client to reach and an inline expression there is
+// untestable -- the first version of this fix was mutation-checked and SURVIVED,
+// since the test exercised selectToolsByAction directly with an already-merged
+// list and never touched the call site at all.
+export function buildPriorityActions(keywordActions: string[], selectedActions: string[]): string[] {
+	return mergeKeywordActions(keywordActions, selectedActions);
+}
+
 export function mergeKeywordActions(baseActions: string[], keywordActions: string[]): string[] {
 	if (keywordActions.length === 0) return baseActions;
 	return [...new Set([...baseActions, ...keywordActions])];
@@ -1893,7 +1911,14 @@ ${state.correlationFetchDirective}`
 			augmentedToolActions,
 			toolDef,
 			skillToolNames,
-			keywordActions,
+			// SIO-1839 (Greptile PR #872): the Jev-selected actions are priority too,
+			// not just the keyword-matched ones. SIO-1781 added this argument because
+			// declaration rank alone dropped both aws_sqs_* tools on run f77ce7dd --
+			// messaging_state is declared ~63rd of 68 -- and a Jev-only action is in
+			// exactly that position: identified as needed, then cut by an ordering
+			// that never heard about it. Selecting a capability and then dropping its
+			// tools is worse than not selecting it, because the belt looks considered.
+			buildPriorityActions(keywordActions, selectedActions),
 		);
 		log.info(
 			{ toolCount: tools.length, totalTools: allTools.length, filtered, deploymentId },
