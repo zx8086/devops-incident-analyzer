@@ -116,6 +116,68 @@ tool_mapping:
       - capella_get_detailed_prepared_statements
       - capella_suggest_query_optimizations
       - capella_get_index_advisor_recommendations
+  # SIO-1864: phrasing sourced from the DEVOPS-1354 "Agentic Investigations" incident
+  # reports (DEVOPS-1407/1412/1413 are Couchbase failures this agent investigated), not
+  # invented from the action names. Multi-word phrases throughout: matchActionsByKeywords
+  # uses a \b word-boundary regex, so a bare "scope" or "collection" would fire on
+  # "scoped to these two estates", which appears in every report header (the SIO-1863
+  # generic-token trap). Short tokens are kept only where they cannot collide in this
+  # corpus: n1ql, sql++, gsi, ffdc.
+  action_keywords:
+    system_vitals:
+      - cluster vitals
+      - nodes healthy
+      - queue depth
+      - capella cluster health
+      - cluster-wide
+    node_status:
+      - node status
+      - query node
+      - node uptime
+      - ffdc
+    fatal_requests:
+      - fatal query
+      - fatal n1ql
+      - fatal requests
+      - timeout budget
+    slow_queries:
+      - longest-running
+      - slow query
+      - high wait time
+      - slow-query threshold
+    expensive_queries:
+      - most expensive
+      - expensive queries
+      - expensive query
+      - resource cost
+      - scan size
+      - non-covering
+    index_analysis:
+      - index advisor
+      - indexes to drop
+      - covering index
+      - secondary index
+      - index scan
+      - gsi
+    search_analysis:
+      - fts index
+      - full-text search
+      - search index
+    document_ops:
+      - document by id
+      - list buckets
+      - scopes and collections
+      - document key
+    query_execution:
+      - n1ql
+      # Greptile PR #878: NOT "sql++". matchActionsByKeywords builds \b<kw>\b, and "+" is
+      # not a word character, so the trailing \b can never match -- verified: "run a SQL++
+      # query" returned [] while the n1ql form matched. Use the spelled-out form the
+      # Couchbase tool names themselves use (capella_run_sql_plus_plus_query).
+      - sql plus plus
+      - sql query
+      - explain plan
+      - select query
   action_descriptions:
     system_vitals: when checking cluster-wide CPU, memory, disk, and replication health (the primary cluster-state path)
     fatal_requests: >-

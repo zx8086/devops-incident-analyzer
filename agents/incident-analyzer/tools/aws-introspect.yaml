@@ -177,6 +177,29 @@ tool_mapping:
     audit_trail: when establishing "who/what changed" -- CloudTrail trails and their logging status (not the events themselves)
     list_estates: when confirming which estates this runtime is configured to query and their boot-time AssumeRole health
   action_keywords:
+    # SIO-1864: the four actions that had none. Phrasing from DEVOPS-1398 (S3 IAM
+    # authorization failure), DEVOPS-1381 (readiness probe), and the estate-inventory
+    # queries in the eval dataset.
+    lambda_state:
+      - lambda function
+      - lambda invocation
+      - function timeout
+      - lambda error
+    storage_state:
+      - s3 bucket
+      - bucket policy
+      - s3 access
+      - object storage
+    infra_inventory:
+      - infrastructure inventory
+      - ec2 instances
+      - what is deployed
+      - resource inventory
+    audit_trail:
+      - cloudtrail
+      - audit trail
+      - who changed
+      - api call history
     cloudwatch_alarms:
       - cloudwatch alarm
       - alarm state

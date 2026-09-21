@@ -125,4 +125,33 @@ tool_mapping:
       (GitLab Orbit knowledge graph; group-scoped, no per-project resolution
       needed; consumes GitLab Credits)
   action_keywords:
+    # SIO-1864: the five actions that had none (only graph_analysis was declared).
+    # Phrasing from the eval dataset queries and the MR-correlation sections of the
+    # DEVOPS-14xx reports ("MR !852 merged", "which merge requests landed").
+    issues:
+      - gitlab issue
+      - issue number
+      - open issues
+    merge_requests:
+      - merge request
+      - merge requests
+      - merged mr
+      - what changed
+      - recent changes
+      - code change
+    pipelines:
+      - pipeline failed
+      - ci pipeline
+      - pipeline job
+      - job log
+      - build failure
+    search:
+      - search the code
+      - find in repo
+      - code search
+    code_analysis:
+      - file content
+      - git blame
+      - commit diff
+      - who wrote
     graph_analysis: ["blast radius", "cross-project", "who calls", "callers", "downstream", "dependents", "impact", "knowledge graph", "shared library", "importers"]

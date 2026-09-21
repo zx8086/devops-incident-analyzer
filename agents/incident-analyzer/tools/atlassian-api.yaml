@@ -107,6 +107,36 @@ tool_mapping:
       - atlassian_searchConfluenceUsingCql
       - atlassian_getConfluencePage
       - atlassian_getJiraIssue
+  # SIO-1864: phrasing from the DEVOPS-1354 incident reports, whose bodies routinely say
+  # "chronic, previously reported", "corroborated by DEVOPS-1353", "no matching runbook
+  # found". Short tokens jql/cql are kept: they cannot collide in this corpus.
+  action_keywords:
+    incident_correlation:
+      - prior incident
+      - related ticket
+      - recurring incident
+      - linked incident
+      - incident history
+      - previously reported
+      - seen before
+      - incident ticket
+      - incident tickets
+    runbook_lookup:
+      - runbook
+      - ops doc
+      - playbook
+      - remediation steps
+    jira_query:
+      - jira ticket
+      - jira tickets
+      - jira issue key
+      - jql
+    confluence_query:
+      - confluence page
+      - confluence pages
+      - wiki page
+      - documentation page
+      - cql
   action_descriptions:
     incident_correlation: when looking for Jira tickets linked to the incident, its services, or its domain terms (search plus the linked-incident and history composers, with readers for every hit)
     runbook_lookup: when looking for Confluence runbooks or ops docs for the failure (search plus the runbook composer, with page readers)
