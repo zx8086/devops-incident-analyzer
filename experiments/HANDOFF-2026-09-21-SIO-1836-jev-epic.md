@@ -2,7 +2,7 @@
 
 - **Date**: 2026-09-21
 - **Epic**: [SIO-1836](https://linear.app/siobytes/project/devops-incident-analyzer-02f717a4b59a) Jev (TypeSafe System One) integration
-- **Repo state at handover**: `main` at `6206a2b3`; branch `simonowusupvh/sio-1864-keywords-zero-coverage` at `933630af` (PR #878, awaiting a Greptile re-review after a P1 fix)
+- **Repo state at handover**: all work merged to `main`; **zero open PRs**
 - **Suggested branch for next work**: `simonowusupvh/sio-1864-eval-verification` off merged main
 
 ## TL;DR
@@ -22,11 +22,12 @@ re-running the eval to confirm PRs #877 and #878 did not regress that 0.931.
 | [#875](https://github.com/zx8086/devops-incident-analyzer/pull/875) | SIO-1862 | Selector scores order the tool-budget cut; + Greptile P1 (keyword tier stays above score tier) |
 | [#876](https://github.com/zx8086/devops-incident-analyzer/pull/876) | SIO-1863 | Widen the search window when retrieval is empty; + Greptile P1 (do not widen on a partial failure) |
 | [#877](https://github.com/zx8086/devops-incident-analyzer/pull/877) | SIO-1864 | Selector uses `action_descriptions`, which already existed and were ignored |
-| [#878](https://github.com/zx8086/devops-incident-analyzer/pull/878) | SIO-1864 | `action_keywords` 20/72 -> 72/72; + Greptile P1 (`sql++` could never match) — **OPEN, re-review pending** |
+| [#878](https://github.com/zx8086/devops-incident-analyzer/pull/878) | SIO-1864 | `action_keywords` 20/72 -> 72/72; + Greptile P1 (`sql++` could never match) |
 
 ## Measurements to carry forward
 
-**Eval baseline** (experiment `mcp-tool-eval-eff6623f`, 25 examples, selector ON):
+**Eval baseline** (experiment `mcp-tool-eval-eff6623f`, 25 examples, selector ON, measured
+BEFORE #877 and #878 — which is precisely why task 1 below matters):
 
 | evaluator | mean |
 |---|---|
@@ -65,12 +66,7 @@ Gotchas that cost this session hours, all now in memory:
 - `scripts/decision-metrics-report.ts --since` parses **local** time; pass a full ISO string with `Z`.
 - Caveat on interpretation: this measures #877 and #878 **combined**, not either alone.
 
-### 2. Finish merging PR #878
-
-Greptile re-review was running at handover. If clean, merge. If it finds more, the P1 pattern
-holds: verify with a live repro before applying.
-
-### 3. Optional, lower value
+### 2. Optional, lower value
 
 - **SIO-1840 tier flip** (`AGENT_LLM_TIER_ENTITY_EXTRACTOR=light`): parked by the user.
   My recommendation is still *don't* — the extractor scored 25/25 on datasource recall, and
@@ -110,7 +106,12 @@ holds: verify with a live repro before applying.
    guard already existed.
 4. **A generic single word is a trap.** `styles` retrieved 10 merchandising tickets the
    reranker dropped 10/10; a bare `scope` would match every report header.
-5. **Jev is not always better.** It *loses* to the entity extractor on datasource choice at
+5. **A Greptile finding can go stale within a PR.** On #878 the re-review repeated the
+   `sql++` P1 against the commit that had already removed it — it was matching the string
+   inside the comment *explaining* the removal, and the anchor came back as `undefined-173`.
+   Verify the finding against the current file before acting; here the fix was to reply with
+   evidence and resolve, not to change code.
+6. **Jev is not always better.** It *loses* to the entity extractor on datasource choice at
    every threshold, because the extractor's imprecision is deliberate correlation policy.
 
 ## Verification
