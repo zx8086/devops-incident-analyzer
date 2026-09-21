@@ -209,6 +209,11 @@ tool_mapping:
   # would match nearly every query in the corpus.
   action_keywords:
     search:
+      # Phrase order is brittle: "logs for" missed "logs on eu-b2b for the ... service".
+      # Anchor on terms that survive an interposed clause.
+      - search the logs
+      - hours of logs
+      - error volume
       - error burst
       - log volume
       - apm trace

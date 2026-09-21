@@ -221,6 +221,75 @@ describe("SIO-1864: action_keywords coverage", () => {
 		expect(dead).toEqual([]);
 	});
 
+	// Phrase matching is ORDER-SENSITIVE and adjacency-sensitive, which is easy to get
+	// wrong when writing keywords by hand. Three real eval-dataset queries matched nothing
+	// on the first pass: "capella cluster health" missed "health of the Couchbase Capella
+	// cluster" (word order), and "logs for" missed "logs on eu-b2b for the ... service" (an
+	// interposed clause). These are the queries the mcp-tool-eval actually runs, so a
+	// keyword edit that breaks one of them breaks a measured example.
+	test("the eval dataset queries keyword-match their datasource", () => {
+		const agent = loadAgent(INCIDENT_ANALYZER_DIR);
+		const cases: Array<[string, string, string]> = [
+			[
+				"couchbase-cluster-health",
+				"What is the current health of the Couchbase Capella cluster hosting the default bucket",
+				"system_vitals",
+			],
+			[
+				"couchbase-cluster-health",
+				"Give me a full query-performance profile of the Couchbase cluster behind the default bucket",
+				"expensive_queries",
+			],
+			[
+				"elastic-search-logs",
+				"Search the last 24 hours of logs on eu-b2b for the pvh-services-styles-v3 service and report the error volume",
+				"search",
+			],
+			[
+				"elastic-search-logs",
+				"What is the current cluster health of the eu-b2b deployment? Report status, node count, and any unassigned shards",
+				"cluster_health",
+			],
+			[
+				"kafka-introspect",
+				"Describe the c72-shared-services-msk Kafka cluster: how many brokers are there and what is the controller?",
+				"cluster_info",
+			],
+			["kafka-introspect", "List the consumer groups and report which ones are showing meaningful lag", "consumer_lag"],
+			[
+				"gitlab-api",
+				"List the most recent merge requests in GitLab project 43242609 and summarise what changed",
+				"merge_requests",
+			],
+			[
+				"atlassian-api",
+				"Search Jira for recent incident tickets and summarise the most recent few",
+				"incident_correlation",
+			],
+			[
+				"konnect-api-gateway",
+				"List the services configured in Kong Konnect and report their upstream targets",
+				"service_config",
+			],
+		];
+		const misses: string[] = [];
+		for (const [toolName, query, expected] of cases) {
+			const toolDef = agent.tools.find((t) => t.name === toolName);
+			if (!toolDef) throw new Error(`${toolName} not found`);
+			const matched = matchActionsByKeywords(query, toolDef);
+			// Greptile (PR #879): assert the COMPLETE match set, not just membership.
+			// matchActionsByKeywords returns every matching action and mergeKeywordActions
+			// (sub-agent.ts:1646) unions all of them into the tool belt, so a future keyword that
+			// made one of these queries also match an unrelated action would broaden production
+			// tool selection while an includes() check stayed green. Verified against the live
+			// YAML: each of these queries matches exactly its one expected action today.
+			if (matched.length !== 1 || matched[0] !== expected)
+				misses.push(`${toolName}: expected exactly [${expected}], got [${matched}] for "${query.slice(0, 50)}..."`);
+		}
+		// Named, so a broken keyword says WHICH query it broke.
+		expect(misses).toEqual([]);
+	});
+
 	test("no keyword is claimed by two actions of the same tool", () => {
 		const agent = loadAgent(INCIDENT_ANALYZER_DIR);
 		const collisions: string[] = [];
