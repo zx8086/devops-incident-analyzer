@@ -25,6 +25,13 @@ import { STSClient } from "@aws-sdk/client-sts";
 import { SupportClient } from "@aws-sdk/client-support";
 import { fromInstanceMetadata } from "@aws-sdk/credential-providers";
 import { isBlankReply } from "../contracts/reply.ts";
+import { type ActionabilityVerdict, planActionability } from "./monitor/actionability.ts";
+import {
+	isActionabilityEnforcing,
+	isActionabilityGateEnabled,
+	judgeActionability,
+	resolveTypeSafeApiKey,
+} from "./monitor/actionability-judge.ts";
 import {
 	type BudgetLimits,
 	type InvestigationOutcome as BudgetOutcome,
@@ -74,6 +81,7 @@ import {
 	type Diagnosis,
 	DiagnosisSchema,
 	type Finding,
+	FindingSchema,
 	findingCountsFromJournal,
 	formatDigest,
 	formatIncidentReport,
@@ -152,6 +160,31 @@ const INVESTIGATE_REUSE = {
 	windowMs: DAY_MS,
 };
 
+// SIO-1838: the Jev actionability gate, shared by all three cycle cadences.
+// Undefined when the kill-switch is off or no API key is configured, in which
+// case runCycle never reaches the gate and behaves exactly as before.
+function buildActionability(state: MonitorState): CycleDeps["actionability"] {
+	if (!isActionabilityGateEnabled()) return undefined;
+	const apiKey = resolveTypeSafeApiKey();
+	if (!apiKey) return undefined;
+	return {
+		enforcing: isActionabilityEnforcing(),
+		judge: (findings) => {
+			// Recent diagnoses give the duplicate question something to compare
+			// against. Summaries only: a diagnosis body is spoke-authored text, and
+			// the standing rule is that it never becomes a model input elsewhere.
+			const recent = state
+				.journalRows(DAY_MS, "finding")
+				.map((r) => {
+					const parsed = FindingSchema.safeParse(r.payload);
+					return parsed.success ? `${parsed.data.resource}: ${parsed.data.summary}` : undefined;
+				})
+				.filter((s): s is string => s !== undefined);
+			return judgeActionability(findings, recent, { apiKey });
+		},
+	};
+}
+
 // A flat await discards an agent's completed work whenever the batch is big
 // enough to outrun it (observed: 19 findings vs the 5-min default). Scale the
 // budget with the batch, capped so one huge batch cannot stall cycles all day.
@@ -221,6 +254,17 @@ export type CycleDeps = {
 	// again, it reuses that diagnosis; one held back by the budget reuses a
 	// diagnosis up to windowMs old. Absent: every warn+ finding is sent.
 	reuse?: { cooldownMs: number; windowMs: number };
+	// SIO-1838: ask whether a warn finding is worth a model turn at all. Returns a
+	// verdict per dedup_key; a key it omits is investigated exactly as today.
+	// Absent (unit tests, no API key, kill-switch off): the gate never runs.
+	// Injected rather than imported so runCycle stays pure and offline.
+	actionability?: {
+		judge: (findings: Finding[]) => Promise<Map<string, ActionabilityVerdict>>;
+		// false = shadow: journal the verdict, change nothing. Ships false until a
+		// journal replay says the gate agrees with reality (SIO-1748..1752 removed
+		// an earlier shadow mechanism for holding real incidents out of the inbox).
+		enforcing: boolean;
+	};
 	report: (text: string) => Promise<void>;
 	log: (line: string) => void;
 };
@@ -301,6 +345,38 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 				} else {
 					batch.push(f);
 				}
+			}
+		}
+		// SIO-1838 actionability pass. BEFORE the budget pass on purpose: a finding
+		// the gate would skip must not first consume one of the day's 24 slots.
+		// Soft-failing -- any error leaves `batch` exactly as it was, so the worst
+		// case is today's behaviour.
+		if (deps.actionability && batch.length > 0) {
+			try {
+				const verdicts = await deps.actionability.judge(batch);
+				const plan = planActionability(batch, verdicts, { enforcing: deps.actionability.enforcing });
+				batch = plan.send;
+				for (const s of plan.skipped) skipped.set(s.finding.dedup_key, s.reason);
+				// Journaled in BOTH modes: in shadow this is the whole point (it is
+				// the record a replay measures), and when enforcing it is the audit
+				// trail for a finding that never reached the agent.
+				for (const s of plan.wouldSkip) {
+					deps.state.journal("actionability_verdict", {
+						dedup_key: s.finding.dedup_key,
+						family: s.finding.family,
+						severity: s.finding.severity,
+						resource: s.finding.resource,
+						reason: s.reason,
+						enforced: deps.actionability.enforcing,
+					});
+				}
+				if (plan.wouldSkip.length > 0) {
+					const verb = deps.actionability.enforcing ? "held back" : "would hold back (shadow)";
+					deps.log(`actionability: ${plan.wouldSkip.length} finding(s) ${verb}, ${batch.length} sent`);
+				}
+			} catch (e) {
+				deps.state.journal("check_error", { check: "actionability", error: errorMessage(e) });
+				deps.log(`actionability gate failed: ${errorMessage(e)}`);
 			}
 		}
 		// Budget pass: findings over the daily or per-resource cap still ship,
@@ -591,6 +667,7 @@ function main(): void {
 		investigate,
 		budget: INVESTIGATE_BUDGET,
 		reuse: INVESTIGATE_REUSE,
+		actionability: buildActionability(state),
 		report,
 		log,
 	};
@@ -616,6 +693,7 @@ function main(): void {
 		investigate,
 		budget: INVESTIGATE_BUDGET,
 		reuse: INVESTIGATE_REUSE,
+		actionability: buildActionability(state),
 		report,
 		log,
 	};
@@ -708,6 +786,7 @@ function main(): void {
 			investigate,
 			budget: INVESTIGATE_BUDGET,
 			reuse: INVESTIGATE_REUSE,
+			actionability: buildActionability(state),
 			report,
 			log,
 		};
