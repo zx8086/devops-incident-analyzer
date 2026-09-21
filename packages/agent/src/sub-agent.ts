@@ -539,6 +539,28 @@ const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }>
 	},
 ];
 
+// SIO-1839: which actions the selector is allowed to ask about, as {action ->
+// keywords}. Keyed off the ACTION MAP, not the keyword table: only 3 of 7
+// datasources declare action_keywords (aws, gitlab, kafka), so keying off
+// keywords made the selector silently inert for atlassian, couchbase, elastic
+// and konnect -- the four with no keyword matching at all today, and therefore
+// the four it helps most. Found by an mcp-tool-eval run whose couchbase dispatch
+// never logged a selection.
+//
+// Keywords remain optional CONTEXT for the question; an action without them is
+// asked about by name alone.
+//
+// Exported and named because the first regression test for this rebuilt the map
+// itself and only checked its key count -- so reverting the production gate left
+// all 12 tests green (Greptile PR #873). A test that re-implements the rule
+// cannot notice the rule being removed.
+export function buildSelectableActions(toolDef: ToolDefinition): Record<string, string[]> {
+	const actionKeywords = getActionKeywords(toolDef);
+	const actions: Record<string, string[]> = {};
+	for (const name of getAvailableActions(toolDef)) actions[name] = actionKeywords[name] ?? [];
+	return actions;
+}
+
 // SIO-1839: the Jev action selection for one dispatch. Returns [] for every
 // non-success path -- flag off, no key, no actions declared, any failure -- so
 // the caller's keyword passes stand exactly as they did before this existed.
@@ -552,21 +574,8 @@ async function selectActionsForDispatch(
 	if (!isActionSelectorEnabled()) return [];
 	const apiKey = resolveTypeSafeApiKey();
 	if (!apiKey) return [];
-	// Key off the ACTION MAP, not the keyword table. Only 3 of 7 datasources
-	// declare action_keywords (aws, gitlab, kafka), so keying off keywords meant
-	// the selector silently did nothing for atlassian, couchbase, elastic and
-	// konnect -- the four with no keyword matching at all today, and therefore the
-	// four it helps most. Caught by an mcp-tool-eval run whose couchbase dispatch
-	// never logged a selection: the feature was wired in, gated open, and still
-	// inert for most of the fleet.
-	//
-	// Keywords remain optional CONTEXT for the question when a datasource has
-	// them; an action with none is asked about by name alone.
-	const actionKeywords = getActionKeywords(toolDef);
-	const actionNames = getAvailableActions(toolDef);
-	if (actionNames.length === 0) return [];
-	const actions: Record<string, string[]> = {};
-	for (const name of actionNames) actions[name] = actionKeywords[name] ?? [];
+	const actions = buildSelectableActions(toolDef);
+	if (Object.keys(actions).length === 0) return [];
 
 	const result = await selectActions(query, actions, { apiKey });
 	recordDecision({
@@ -576,8 +585,8 @@ async function selectActionsForDispatch(
 		model: result.ok ? result.selection.model : undefined,
 		latencyMs: result.ok ? result.selection.latencyMs : undefined,
 		inputTokens: result.ok ? result.selection.inputTokens : undefined,
-		itemsIn: actionNames.length,
-		itemsDropped: result.ok ? actionNames.length - result.selection.actions.length : undefined,
+		itemsIn: Object.keys(actions).length,
+		itemsDropped: result.ok ? Object.keys(actions).length - result.selection.actions.length : undefined,
 		note: result.ok ? dataSourceId : `${dataSourceId}:${result.reason}`,
 	});
 	if (!result.ok) return [];

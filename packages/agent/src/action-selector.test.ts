@@ -11,6 +11,7 @@ import {
 	isActionSelectorEnabled,
 	selectActions,
 } from "./action-selector.ts";
+import { buildSelectableActions } from "./sub-agent.ts";
 import type { SystemOneResponse } from "./typesafe-client.ts";
 
 // Two real datasource action sets, trimmed. The keyword lists are verbatim from
@@ -63,15 +64,23 @@ describe("coverage across the real tool definitions", () => {
 		// regression it guards would no longer be reachable.
 		expect(noKeywords.length).toBeGreaterThan(0);
 
+		// buildSelectableActions is the PRODUCTION gate, called here rather than
+		// re-implemented. The first version of this test rebuilt the map itself and
+		// checked only its key count, so reverting the gate to the keyword-keyed
+		// version left all 12 tests green (Greptile PR #873).
 		for (const toolDef of withActions) {
-			const names = getAvailableActions(toolDef);
-			const keywords = getActionKeywords(toolDef);
-			// What selectActionsForDispatch now builds: one entry per ACTION, with
-			// keywords as optional context rather than as the gate.
-			const asked: Record<string, string[]> = {};
-			for (const n of names) asked[n] = keywords[n] ?? [];
-			expect(Object.keys(asked).length).toBe(names.length);
+			const asked = buildSelectableActions(toolDef);
+			expect(Object.keys(asked).sort()).toEqual(getAvailableActions(toolDef).sort());
 		}
+
+		// The sharp end: a keywordless datasource must still be fully askable.
+		const keywordless = noKeywords[0];
+		if (!keywordless) throw new Error("expected at least one keywordless tool definition");
+		const asked = buildSelectableActions(keywordless);
+		expect(Object.keys(asked).length).toBeGreaterThan(0);
+		// ...and every one of its actions carries an empty keyword list, not a
+		// missing entry, so the question builder has something to iterate.
+		expect(Object.values(asked).every((k) => Array.isArray(k))).toBe(true);
 	});
 });
 
