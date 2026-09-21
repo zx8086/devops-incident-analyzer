@@ -73,6 +73,7 @@ export { extractPromptToolNames, extractSkillToolNames, type SkillSource } from 
 export {
 	buildFacadeMap,
 	type FacadeMap,
+	getActionDescriptions,
 	getActionKeywords,
 	getAllActionToolNames,
 	getAvailableActions,
