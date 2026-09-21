@@ -10,6 +10,7 @@ import {
 	ToolDefinitionSchema,
 } from "@devops-agent/gitagent-bridge";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import { getSkillToolNames } from "./prompt-context.ts";
 import {
 	buildPriorityActions,
 	inferClusterHealthActions,
@@ -529,5 +530,161 @@ describe("narrowOnHighPrecisionIntent respects explicit baseActions", () => {
 		expect(narrowOnHighPrecisionIntent(["dlq_messages", "topic_throughput"], ["dlq_messages"])).toEqual([
 			"dlq_messages",
 		]);
+	});
+});
+
+// SIO-1862: when Jev selects broadly, the tools of its OWN selected actions overflow
+// the 25-tool budget. Every one is priority, so the priority bit ties and the cut
+// falls by YAML declaration position. Reproduced from a live couchbase dispatch:
+// 7 selected actions -> 28 distinct tools, plus a 10-tool head -> requested 30 for
+// 25 slots, and capella_run_sql_plus_plus_query was dropped while query_execution
+// was one of the selected actions.
+//
+// The head is load-bearing and was what made an earlier version of this test pass
+// for the wrong reason: with skillToolNames omitted the head is 3 tools, all inside
+// the union, so it costs no slots and NOTHING is starved. Pass the real names.
+describe("SIO-1862: per-action scores order the priority set when it overflows", () => {
+	function loadCouchbaseDef(): ToolDefinition {
+		const agent = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
+		const def = agent.tools.find((t) => t.name === "couchbase-cluster-health");
+		if (!def) throw new Error("couchbase-cluster-health tool definition not found");
+		return def;
+	}
+
+	// The exact selection the eval logged, in the order it logged.
+	const JEV_SELECTED = [
+		"slow_queries",
+		"expensive_queries",
+		"fatal_requests",
+		"query_execution",
+		"index_analysis",
+		"search_analysis",
+		"document_ops",
+	];
+	const STARVED = "capella_run_sql_plus_plus_query";
+
+	function boundNames(scores?: Record<string, number>): string[] {
+		const def = loadCouchbaseDef();
+		const allTools = fakeTools(getAllActionToolNames(def));
+		return selectToolsByAction(
+			allTools,
+			"couchbase",
+			{ couchbase: JEV_SELECTED },
+			def,
+			// Production passes this; omitting it shrinks the head and hides the overflow.
+			getSkillToolNames("capella-agent"),
+			buildPriorityActions([], JEV_SELECTED),
+			scores,
+		).tools.map((t) => t.name);
+	}
+
+	test("the selection genuinely overflows the budget (precondition)", () => {
+		const def = loadCouchbaseDef();
+		const map = def.tool_mapping?.action_tool_map ?? {};
+		const union = new Set(JEV_SELECTED.flatMap((a) => map[a] ?? []));
+		// If this stops overflowing, the cases below prove nothing rather than failing
+		// loudly, so assert it instead of assuming it.
+		expect(union.size).toBeGreaterThan(25);
+		expect(union).toContain(STARVED);
+	});
+
+	// The mutation guard: without scores the tool is still starved, so removing the
+	// score argument from the production call site cannot leave the next test green
+	// by coincidence. This is the assertion that caught an earlier fix aimed at a
+	// cause I had not reproduced.
+	test("without scores, declaration rank starves the selected capability", () => {
+		expect(boundNames()).not.toContain(STARVED);
+	});
+
+	test("with scores, the highest-scoring action's tool survives the cut", () => {
+		const scores: Record<string, number> = {
+			query_execution: 0.95,
+			slow_queries: 0.55,
+			expensive_queries: 0.54,
+			index_analysis: 0.53,
+			document_ops: 0.52,
+			search_analysis: 0.51,
+			fatal_requests: 0.5,
+		};
+		const bound = boundNames(scores);
+		expect(bound).toContain(STARVED);
+		expect(bound.length).toBeLessThanOrEqual(25);
+	});
+});
+
+// SIO-1862 (Greptile PR #875): the score tie-break must not demote a KEYWORD-matched
+// action. A keyword action matched the user's own words and carries no Jev score, so
+// ranking the merged priority set on score alone scores it 0 and lets any selected
+// action (>= 0.5 by construction) displace it. Verified before fixing: with
+// document_ops keyword-matched and the other six Jev-selected, capella_get_buckets,
+// _get_schema_for_collection and _get_document_type_examples all survived on
+// declaration rank and were cut once scores were introduced.
+describe("SIO-1862: the keyword tier outranks the score tier", () => {
+	function loadCouchbaseDef(): ToolDefinition {
+		const agent = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
+		const def = agent.tools.find((t) => t.name === "couchbase-cluster-health");
+		if (!def) throw new Error("couchbase-cluster-health tool definition not found");
+		return def;
+	}
+
+	const KEYWORD = ["document_ops"];
+	const JEV = [
+		"slow_queries",
+		"expensive_queries",
+		"fatal_requests",
+		"query_execution",
+		"index_analysis",
+		"search_analysis",
+	];
+	// Every Jev action scores well above document_ops' implicit 0, which is what made
+	// the unfixed comparator prefer them.
+	const SCORES: Record<string, number> = {
+		query_execution: 0.95,
+		slow_queries: 0.9,
+		expensive_queries: 0.88,
+		index_analysis: 0.85,
+		search_analysis: 0.8,
+		fatal_requests: 0.75,
+	};
+
+	test("a keyword-matched action keeps its tools when a scored selection overflows", () => {
+		const def = loadCouchbaseDef();
+		const allTools = fakeTools(getAllActionToolNames(def));
+		const merged = [...KEYWORD, ...JEV];
+		const bound = selectToolsByAction(
+			allTools,
+			"couchbase",
+			{ couchbase: merged },
+			def,
+			getSkillToolNames("capella-agent"),
+			buildPriorityActions(KEYWORD, JEV),
+			SCORES,
+			KEYWORD,
+		).tools.map((t) => t.name);
+
+		// The three Greptile named, which the score-only comparator cut.
+		expect(bound).toContain("capella_get_buckets");
+		expect(bound).toContain("capella_get_schema_for_collection");
+		expect(bound).toContain("capella_get_document_type_examples");
+		expect(bound.length).toBeLessThanOrEqual(25);
+	});
+
+	// Mutation guard: dropping the keywordActions argument reproduces the regression,
+	// so removing it from the production call site cannot leave the test above green.
+	test("without the keyword tier those same tools are displaced by the scores", () => {
+		const def = loadCouchbaseDef();
+		const allTools = fakeTools(getAllActionToolNames(def));
+		const merged = [...KEYWORD, ...JEV];
+		const bound = selectToolsByAction(
+			allTools,
+			"couchbase",
+			{ couchbase: merged },
+			def,
+			getSkillToolNames("capella-agent"),
+			buildPriorityActions(KEYWORD, JEV),
+			SCORES,
+		).tools.map((t) => t.name);
+
+		expect(bound).not.toContain("capella_get_buckets");
 	});
 });
