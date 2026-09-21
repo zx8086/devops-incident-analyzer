@@ -4,7 +4,13 @@
 // this file was written.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { getActionKeywords, getAvailableActions, loadAgent } from "@devops-agent/gitagent-bridge";
+import {
+	getActionDescriptions,
+	getActionKeywords,
+	getAvailableActions,
+	loadAgent,
+	type ToolDefinition,
+} from "@devops-agent/gitagent-bridge";
 import {
 	ACTION_INCLUDE_THRESHOLD,
 	type AskSystemOne,
@@ -81,6 +87,71 @@ describe("coverage across the real tool definitions", () => {
 		// ...and every one of its actions carries an empty keyword list, not a
 		// missing entry, so the question builder has something to iterate.
 		expect(Object.values(asked).every((k) => Array.isArray(k))).toBe(true);
+	});
+});
+
+// SIO-1864: the description is the FIRST entry, ahead of any keywords. All seven
+// incident-analyzer tools declare `action_descriptions` ("pick this action when ...")
+// while only 20 of 72 actions declare keywords, so without this the model was asked
+// about a bare identifier for 52 actions while a precise description sat unused in the
+// same YAML.
+//
+// Measured live on the couchbase set, query "the Capella cluster is reporting fatal
+// query errors and timeouts": with bare identifiers `fatal_requests` did not reach the
+// top four and `search_analysis` (FTS, irrelevant) was selected at 0.61; with the
+// description `fatal_requests` became the top pick at 0.88 and the FTS noise dropped.
+describe("SIO-1864: action_descriptions reach the selector", () => {
+	const INCIDENT_ANALYZER_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
+
+	function toolsWithActions(): ToolDefinition[] {
+		const agent = loadAgent(INCIDENT_ANALYZER_DIR);
+		return agent.tools.filter((t) => getAvailableActions(t).length > 0);
+	}
+
+	test("every action with a description carries it as the first entry", () => {
+		const defs = toolsWithActions();
+		let checked = 0;
+		for (const toolDef of defs) {
+			const descriptions = getActionDescriptions(toolDef);
+			const asked = buildSelectableActions(toolDef);
+			for (const [action, description] of Object.entries(descriptions)) {
+				const entries = asked[action];
+				if (!entries) throw new Error(`${toolDef.name}: ${action} missing from the selectable map`);
+				// First, so it leads the "It covers: ..." text the question builds.
+				expect(entries[0]).toBe(description);
+				checked++;
+			}
+		}
+		// Pin the precondition: if the YAMLs ever stop declaring descriptions this test
+		// would pass vacuously while the regression it guards became reachable again.
+		expect(checked).toBeGreaterThan(50);
+	});
+
+	test("keywords are kept as additional context, not replaced", () => {
+		// kafka declares BOTH a description and keywords for dlq_messages, so it proves
+		// the two are combined rather than one overwriting the other.
+		const agent = loadAgent(INCIDENT_ANALYZER_DIR);
+		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
+		if (!kafka) throw new Error("kafka-introspect not found");
+		const keywords = getActionKeywords(kafka).dlq_messages;
+		const description = getActionDescriptions(kafka).dlq_messages;
+		if (!keywords?.length || !description) throw new Error("expected dlq_messages to declare both");
+
+		const entries = buildSelectableActions(kafka).dlq_messages ?? [];
+		expect(entries[0]).toBe(description);
+		for (const kw of keywords) expect(entries).toContain(kw);
+	});
+
+	test("an action with no description still yields an array the question builder can iterate", () => {
+		const defs = toolsWithActions();
+		for (const toolDef of defs) {
+			const descriptions = getActionDescriptions(toolDef);
+			const asked = buildSelectableActions(toolDef);
+			for (const action of getAvailableActions(toolDef)) {
+				if (descriptions[action]) continue;
+				expect(Array.isArray(asked[action])).toBe(true);
+			}
+		}
 	});
 });
 

@@ -2,6 +2,7 @@
 
 import type { ToolDefinition } from "@devops-agent/gitagent-bridge";
 import {
+	getActionDescriptions,
 	getActionKeywords,
 	getAllActionToolNames,
 	getAvailableActions,
@@ -554,10 +555,29 @@ const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }>
 // itself and only checked its key count -- so reverting the production gate left
 // all 12 tests green (Greptile PR #873). A test that re-implements the rule
 // cannot notice the rule being removed.
+// SIO-1864: the description comes FIRST, then the keywords. `action_descriptions` is a
+// human-written sentence completing "pick this action when ..." and every one of the seven
+// incident-analyzer tools declares one, while only 20 of 72 actions declare keywords. The
+// selector used to pass keywords alone, so for 52 actions the model was asked about a bare
+// identifier while a precise description of that action sat unused in the same YAML.
+//
+// Measured against the live API on the couchbase set, query "the Capella cluster is reporting
+// fatal query errors and timeouts": with bare identifiers `fatal_requests` did not reach the
+// top four (search_analysis, which is FTS and irrelevant, was selected at 0.61); with the
+// description it became the top pick at 0.88 and the FTS noise dropped out. Same effect
+// SIO-1840 measured on datasource descriptions, at action level.
+//
+// Keywords are kept as ADDITIONAL context rather than replaced: they are the user's own words
+// for the action, and they still drive matchActionsByKeywords and the high-precision tier,
+// which the description does not touch.
 export function buildSelectableActions(toolDef: ToolDefinition): Record<string, string[]> {
 	const actionKeywords = getActionKeywords(toolDef);
+	const actionDescriptions = getActionDescriptions(toolDef);
 	const actions: Record<string, string[]> = {};
-	for (const name of getAvailableActions(toolDef)) actions[name] = actionKeywords[name] ?? [];
+	for (const name of getAvailableActions(toolDef)) {
+		const description = actionDescriptions[name];
+		actions[name] = description ? [description, ...(actionKeywords[name] ?? [])] : (actionKeywords[name] ?? []);
+	}
 	return actions;
 }
 

@@ -105,6 +105,10 @@ export function getActionKeywords(toolDef: ToolDefinition): Record<string, strin
 	return toolDef.tool_mapping?.action_keywords ?? {};
 }
 
+export function getActionDescriptions(toolDef: ToolDefinition): Record<string, string> {
+	return toolDef.tool_mapping?.action_descriptions ?? {};
+}
+
 function escapeRegex(s: string): string {
 	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
