@@ -125,4 +125,60 @@ describe("dataset tool names resolve against the real action maps", () => {
 			}
 		}
 	});
+
+	// SIO-1866: the snapshot-consistency guard. GitLab's `include` enums live UPSTREAM, behind
+	// the proxy to its native /api/v4/mcp, and each value is a potential false negative: a
+	// composite call that satisfies a group the dataset still describes by the dedicated tool
+	// name alone.
+	//
+	// WHAT THIS CATCHES, precisely (Greptile, PR #880): it compares the dataset against the
+	// FROZEN snapshot below, so it fires when the snapshot and the mappings disagree -- when
+	// someone refreshes UPSTREAM_INCLUDE_ENUMS, or edits a group's anySubResourceOf. It does
+	// NOT detect an upstream-only addition: if GitLab adds a value and nobody touches this
+	// file, the value is absent from both sides and the test passes. Verified by simulation --
+	// adding "test_reports" to the snapshot fails the test; leaving the file untouched passes.
+	//
+	// Fetching the live schema here was rejected deliberately: this file's whole property is
+	// that it runs offline and for free (see the header), and a unit test that needs a running
+	// MCP server on :9084 would be skipped in CI, which is a worse guard than an honest one.
+	// The live comparison belongs where the schema is already reachable -- precheck.ts, which
+	// already talks to every server before a run. Until then the snapshot's date is the
+	// expiry: re-probe when touching this mapping.
+	//
+	// When this fails: the snapshot and the mappings disagree. Decide per value whether a group
+	// needs anySubResourceOf, then update UPSTREAM_INCLUDE_ENUMS to match. Do NOT just widen the
+	// waiver set to silence it -- that is the rot this test exists to catch.
+	test("the dataset mapping stays consistent with the recorded upstream snapshot", () => {
+		// Recorded from a live tools/list against the GitLab MCP server, 2026-09-21.
+		const UPSTREAM_INCLUDE_ENUMS: Record<string, string[]> = {
+			gitlab_get_job: ["log", "artifacts"],
+			gitlab_get_commit: ["diff", "notes"],
+			gitlab_get_merge_request: ["diffs", "commits", "notes", "pipelines", "discussions", "approvals", "conflicts"],
+			gitlab_get_pipeline: ["jobs", "downstream_pipelines", "bridge_jobs", "artifacts"],
+			gitlab_get_work_item: ["notes", "related_merge_requests"],
+		};
+		// Values that cannot stand in for a dedicated tool the dataset requires: no group names
+		// a tool whose rows these carry. Listed explicitly so adding one is a decision, not a
+		// silent omission.
+		const WAIVED = new Set([
+			"artifacts", // no group requires an artifacts tool
+			"discussions", // distinct from notes; no group requires it
+			"approvals", // no group requires an approvals tool
+			"conflicts", // no group requires a conflicts tool
+			"downstream_pipelines", // no group requires downstream pipeline state
+			"bridge_jobs", // no group requires bridge jobs
+			"related_merge_requests", // no group requires this linkage
+			"commits", // gitlab_list_commits groups pair it with gitlab_get_commit_diff, already covered
+			"diffs", // the MR diff group already accepts gitlab_get_merge_request itself
+		]);
+		const mapped = new Set(
+			MCP_TOOL_DATASET.flatMap((example) => example.outputs.expectedToolUse?.requiredToolGroups ?? []).flatMap(
+				(group) => group.anySubResourceOf ?? [],
+			),
+		);
+		const unaccounted = [...new Set(Object.values(UPSTREAM_INCLUDE_ENUMS).flat())].filter(
+			(value) => !mapped.has(value as never) && !WAIVED.has(value),
+		);
+		expect(unaccounted).toEqual([]);
+	});
 });

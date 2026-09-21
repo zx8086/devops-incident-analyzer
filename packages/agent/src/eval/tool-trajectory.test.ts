@@ -6,6 +6,7 @@ import {
 	buildToolTrajectory,
 	callIdentity,
 	checkResponseHealth,
+	detectSubResources,
 	extractHallucinatedToolName,
 	isBadArgumentCall,
 	isEmptyPayload,
@@ -308,5 +309,66 @@ describe("checkResponseHealth", () => {
 		expect(() =>
 			checkResponseHealth([result({ dataSourceId: "gitlab", toolOutputs: [{ toolName: "t", rawJson: cyclic }] })]),
 		).not.toThrow();
+	});
+});
+
+// SIO-1866: the composite-tool detector. Payload shapes below are the REAL ones observed in
+// experiment mcp-tool-eval-e20fc19c-2a916eff, not invented: GitLab's MCP returns a GraphQL
+// connection ({nodes:[...]}) for gitlab_get_merge_request, and a plain array for the REST
+// gitlab_get_merge_request_pipelines.
+describe("detectSubResources", () => {
+	test("reads a GraphQL connection, as gitlab_get_merge_request returns", () => {
+		expect(
+			detectSubResources({
+				iid: "383",
+				title: "Adding marketingItemType as filter",
+				pipelines: { pageInfo: { hasNextPage: false }, nodes: [{ id: "gid://gitlab/Ci::Pipeline/2719503800" }] },
+			}),
+		).toEqual(["pipelines"]);
+	});
+
+	test("an EMPTY connection is NOT a retrieved sub-resource", () => {
+		// The whole point of checking content over presence: GitLab returns this shape for an MR
+		// with no pipeline, and counting it would let the composite path pass with no data.
+		expect(detectSubResources({ iid: "383", pipelines: { nodes: [] } })).toEqual([]);
+	});
+
+	test("an empty ARRAY is likewise not retrieved", () => {
+		expect(detectSubResources({ notes: [] })).toEqual([]);
+	});
+
+	test("null and undefined sub-resources are skipped", () => {
+		expect(detectSubResources({ pipelines: null, notes: undefined })).toEqual([]);
+	});
+
+	test("detects several sub-resources from one composite call", () => {
+		expect(detectSubResources({ diffs: [{ path: "a.ts" }], notes: { nodes: [{ id: "1" }] } }).sort()).toEqual([
+			"diffs",
+			"notes",
+		]);
+	});
+
+	test("ignores keys outside the closed enum, so payload keys cannot leak", () => {
+		expect(detectSubResources({ sourceBranch: "release/x", author: { username: "someone" } })).toEqual([]);
+	});
+
+	test("a non-object payload yields none", () => {
+		expect(detectSubResources([{ id: 1 }])).toEqual([]);
+		expect(detectSubResources("text")).toEqual([]);
+		expect(detectSubResources(undefined)).toEqual([]);
+	});
+
+	test("buildToolTrajectory attaches them, and omits the field when there are none", () => {
+		const trajectory = buildToolTrajectory([
+			result({
+				dataSourceId: "gitlab",
+				toolOutputs: [
+					{ toolName: "gitlab_get_merge_request", rawJson: { pipelines: { nodes: [{ id: "p1" }] } } },
+					{ toolName: "gitlab_get_merge_request_notes", rawJson: { id: "n1", body: "looks good" } },
+				],
+			}),
+		]);
+		expect(trajectory.calls[0]?.subResources).toEqual(["pipelines"]);
+		expect(trajectory.calls[1]?.subResources).toBeUndefined();
 	});
 });

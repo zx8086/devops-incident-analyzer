@@ -153,6 +153,76 @@ describe("expectedToolsFired", () => {
 		expect(feedback?.comment).toContain("FORBIDDEN");
 	});
 
+	// SIO-1866: a composite tool carrying the same rows satisfies the group. The regression case
+	// is real: in experiment mcp-tool-eval-e20fc19c-2a916eff the sub-agent called
+	// gitlab_get_merge_request{include:["pipelines"]} and got the same pipeline the dedicated
+	// tool returned in the prior run, then scored 0.667 for it.
+	describe("composite sub-resource satisfaction", () => {
+		const mrExpected = {
+			requiredToolGroups: [
+				{
+					dataSource: "gitlab",
+					anyOf: ["gitlab_get_merge_request_pipelines", "gitlab_get_pipeline_jobs"],
+					anySubResourceOf: ["pipelines"] as const,
+					why: "pipeline state for a SPECIFIC MR",
+				},
+			],
+		};
+
+		test("MR !383 regression: the composite call scores 1.0, not 0.667", () => {
+			const [feedback] = expectedToolsFired(
+				runWith([call({ dataSourceId: "gitlab", toolName: "gitlab_get_merge_request", subResources: ["pipelines"] })]),
+				exampleWith(mrExpected),
+			);
+			expect(feedback?.score).toBe(1);
+			// Assert the REASON, not just the score: a dedicated-tool match would also score 1,
+			// so without this the test passes even if the composite path never ran.
+			expect(feedback?.comment).toContain("pipelines via composite");
+		});
+
+		test("an EMPTY sub-resource does not satisfy the group", () => {
+			// detectSubResources drops empty ones, so the record simply carries none. Scoring
+			// presence rather than content would turn this fix into a way to pass with no data.
+			const [feedback] = expectedToolsFired(
+				runWith([call({ dataSourceId: "gitlab", toolName: "gitlab_get_merge_request" })]),
+				exampleWith(mrExpected),
+			);
+			expect(feedback?.score).toBe(0);
+			expect(feedback?.comment).toContain("pipeline state for a SPECIFIC MR");
+		});
+
+		test("a DIFFERENT sub-resource does not satisfy the group", () => {
+			// include:["notes"] retrieves review discussion, not pipeline state.
+			const [feedback] = expectedToolsFired(
+				runWith([call({ dataSourceId: "gitlab", toolName: "gitlab_get_merge_request", subResources: ["notes"] })]),
+				exampleWith(mrExpected),
+			);
+			expect(feedback?.score).toBe(0);
+		});
+
+		test("a group with no anySubResourceOf is unaffected by sub-resources", () => {
+			// The other 39 groups must keep matching on names alone.
+			const [feedback] = expectedToolsFired(
+				runWith([call({ dataSourceId: "gitlab", toolName: "gitlab_get_merge_request", subResources: ["pipelines"] })]),
+				exampleWith({
+					requiredToolGroups: [
+						{ dataSource: "gitlab", anyOf: ["gitlab_get_merge_request_pipelines"], why: "names only" },
+					],
+				}),
+			);
+			expect(feedback?.score).toBe(0);
+		});
+
+		test("the dedicated tool still satisfies the group and is named as such", () => {
+			const [feedback] = expectedToolsFired(
+				runWith([call({ dataSourceId: "gitlab", toolName: "gitlab_get_merge_request_pipelines" })]),
+				exampleWith(mrExpected),
+			);
+			expect(feedback?.score).toBe(1);
+			expect(feedback?.comment).not.toContain("via composite");
+		});
+	});
+
 	test("emits NO feedback when there were zero tool calls, like every sibling key", () => {
 		// CodeRabbit (PR #599): this key checked only that a trajectory existed, so a run where
 		// every sub-agent was skipped scored 0 here while every other key emitted nothing -- an

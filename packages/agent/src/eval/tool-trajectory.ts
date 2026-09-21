@@ -52,7 +52,20 @@ export interface ToolCallRecord {
 	// The call was part of an alignment retry (the supervisor re-dispatching a failed
 	// sub-agent), not a fresh model decision. Excluded from the efficiency metric.
 	isAlignmentRetry: boolean;
+	// SIO-1866: sub-resources this call actually RETURNED, for a composite tool that can
+	// subsume a dedicated one -- gitlab_get_merge_request{include:["pipelines"]} carries the
+	// same rows as gitlab_get_merge_request_pipelines. Derived IN-PROCESS from rawJson by
+	// detectSubResources and projected as a closed enum of key names only: never the args,
+	// never the payload, so the privacy invariant above still holds. Absent when the call
+	// returned none, so the common record is unchanged.
+	subResources?: SubResource[];
 }
+
+// Closed enum, deliberately. Projecting whatever keys a payload happened to carry would
+// re-open the leak the invariant above closes (rawJson keys can carry ids and branch names).
+// Only keys that a DEDICATED tool in the eval dataset also returns belong here.
+export const SUB_RESOURCES = ["pipelines", "notes", "diffs", "commits", "jobs", "log", "diff"] as const;
+export type SubResource = (typeof SUB_RESOURCES)[number];
 
 export interface ToolTrajectory {
 	calls: ToolCallRecord[];
@@ -82,6 +95,27 @@ export function extractHallucinatedToolName(message: string): string | undefined
 	return undefined;
 }
 
+// SIO-1866: which sub-resources a payload actually carried. Reads rawJson IN-PROCESS and
+// returns only names from the closed SUB_RESOURCES enum, mirroring how checkResponseHealth
+// reduces a payload to findings without copying it.
+//
+// Presence is not enough: GitLab returns `"pipelines": {"nodes": []}` for an MR with no
+// pipeline, and scoring that as "pipeline state retrieved" would turn this fix into a way
+// to pass the check with no data. A sub-resource counts only when it is NON-EMPTY, which is
+// the same rule the empty-anchor response-health check applies.
+export function detectSubResources(rawJson: unknown): SubResource[] {
+	if (!isRecord(rawJson)) return [];
+	const found: SubResource[] = [];
+	for (const name of SUB_RESOURCES) {
+		const value = rawJson[name];
+		if (value === undefined || value === null) continue;
+		// GraphQL connection ({nodes:[...]}) or a plain array -- both appear across these tools.
+		const rows = isRecord(value) && Array.isArray(value.nodes) ? value.nodes : value;
+		if (Array.isArray(rows) ? rows.length > 0 : true) found.push(name);
+	}
+	return found;
+}
+
 export function buildToolTrajectory(results: DataSourceResult[]): ToolTrajectory {
 	const calls: ToolCallRecord[] = [];
 
@@ -93,9 +127,16 @@ export function buildToolTrajectory(results: DataSourceResult[]): ToolTrajectory
 		};
 
 		// Successes first: toolOutputs[] is the record of tools that returned. rawJson is read
-		// only by the response-health checks below and never copied onto the record.
+		// only by the response-health checks below and by detectSubResources (SIO-1866), and
+		// never copied onto the record.
 		for (const output of result.toolOutputs ?? []) {
-			calls.push({ ...base, toolName: output.toolName, outcome: "success" });
+			const subResources = detectSubResources(output.rawJson);
+			calls.push({
+				...base,
+				toolName: output.toolName,
+				outcome: "success",
+				...(subResources.length === 0 ? {} : { subResources }),
+			});
 		}
 
 		for (const error of result.toolErrors ?? []) {

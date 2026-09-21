@@ -1,4 +1,5 @@
 // packages/agent/src/eval/dataset.ts
+import type { SubResource } from "./tool-trajectory.ts";
 // SIO-692: rubrics grade the final response string only. The judge in
 // evaluators.ts cannot see tool-call trajectory -- it sees run.outputs.output.response.
 // Phrase rubrics as response-content checks ("response should mention X"), not
@@ -10,6 +11,11 @@
 // curated arg values rot fastest against live systems whose index names and time windows drift;
 // argument CORRECTNESS is graded drift-free by tool_arg_validity, which reads the server's own
 // validation verdict rather than a curator's guess.
+//
+// SIO-1866's anySubResourceOf is NOT an exception to that: it names a sub-resource the
+// RESPONSE carried, read from the payload in-process, never the `include` argument that asked
+// for it. A curator writing "include must be [pipelines]" would rot exactly as described above
+// when GitLab renames an enum value; "the response carried non-empty pipelines" does not.
 export interface ExpectedToolUse {
 	// Conjunctive across groups, DISJUNCTIVE within one: every group must be satisfied, and any
 	// single member satisfies its group. The disjunction is the main anti-brittleness property --
@@ -19,6 +25,13 @@ export interface ExpectedToolUse {
 	requiredToolGroups: {
 		dataSource: string;
 		anyOf: string[];
+		// SIO-1866: also satisfied when a COMPOSITE tool returned this sub-resource, e.g.
+		// gitlab_get_merge_request{include:["pipelines"]} in place of the dedicated
+		// gitlab_get_merge_request_pipelines. Same anti-brittleness principle as anyOf: the
+		// ground truth is "pipeline state was retrieved", and one call carrying it is strictly
+		// better than two. Matched against the non-empty sub-resources detectSubResources read
+		// from the payload, so an empty {"pipelines":{"nodes":[]}} does NOT satisfy it.
+		anySubResourceOf?: readonly SubResource[];
 		// Required: forces the curator to justify the group. When it later goes red, a reader can
 		// tell "genuinely required" from "transcribed whatever ran that day".
 		why: string;
