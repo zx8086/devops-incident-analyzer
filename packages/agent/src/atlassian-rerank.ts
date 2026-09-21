@@ -44,8 +44,17 @@ export const RERANK_DEADLINE_MS = 3000;
 // Below this the ticket is hidden from the card. Level 1 is "generic overlap
 // only", so 1.0 keeps anything that shares a real subject and drops the
 // "out of scope"/"sprint retrospective" shapes that motivated SIO-1802.
-// PROVISIONAL: set from a synthetic probe (related 2.8-3.0, junk 0.01-0.03) and
-// must be re-tuned against the captured real envelopes before this ships enabled.
+//
+// SIO-1861: CALIBRATED against real envelopes (findLinkedIncidents service=kafka,
+// 7 live PVH tickets, all with the SAME deterministic score of 2) across three
+// incidents. The kept/dropped gap straddles 1.0 with room on both sides:
+//   kafka-connect sink failure  kept >= 1.04, dropped <= 0.75
+//   storefront -> Mule outage   kept >= 1.20, dropped <= 0.81
+//   elasticsearch yellow shards all 7 dropped, <= 0.34 (correctly shows nothing)
+// Scores track the INCIDENT, not the ticket: DES-783 moves 0.73 -> 0.22 -> 0.05
+// across those three, and EPS-28 reads 3.00 at confidence 1.00 against the
+// outage it actually describes. Round-trip latency 659-1027 ms for 7 tickets,
+// inside RERANK_DEADLINE_MS.
 export const RERANK_DROP_BELOW = 1.0;
 
 // The state we send is capped hard. Jev loses accuracy as the state grows with
