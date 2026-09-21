@@ -129,6 +129,8 @@ tool_mapping:
       - nodes healthy
       - queue depth
       - capella cluster health
+      - capella cluster
+      - cluster health
       - cluster-wide
     node_status:
       - node status
@@ -146,6 +148,8 @@ tool_mapping:
       - high wait time
       - slow-query threshold
     expensive_queries:
+      - query-performance
+      - query performance
       - most expensive
       - expensive queries
       - expensive query
