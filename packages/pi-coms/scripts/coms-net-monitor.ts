@@ -30,6 +30,7 @@ import {
 	isActionabilityEnforcing,
 	isActionabilityGateEnabled,
 	judgeActionability,
+	redactMonitorText,
 	resolveTypeSafeApiKey,
 } from "./monitor/actionability-judge.ts";
 import {
@@ -170,14 +171,34 @@ function buildActionability(state: MonitorState): CycleDeps["actionability"] {
 	return {
 		enforcing: isActionabilityEnforcing(),
 		judge: (findings) => {
-			// Recent diagnoses give the duplicate question something to compare
-			// against. Summaries only: a diagnosis body is spoke-authored text, and
-			// the standing rule is that it never becomes a model input elsewhere.
+			// Recent DIAGNOSED findings give the duplicate question something real to
+			// compare against. Two bugs lived here (Greptile PR #871):
+			//
+			//   - journalRows returns `payload` as a JSON STRING, so safeParse(r.payload)
+			//     always failed and this list was silently always empty -- the duplicate
+			//     question was never actually asked. JSON.parse first.
+			//   - it took every `finding` row regardless of whether anyone diagnosed it.
+			//     A budget-skipped or failed finding would have been offered as
+			//     "recently diagnosed", so a recurring UNRESOLVED incident could be held
+			//     back as a duplicate of its own un-investigated self. priorDiagnosis
+			//     already filters on `diagnosis IS NOT NULL`; match it.
+			//
+			// Summaries only: a diagnosis body is spoke-authored text, and the standing
+			// invariant keeps that out of model inputs.
 			const recent = state
 				.journalRows(DAY_MS, "finding")
 				.map((r) => {
-					const parsed = FindingSchema.safeParse(r.payload);
-					return parsed.success ? `${parsed.data.resource}: ${parsed.data.summary}` : undefined;
+					let payload: unknown;
+					try {
+						payload = JSON.parse(r.payload);
+					} catch {
+						return undefined;
+					}
+					if (!payload || typeof payload !== "object") return undefined;
+					if ((payload as { diagnosis?: unknown }).diagnosis == null) return undefined;
+					const parsed = FindingSchema.safeParse(payload);
+					if (!parsed.success) return undefined;
+					return `${redactMonitorText(parsed.data.resource)}: ${redactMonitorText(parsed.data.summary)}`;
 				})
 				.filter((s): s is string => s !== undefined);
 			return judgeActionability(findings, recent, { apiKey });

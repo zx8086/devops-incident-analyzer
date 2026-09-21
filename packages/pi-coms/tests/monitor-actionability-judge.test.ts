@@ -7,6 +7,7 @@ import {
 	isActionabilityEnforcing,
 	isActionabilityGateEnabled,
 	judgeActionability,
+	redactMonitorText,
 } from "../scripts/monitor/actionability-judge.ts";
 import type { Finding } from "../scripts/monitor/report.ts";
 import type { askSystemOne, SystemOneResponse } from "../scripts/monitor/typesafe.ts";
@@ -59,18 +60,20 @@ describe("judgeActionability", () => {
 		expect(out.get("b")?.routine).toBeCloseTo(0.1, 6);
 	});
 
-	test("one failed request does not discard the others", async () => {
-		// Unlike the Atlassian rerank, each verdict stands alone: a partial result
-		// is safe here because an unjudged finding is simply investigated.
+	test("one failed request voids the whole round", async () => {
+		// Greptile PR #871. Returning the verdicts that DID succeed let the caller
+		// enforce them while the classifier was visibly degraded -- a gate that can
+		// hold back a real incident must not run on partial information. Throwing
+		// puts the caller on its error path, which investigates everything.
 		let n = 0;
 		const ask = (async () => {
 			n += 1;
 			if (n === 1) throw new Error("boom");
 			return reply(0.9, 0.1);
 		}) as Ask;
-		const out = await judgeActionability([finding("a"), finding("b")], [], { apiKey: "k", ask });
-		expect(out.has("a")).toBe(false);
-		expect(out.get("b")?.routine).toBeCloseTo(0.9, 6);
+		await expect(judgeActionability([finding("a"), finding("b")], [], { apiKey: "k", ask })).rejects.toThrow(
+			/1\/2 requests failed/,
+		);
 	});
 
 	test("a reply missing the routine answer yields NO verdict, not a zero", async () => {
@@ -122,6 +125,35 @@ describe("judgeActionability", () => {
 		}) as Ask;
 		await judgeActionability([finding("a")], [], { apiKey: "k", ask });
 		expect(Object.keys(state.finding as object).sort()).toEqual(["family", "resource", "severity", "summary"]);
+	});
+
+	test("redacts secrets and identifiers before anything leaves the account", async () => {
+		// Greptile PR #871: a monitor summary can carry a raw log excerpt, an RDS
+		// event message, an ARN or an IAM principal, and this is the first thing in
+		// pi-coms to send any of it off-box.
+		let state: { finding: { resource: string; summary: string }; recent_diagnosed?: string[] } = {
+			finding: { resource: "", summary: "" },
+		};
+		const ask = (async (o: Parameters<Ask>[0]) => {
+			state = o.state as typeof state;
+			return reply(0.1, 0.1);
+		}) as Ask;
+		const f = finding("a");
+		f.resource = "arn:aws:lambda:eu-west-1:123456789012:function:payments-api";
+		f.summary = "error for alice@example.com in account 123456789012 using AKIAIOSFODNN7EXAMPLE";
+
+		await judgeActionability([f], ["arn:aws:s3:::secret-bucket/key: prior"], { apiKey: "k", ask });
+
+		expect(state.finding.resource).toBe("[ARN_REDACTED]");
+		expect(state.finding.summary).not.toContain("alice@example.com");
+		expect(state.finding.summary).not.toContain("123456789012");
+		expect(state.finding.summary).not.toContain("AKIAIOSFODNN7EXAMPLE");
+		expect(state.recent_diagnosed?.[0]).not.toContain("secret-bucket");
+	});
+
+	test("leaves IPv4 alone, matching the shared redactor", () => {
+		// SIO-861: internal infrastructure, and the address is often the subject.
+		expect(redactMonitorText("host 10.2.3.4 refused")).toBe("host 10.2.3.4 refused");
 	});
 
 	test("an empty batch makes no requests", async () => {

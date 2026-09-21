@@ -37,6 +37,36 @@ export function isActionabilityEnforcing(env: NodeJS.ProcessEnv = process.env): 
 	return v !== "false" && v !== "0";
 }
 
+// Greptile PR #871: a monitor summary is not safe text. It can carry a raw log
+// excerpt, an RDS event message, an IAM principal or an ARN, and this is the
+// first thing in pi-coms to send any of it off-box. packages/shared's
+// redactPiiContent is unreachable here (the spoke bundle carries only
+// packages/pi-coms), so the same patterns are restated, plus the infra-specific
+// ones that matter on this path.
+//
+// IPv4 is deliberately NOT redacted, matching the shared redactor's SIO-861
+// decision: this is internal infrastructure and an address is often the subject.
+const REDACTIONS: readonly { re: RegExp; to: string }[] = [
+	{ re: /\b\d{3}-\d{2}-\d{4}\b/g, to: "[SSN_REDACTED]" },
+	{ re: /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{1,7}\b/g, to: "[CC_REDACTED]" },
+	{ re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, to: "[EMAIL_REDACTED]" },
+	// An ARN's trailing segments name buckets, functions, users and roles. The
+	// account field is OPTIONAL: S3 writes `arn:aws:s3:::bucket/key`, and an
+	// account-only pattern let every bucket name through (caught by the test
+	// below, which is why it asserts on an S3 ARN specifically).
+	{ re: /\barn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:\d{0,12}:\S+/g, to: "[ARN_REDACTED]" },
+	// A bare 12-digit AWS account id.
+	{ re: /\b\d{12}\b/g, to: "[ACCOUNT_REDACTED]" },
+	// AKIA/ASIA access key ids, and anything shaped like a bearer secret.
+	{ re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, to: "[AKID_REDACTED]" },
+];
+
+export function redactMonitorText(text: string): string {
+	let out = text;
+	for (const { re, to } of REDACTIONS) out = out.replace(re, to);
+	return out;
+}
+
 const ROUTINE_Q = "routine";
 const DUPLICATE_Q = "duplicate";
 
@@ -80,9 +110,12 @@ export async function judgeActionability(
 	const recent = recentDiagnosed.slice(0, RECENT_CONTEXT);
 	const questions = questionsFor(recent);
 
-	// allSettled, not all: unlike the Atlassian rerank (where a partial ranking
-	// would read as ranked while being arbitrary) each verdict here stands alone,
-	// and one failure must not discard the others' judgements.
+	// allSettled so one failure does not throw away the rest of the round -- but
+	// see the all-or-nothing rule below. Greptile PR #871: returning a partial map
+	// let the caller ENFORCE the verdicts it did get while the classifier was
+	// visibly degraded, which contradicts the documented contract that an error
+	// sends the whole batch. A gate that can hold back a real incident does not get
+	// to run on partial information.
 	const results = await Promise.allSettled(
 		findings.map((finding) =>
 			ask({
@@ -90,10 +123,12 @@ export async function judgeActionability(
 					finding: {
 						family: finding.family,
 						severity: finding.severity,
-						resource: finding.resource,
-						summary: finding.summary,
+						// Redacted here rather than at the call site so EVERY caller of
+						// this function is covered, including a future one.
+						resource: redactMonitorText(finding.resource),
+						summary: redactMonitorText(finding.summary),
 					},
-					...(recent.length > 0 ? { recent_diagnosed: recent } : {}),
+					...(recent.length > 0 ? { recent_diagnosed: recent.map(redactMonitorText) } : {}),
 				},
 				questions,
 				apiKey: deps.apiKey,
@@ -102,13 +137,26 @@ export async function judgeActionability(
 		),
 	);
 
+	// ALL OR NOTHING. If any request failed, return an empty map: the caller then
+	// investigates everything, exactly as before the gate existed. A partial map
+	// would silently narrow the safety contract from "an error sends the batch" to
+	// "an error sends the findings that happened to fail", which is not a property
+	// anyone could reason about while reading the cycle.
+	if (results.some((r) => r.status !== "fulfilled")) {
+		throw new Error(
+			`actionability: ${results.filter((r) => r.status !== "fulfilled").length}/${results.length} requests failed`,
+		);
+	}
+
 	for (const [i, result] of results.entries()) {
 		if (result.status !== "fulfilled") continue;
 		const finding = findings[i];
 		if (!finding) continue;
 		const routine = result.value.answers[ROUTINE_Q]?.noul;
-		// No routine answer means the question we gate on was not answered; treat
-		// the whole verdict as missing rather than defaulting it to 0.
+		// No routine answer means the question we gate on was not answered; leave
+		// this finding unjudged rather than defaulting it to 0. One malformed reply
+		// is not a degraded classifier, so unlike a failed REQUEST it does not void
+		// the round -- the caller sends anything missing from the map.
 		if (routine === undefined) continue;
 		verdicts.set(finding.dedup_key, {
 			routine,

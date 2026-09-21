@@ -12,13 +12,18 @@
 // returns send + skipped-with-reason, and holds a finding back only on a
 // CONFIDENT verdict. Two hard rules:
 //
-//   - SHADOW FIRST. SIO-1748..1752 removed an earlier shadow mechanism because it
-//     held real incidents out of the inbox -- seven dead-letter queues and a
-//     failed ECS deployment -- while catching one noise source that turned out to
-//     be a severity bug. So this ships enforcing=false until a journal replay says
-//     otherwise, and the verdict is journaled either way.
 //   - NEVER for critical. A critical finding always reaches the agent; the gate
 //     only ever considers warn.
+//   - ENFORCING BY DEFAULT, with MONITOR_ACTIONABILITY_ENFORCING=false as the
+//     observe-only mode. What makes that safe is the shape of the decision, not
+//     holding back from acting: a skip needs p >= 0.85, a missing or unconfident
+//     verdict sends, and a failed round sends everything. Every verdict is
+//     journaled in both modes, so the record to review exists either way.
+//     (SIO-1748..1752 removed an earlier shadow mechanism after it held real
+//     incidents out of the inbox -- seven dead-letter queues and a failed ECS
+//     deployment -- while catching one noise source that was really a severity
+//     bug. The lesson taken here is that observation is not what makes a gate
+//     safe; the exemptions and thresholds are.)
 //
 // "Has it recovered?" is deliberately absent: that is a time comparison, and Jev
 // compares dates unreliably (vendor-documented). It belongs in code.
