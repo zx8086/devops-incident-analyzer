@@ -4,6 +4,7 @@ import type { ToolDefinition } from "@devops-agent/gitagent-bridge";
 import {
 	getActionKeywords,
 	getAllActionToolNames,
+	getAvailableActions,
 	matchActionsByKeywords,
 	resolveActionTools,
 } from "@devops-agent/gitagent-bridge";
@@ -551,10 +552,23 @@ async function selectActionsForDispatch(
 	if (!isActionSelectorEnabled()) return [];
 	const apiKey = resolveTypeSafeApiKey();
 	if (!apiKey) return [];
+	// Key off the ACTION MAP, not the keyword table. Only 3 of 7 datasources
+	// declare action_keywords (aws, gitlab, kafka), so keying off keywords meant
+	// the selector silently did nothing for atlassian, couchbase, elastic and
+	// konnect -- the four with no keyword matching at all today, and therefore the
+	// four it helps most. Caught by an mcp-tool-eval run whose couchbase dispatch
+	// never logged a selection: the feature was wired in, gated open, and still
+	// inert for most of the fleet.
+	//
+	// Keywords remain optional CONTEXT for the question when a datasource has
+	// them; an action with none is asked about by name alone.
 	const actionKeywords = getActionKeywords(toolDef);
-	if (Object.keys(actionKeywords).length === 0) return [];
+	const actionNames = getAvailableActions(toolDef);
+	if (actionNames.length === 0) return [];
+	const actions: Record<string, string[]> = {};
+	for (const name of actionNames) actions[name] = actionKeywords[name] ?? [];
 
-	const result = await selectActions(query, actionKeywords, { apiKey });
+	const result = await selectActions(query, actions, { apiKey });
 	recordDecision({
 		seam: "action-selector",
 		outcome: result.ok ? "applied" : "failed",
@@ -562,8 +576,8 @@ async function selectActionsForDispatch(
 		model: result.ok ? result.selection.model : undefined,
 		latencyMs: result.ok ? result.selection.latencyMs : undefined,
 		inputTokens: result.ok ? result.selection.inputTokens : undefined,
-		itemsIn: Object.keys(actionKeywords).length,
-		itemsDropped: result.ok ? Object.keys(actionKeywords).length - result.selection.actions.length : undefined,
+		itemsIn: actionNames.length,
+		itemsDropped: result.ok ? actionNames.length - result.selection.actions.length : undefined,
 		note: result.ok ? dataSourceId : `${dataSourceId}:${result.reason}`,
 	});
 	if (!result.ok) return [];
