@@ -561,21 +561,32 @@ export function buildSelectableActions(toolDef: ToolDefinition): Record<string, 
 	return actions;
 }
 
-// SIO-1839: the Jev action selection for one dispatch. Returns [] for every
-// non-success path -- flag off, no key, no actions declared, any failure -- so
-// the caller's keyword passes stand exactly as they did before this existed.
+// SIO-1839: the Jev action selection for one dispatch. Returns an EMPTY selection for
+// every non-success path -- flag off, no key, no actions declared, any failure -- so the
+// caller's keyword passes stand exactly as they did before this existed.
+//
+// SIO-1862: carries the scores as well as the names. They were dropped one line from
+// where they were computed, which left the budget ordering the priority set by YAML
+// position whenever Jev's own selections overflowed it.
+interface DispatchSelection {
+	actions: string[];
+	scores: Record<string, number>;
+}
+
+const NO_SELECTION: DispatchSelection = { actions: [], scores: {} };
+
 async function selectActionsForDispatch(
 	query: string,
 	toolDef: ToolDefinition,
 	dataSourceId: string,
 	requestId: string | undefined,
 	log: LogSink,
-): Promise<string[]> {
-	if (!isActionSelectorEnabled()) return [];
+): Promise<DispatchSelection> {
+	if (!isActionSelectorEnabled()) return NO_SELECTION;
 	const apiKey = resolveTypeSafeApiKey();
-	if (!apiKey) return [];
+	if (!apiKey) return NO_SELECTION;
 	const actions = buildSelectableActions(toolDef);
-	if (Object.keys(actions).length === 0) return [];
+	if (Object.keys(actions).length === 0) return NO_SELECTION;
 
 	const result = await selectActions(query, actions, { apiKey });
 	recordDecision({
@@ -589,18 +600,21 @@ async function selectActionsForDispatch(
 		itemsDropped: result.ok ? Object.keys(actions).length - result.selection.actions.length : undefined,
 		note: result.ok ? dataSourceId : `${dataSourceId}:${result.reason}`,
 	});
-	if (!result.ok) return [];
+	if (!result.ok) return NO_SELECTION;
 
 	log.info(
 		{
 			event: "action_selector.selected",
 			dataSourceId,
 			selected: result.selection.actions,
+			// SIO-1862: the denominator. `selected` alone invited reading six names as
+			// "it chose everything" when it had in fact dropped seven of thirteen.
+			selectedOf: Object.keys(actions).length,
 			latencyMs: result.selection.latencyMs,
 		},
 		"Jev selected actions",
 	);
-	return result.selection.actions;
+	return { actions: result.selection.actions, scores: result.selection.scores };
 }
 
 export function classifyToolError(message: string): { category: ToolErrorCategory; retryable: boolean } {
@@ -1715,19 +1729,53 @@ export function inferClusterHealthActions(query: string, dataSourceId: string): 
 // user's own words -- the strongest relevance signal the belt has. Without this, declaration
 // rank alone decided the cut: run f77ce7dd was triggered by an SQS message, and both aws_sqs_*
 // tools fell off because messaging_state is declared ~63rd of 68.
+// SIO-1862: the priority BIT cannot order the priority SET. When Jev selects
+// broadly, its own actions overflow the budget: measured on a live couchbase
+// dispatch, 7 selected actions resolved to 28 distinct tools, and the 10-tool
+// head (resolution + skill-promised) pushed `requested` to 30 for 25 slots. Every
+// candidate was priority, so the bit tied and YAML position decided the cut --
+// dropping `capella_run_sql_plus_plus_query` while `query_execution` was one of
+// the selected actions.
+//
+// actionScores breaks that tie with the calibrated probability the selector
+// already computed and the caller previously discarded. A tool takes the BEST
+// score among the actions that contribute it: a tool reachable from a 0.9 action
+// and a 0.5 one is wanted for the 0.9 reason, and taking the max stops a shared
+// tool being demoted by its least relevant contributor.
+//
+// Absent scores leave ordering exactly as it was: every tool scores 0, the sort
+// falls straight through to declaration rank, and the keyword-only path is
+// unchanged.
+function scoreByTool(toolDef: ToolDefinition, actionScores: Record<string, number>): Map<string, number> {
+	const best = new Map<string, number>();
+	for (const [action, score] of Object.entries(actionScores)) {
+		for (const name of resolveActionTools(toolDef, [action]).toolNames) {
+			best.set(name, Math.max(best.get(name) ?? Number.NEGATIVE_INFINITY, score));
+		}
+	}
+	return best;
+}
+
 function orderByDeclaration(
 	names: Iterable<string>,
 	toolDef: ToolDefinition,
 	allTools: StructuredToolInterface[],
 	priorityActions: string[] = [],
+	actionScores: Record<string, number> = {},
 ): StructuredToolInterface[] {
 	const declarationRank = new Map(getAllActionToolNames(toolDef).map((name, i) => [name, i] as const));
 	const byName = new Map(allTools.map((t) => [t.name, t] as const));
 	const unranked = declarationRank.size;
 	const priority = new Set(resolveActionTools(toolDef, priorityActions).toolNames);
+	const scored = scoreByTool(toolDef, actionScores);
 	return [...new Set(names)]
-		.map((name, i) => ({ name, rank: declarationRank.get(name) ?? unranked + i, first: priority.has(name) }))
-		.sort((a, b) => Number(b.first) - Number(a.first) || a.rank - b.rank)
+		.map((name, i) => ({
+			name,
+			rank: declarationRank.get(name) ?? unranked + i,
+			first: priority.has(name),
+			score: scored.get(name) ?? 0,
+		}))
+		.sort((a, b) => Number(b.first) - Number(a.first) || b.score - a.score || a.rank - b.rank)
 		.map((entry) => byName.get(entry.name))
 		.filter((tool): tool is StructuredToolInterface => tool !== undefined);
 }
@@ -1743,6 +1791,9 @@ export function selectToolsByAction(
 	skillToolNames?: string[],
 	// SIO-1781: actions matched by the deterministic keyword pass; their tools survive the cut first.
 	priorityActions?: string[],
+	// SIO-1862: per-action probabilities from the Jev selector, used to order the priority set when
+	// it overflows the budget on its own. Optional: omitted leaves ordering exactly as it was.
+	actionScores?: Record<string, number>,
 ): { tools: StructuredToolInterface[]; filtered: boolean } {
 	if (allTools.length <= MAX_TOOLS_PER_AGENT) {
 		return { tools: allTools, filtered: false };
@@ -1761,7 +1812,7 @@ export function selectToolsByAction(
 	if (actions && actions.length > 0) {
 		const { toolNames } = resolveActionTools(toolDef, actions);
 		if (toolNames.length > 0) {
-			const selected = orderByDeclaration(toolNames, toolDef, allTools, priorityActions);
+			const selected = orderByDeclaration(toolNames, toolDef, allTools, priorityActions, actionScores);
 			if (selected.length >= MIN_FILTERED_TOOLS) {
 				return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 			}
@@ -1770,7 +1821,7 @@ export function selectToolsByAction(
 
 	const allActionNames = getAllActionToolNames(toolDef);
 	if (allActionNames.length > 0) {
-		const selected = orderByDeclaration(allActionNames, toolDef, allTools, priorityActions);
+		const selected = orderByDeclaration(allActionNames, toolDef, allTools, priorityActions, actionScores);
 		if (selected.length >= MIN_FILTERED_TOOLS) {
 			return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 		}
@@ -1886,9 +1937,10 @@ ${state.correlationFetchDirective}`
 		// Deliberately kept OUT of `keywordActions`: narrowOnHighPrecisionIntent
 		// below treats a keyword hit as a high-precision signal that may drop other
 		// actions, and a probabilistic match must never trigger that.
-		const selectedActions = toolDef
+		const selection = toolDef
 			? await selectActionsForDispatch(query, toolDef, dataSourceId, state.requestId, log)
-			: [];
+			: NO_SELECTION;
+		const selectedActions = selection.actions;
 		const augmentationActions = mergeKeywordActions(
 			mergeKeywordActions(keywordActions, clusterHealthActions),
 			selectedActions,
@@ -1942,6 +1994,10 @@ ${state.correlationFetchDirective}`
 			// that never heard about it. Selecting a capability and then dropping its
 			// tools is worse than not selecting it, because the belt looks considered.
 			buildPriorityActions(keywordActions, selectedActions),
+			// SIO-1862: orders the priority set when it overflows the 25-tool budget on its own,
+			// so the cut lands on the least-needed capability rather than the last-declared one.
+			// Empty on every non-Jev path, which leaves ordering unchanged.
+			selection.scores,
 		);
 		log.info(
 			{ toolCount: tools.length, totalTools: allTools.length, filtered, deploymentId },
