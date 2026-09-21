@@ -3,12 +3,15 @@
 // call returned on 2026-09-20 ({type:"noul", noul} plus usage), captured before
 // this file was written.
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
+import { getActionKeywords, getAvailableActions, loadAgent } from "@devops-agent/gitagent-bridge";
 import {
 	ACTION_INCLUDE_THRESHOLD,
 	type AskSystemOne,
 	isActionSelectorEnabled,
 	selectActions,
 } from "./action-selector.ts";
+import { buildSelectableActions } from "./sub-agent.ts";
 import type { SystemOneResponse } from "./typesafe-client.ts";
 
 // Two real datasource action sets, trimmed. The keyword lists are verbatim from
@@ -39,6 +42,47 @@ function askScoring(byName: Record<string, number>, names: string[]): { ask: Ask
 	}) as AskSystemOne;
 	return { ask, sent };
 }
+
+// SIO-1839 follow-up: the selector must cover every datasource that declares
+// actions, not only the three that also declare keywords. An mcp-tool-eval run
+// caught this: the couchbase dispatch never logged a selection because the gate
+// keyed off action_keywords, and couchbase-health.yaml has none. The feature was
+// merged, wired in, gated open -- and inert for 4 of 7 datasources.
+describe("coverage across the real tool definitions", () => {
+	const TOOLS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
+
+	test("every datasource with an action map is askable, keywords or not", () => {
+		const agent = loadAgent(TOOLS_DIR);
+		const withActions = agent.tools.filter((t) => getAvailableActions(t).length > 0);
+		// Guard the guard: if this ever reads 0, the loader changed and the
+		// assertions below would pass vacuously.
+		expect(withActions.length).toBeGreaterThanOrEqual(7);
+
+		const noKeywords = withActions.filter((t) => Object.keys(getActionKeywords(t)).length === 0);
+		// The bug's precondition, pinned: several real datasources have actions and
+		// NO keywords. If that stops being true the test still holds, but the
+		// regression it guards would no longer be reachable.
+		expect(noKeywords.length).toBeGreaterThan(0);
+
+		// buildSelectableActions is the PRODUCTION gate, called here rather than
+		// re-implemented. The first version of this test rebuilt the map itself and
+		// checked only its key count, so reverting the gate to the keyword-keyed
+		// version left all 12 tests green (Greptile PR #873).
+		for (const toolDef of withActions) {
+			const asked = buildSelectableActions(toolDef);
+			expect(Object.keys(asked).sort()).toEqual(getAvailableActions(toolDef).sort());
+		}
+
+		// The sharp end: a keywordless datasource must still be fully askable.
+		const keywordless = noKeywords[0];
+		if (!keywordless) throw new Error("expected at least one keywordless tool definition");
+		const asked = buildSelectableActions(keywordless);
+		expect(Object.keys(asked).length).toBeGreaterThan(0);
+		// ...and every one of its actions carries an empty keyword list, not a
+		// missing entry, so the question builder has something to iterate.
+		expect(Object.values(asked).every((k) => Array.isArray(k))).toBe(true);
+	});
+});
 
 describe("isActionSelectorEnabled", () => {
 	test("defaults ON, kill-switch only", () => {
