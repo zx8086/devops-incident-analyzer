@@ -1756,26 +1756,45 @@ function scoreByTool(toolDef: ToolDefinition, actionScores: Record<string, numbe
 	return best;
 }
 
+// SIO-1862 (Greptile PR #875): the deterministic keyword tier sits ABOVE the score
+// tier, not alongside it. A keyword action matched the user's own words and carries
+// no Jev score, so ranking the merged set on score alone scores it 0 and lets any
+// selected action (>= 0.5 by construction) displace it. Measured on the overflow
+// case with `document_ops` keyword-matched: capella_get_buckets,
+// _get_schema_for_collection and _get_document_type_examples all survived before
+// the score key and were cut after it. That trades one regression for another.
+//
+// Three tiers, strongest evidence first: matched in the user's words, then
+// identified by the selector ordered by its own confidence, then declaration rank.
 function orderByDeclaration(
 	names: Iterable<string>,
 	toolDef: ToolDefinition,
 	allTools: StructuredToolInterface[],
 	priorityActions: string[] = [],
 	actionScores: Record<string, number> = {},
+	keywordActions: string[] = [],
 ): StructuredToolInterface[] {
 	const declarationRank = new Map(getAllActionToolNames(toolDef).map((name, i) => [name, i] as const));
 	const byName = new Map(allTools.map((t) => [t.name, t] as const));
 	const unranked = declarationRank.size;
 	const priority = new Set(resolveActionTools(toolDef, priorityActions).toolNames);
+	const keyword = new Set(resolveActionTools(toolDef, keywordActions).toolNames);
 	const scored = scoreByTool(toolDef, actionScores);
 	return [...new Set(names)]
 		.map((name, i) => ({
 			name,
 			rank: declarationRank.get(name) ?? unranked + i,
 			first: priority.has(name),
+			keyword: keyword.has(name),
 			score: scored.get(name) ?? 0,
 		}))
-		.sort((a, b) => Number(b.first) - Number(a.first) || b.score - a.score || a.rank - b.rank)
+		.sort(
+			(a, b) =>
+				Number(b.first) - Number(a.first) ||
+				Number(b.keyword) - Number(a.keyword) ||
+				b.score - a.score ||
+				a.rank - b.rank,
+		)
 		.map((entry) => byName.get(entry.name))
 		.filter((tool): tool is StructuredToolInterface => tool !== undefined);
 }
@@ -1794,6 +1813,9 @@ export function selectToolsByAction(
 	// SIO-1862: per-action probabilities from the Jev selector, used to order the priority set when
 	// it overflows the budget on its own. Optional: omitted leaves ordering exactly as it was.
 	actionScores?: Record<string, number>,
+	// SIO-1862 (Greptile PR #875): the keyword-matched subset of priorityActions. Ranked above the
+	// scored ones so a match in the user's own words is never displaced by a selector probability.
+	keywordActions?: string[],
 ): { tools: StructuredToolInterface[]; filtered: boolean } {
 	if (allTools.length <= MAX_TOOLS_PER_AGENT) {
 		return { tools: allTools, filtered: false };
@@ -1812,7 +1834,7 @@ export function selectToolsByAction(
 	if (actions && actions.length > 0) {
 		const { toolNames } = resolveActionTools(toolDef, actions);
 		if (toolNames.length > 0) {
-			const selected = orderByDeclaration(toolNames, toolDef, allTools, priorityActions, actionScores);
+			const selected = orderByDeclaration(toolNames, toolDef, allTools, priorityActions, actionScores, keywordActions);
 			if (selected.length >= MIN_FILTERED_TOOLS) {
 				return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 			}
@@ -1821,7 +1843,14 @@ export function selectToolsByAction(
 
 	const allActionNames = getAllActionToolNames(toolDef);
 	if (allActionNames.length > 0) {
-		const selected = orderByDeclaration(allActionNames, toolDef, allTools, priorityActions, actionScores);
+		const selected = orderByDeclaration(
+			allActionNames,
+			toolDef,
+			allTools,
+			priorityActions,
+			actionScores,
+			keywordActions,
+		);
 		if (selected.length >= MIN_FILTERED_TOOLS) {
 			return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 		}
@@ -1998,6 +2027,8 @@ ${state.correlationFetchDirective}`
 			// so the cut lands on the least-needed capability rather than the last-declared one.
 			// Empty on every non-Jev path, which leaves ordering unchanged.
 			selection.scores,
+			// The keyword tier stays above the scored one: these matched the user's own words.
+			keywordActions,
 		);
 		log.info(
 			{ toolCount: tools.length, totalTools: allTools.length, filtered, deploymentId },

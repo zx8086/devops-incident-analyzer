@@ -611,3 +611,80 @@ describe("SIO-1862: per-action scores order the priority set when it overflows",
 		expect(bound.length).toBeLessThanOrEqual(25);
 	});
 });
+
+// SIO-1862 (Greptile PR #875): the score tie-break must not demote a KEYWORD-matched
+// action. A keyword action matched the user's own words and carries no Jev score, so
+// ranking the merged priority set on score alone scores it 0 and lets any selected
+// action (>= 0.5 by construction) displace it. Verified before fixing: with
+// document_ops keyword-matched and the other six Jev-selected, capella_get_buckets,
+// _get_schema_for_collection and _get_document_type_examples all survived on
+// declaration rank and were cut once scores were introduced.
+describe("SIO-1862: the keyword tier outranks the score tier", () => {
+	function loadCouchbaseDef(): ToolDefinition {
+		const agent = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
+		const def = agent.tools.find((t) => t.name === "couchbase-cluster-health");
+		if (!def) throw new Error("couchbase-cluster-health tool definition not found");
+		return def;
+	}
+
+	const KEYWORD = ["document_ops"];
+	const JEV = [
+		"slow_queries",
+		"expensive_queries",
+		"fatal_requests",
+		"query_execution",
+		"index_analysis",
+		"search_analysis",
+	];
+	// Every Jev action scores well above document_ops' implicit 0, which is what made
+	// the unfixed comparator prefer them.
+	const SCORES: Record<string, number> = {
+		query_execution: 0.95,
+		slow_queries: 0.9,
+		expensive_queries: 0.88,
+		index_analysis: 0.85,
+		search_analysis: 0.8,
+		fatal_requests: 0.75,
+	};
+
+	test("a keyword-matched action keeps its tools when a scored selection overflows", () => {
+		const def = loadCouchbaseDef();
+		const allTools = fakeTools(getAllActionToolNames(def));
+		const merged = [...KEYWORD, ...JEV];
+		const bound = selectToolsByAction(
+			allTools,
+			"couchbase",
+			{ couchbase: merged },
+			def,
+			getSkillToolNames("capella-agent"),
+			buildPriorityActions(KEYWORD, JEV),
+			SCORES,
+			KEYWORD,
+		).tools.map((t) => t.name);
+
+		// The three Greptile named, which the score-only comparator cut.
+		expect(bound).toContain("capella_get_buckets");
+		expect(bound).toContain("capella_get_schema_for_collection");
+		expect(bound).toContain("capella_get_document_type_examples");
+		expect(bound.length).toBeLessThanOrEqual(25);
+	});
+
+	// Mutation guard: dropping the keywordActions argument reproduces the regression,
+	// so removing it from the production call site cannot leave the test above green.
+	test("without the keyword tier those same tools are displaced by the scores", () => {
+		const def = loadCouchbaseDef();
+		const allTools = fakeTools(getAllActionToolNames(def));
+		const merged = [...KEYWORD, ...JEV];
+		const bound = selectToolsByAction(
+			allTools,
+			"couchbase",
+			{ couchbase: merged },
+			def,
+			getSkillToolNames("capella-agent"),
+			buildPriorityActions(KEYWORD, JEV),
+			SCORES,
+		).tools.map((t) => t.name);
+
+		expect(bound).not.toContain("capella_get_buckets");
+	});
+});
