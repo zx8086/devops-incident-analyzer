@@ -203,6 +203,79 @@ tool_mapping:
     # different asks even though both live under the ML API.
     ml_anomaly_records:
       - elasticsearch_ml_get_anomaly_records
+  # SIO-1864: phrasing from the DEVOPS-1354 incident reports, which lean on Elastic for
+  # every investigation -- "error burst", "throughput spike", "log flooding", "APM
+  # anomaly", "unassigned shards". Multi-word throughout: a bare "search" or "index"
+  # would match nearly every query in the corpus.
+  action_keywords:
+    search:
+      - error burst
+      - log volume
+      - apm trace
+      - error rate
+      - stack trace
+      - log flooding
+      - es|ql
+    cluster_health:
+      - cluster health
+      - unassigned shard
+      - unassigned shards
+      - cluster status
+      - yellow cluster
+      - red cluster
+    node_info:
+      - node stats
+      - node info
+      - heap usage
+    index_management:
+      - list indices
+      - the indices
+      - index settings
+      - rollover
+    shard_analysis:
+      - shard allocation
+      - allocation explain
+      - shard analysis
+    ingest_pipeline:
+      - ingest pipeline
+      - grok processor
+    template_management:
+      - index template
+      - component template
+    alias_management:
+      - index alias
+    document_ops:
+      - document count
+      - count matches
+      - aggregation over
+    data_lifecycle:
+      - ilm policy
+      - data lifecycle
+      - data stream
+      - retention policy
+    diagnostics:
+      - hot threads
+      - pending tasks
+      - cluster diagnostics
+    cloud_deployment:
+      - elastic cloud
+      - deployment plan
+      - hardware profile
+    billing:
+      - elastic billing
+      - deployment cost
+    transform_management:
+      - elastic transform
+      - continuous transform
+    ml_monitoring:
+      - ml job
+      - datafeed
+      - anomaly detection job
+    ml_anomaly_records:
+      - anomaly record
+      - apm anomaly
+      - throughput spike
+      - anomaly score
   action_descriptions:
     search: >-
       when querying log or APM documents by service, time window, or search terms -- structured

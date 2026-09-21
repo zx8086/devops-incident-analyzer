@@ -90,6 +90,49 @@ tool_mapping:
       - konnect_fetch_portal_api
       - konnect_list_portal_applications
       - konnect_get_portal_application
+  # SIO-1864: phrasing from the DEVOPS-1354 incident reports (DEVOPS-1385 "504/503 on
+  # /order/graphql", DEVOPS-1356 "4.11% failure rate, 808 5xx errors"). Multi-word
+  # phrases: a bare "upstream" or "certificate" would fire on unrelated prose.
+  action_keywords:
+    api_requests:
+      - api requests
+      - 5xx errors
+      - failure rate
+      - gateway timeout
+      - request analytics
+      - "504"
+      - "503"
+    service_config:
+      - upstream target
+      - upstream targets
+      - upstream service
+      - service config
+    route_config:
+      - route config
+      - path route
+      - route match
+    plugin_chain:
+      - plugin chain
+      - rate limit
+      - auth plugin
+      - plugin config
+    data_plane_health:
+      - data plane
+      - gateway health
+      - dp node
+    certificate_status:
+      - tls cert
+      - cert expiry
+      - certificate status
+      - sni
+    control_plane_management:
+      - control plane
+    consumer_management:
+      - konnect consumer
+      - consumer credential
+    portal_management:
+      - dev portal
+      - developer portal
   action_descriptions:
     api_requests: when querying request analytics (request rates, latency percentiles, status code distribution) for a service or route over a time window
     service_config: when inspecting a Kong service definition (host, port, protocol, retries, timeouts) -- the upstream target

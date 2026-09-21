@@ -166,6 +166,35 @@ tool_mapping:
       first-iteration triage probe. Returns up/down/unreachable per component.
     write_ops: when producing test messages, creating/altering topics, deleting topics, or resetting consumer group offsets (gated by KAFKA_ALLOW_WRITES / KAFKA_ALLOW_DESTRUCTIVE)
   action_keywords:
+    # SIO-1864: the five actions that had none. Phrasing from DEVOPS-1355 (MSK
+    # controller election storm), DEVOPS-1397 (VariantEventConsumer SRMSG00200), and
+    # the eval dataset's "which ones are showing meaningful lag".
+    consumer_lag:
+      - consumer lag
+      - consumer group lag
+      - consumer groups
+      - meaningful lag
+      - lagging behind
+      - offset lag
+    topic_throughput:
+      - topic throughput
+      - message rate
+      - high volume
+      - messages per
+    cluster_info:
+      - broker count
+      - how many brokers
+      - controller election
+      - active controller
+      - cluster metadata
+    describe_topic:
+      - describe topic
+      - partition layout
+      - topic config
+      - replication factor
+    write_ops:
+      - produce message
+      - write to topic
     connect_status:
       - kafka connect
       - connector

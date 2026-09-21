@@ -9,7 +9,9 @@ import {
 	getActionKeywords,
 	getAvailableActions,
 	loadAgent,
+	matchActionsByKeywords,
 	type ToolDefinition,
+	ToolDefinitionSchema,
 } from "@devops-agent/gitagent-bridge";
 import {
 	ACTION_INCLUDE_THRESHOLD,
@@ -64,11 +66,13 @@ describe("coverage across the real tool definitions", () => {
 		// assertions below would pass vacuously.
 		expect(withActions.length).toBeGreaterThanOrEqual(7);
 
+		// SIO-1864 closed the gap this originally pinned: every datasource now declares
+		// keywords (72/72), so the old `noKeywords.length > 0` precondition is false by
+		// design rather than by regression. The assertion below keeps the real guarantee
+		// -- the selector asks about EVERY action -- which is what the SIO-1839 bug was
+		// about; keyword presence was only ever the mechanism that exposed it.
 		const noKeywords = withActions.filter((t) => Object.keys(getActionKeywords(t)).length === 0);
-		// The bug's precondition, pinned: several real datasources have actions and
-		// NO keywords. If that stops being true the test still holds, but the
-		// regression it guards would no longer be reachable.
-		expect(noKeywords.length).toBeGreaterThan(0);
+		expect(noKeywords).toEqual([]);
 
 		// buildSelectableActions is the PRODUCTION gate, called here rather than
 		// re-implemented. The first version of this test rebuilt the map itself and
@@ -79,13 +83,24 @@ describe("coverage across the real tool definitions", () => {
 			expect(Object.keys(asked).sort()).toEqual(getAvailableActions(toolDef).sort());
 		}
 
-		// The sharp end: a keywordless datasource must still be fully askable.
-		const keywordless = noKeywords[0];
-		if (!keywordless) throw new Error("expected at least one keywordless tool definition");
+		// The sharp end: a keywordless datasource must still be fully askable. No real
+		// tool is keywordless since SIO-1864, so this uses a synthetic definition rather
+		// than deleting the case -- a new datasource added without keywords must not
+		// bring the SIO-1839 inertness back.
+		const keywordless = ToolDefinitionSchema.parse({
+			name: "keywordless-fixture",
+			description: "a datasource that declares actions and no keywords",
+			input_schema: { type: "object", properties: {}, required: [] },
+			tool_mapping: {
+				mcp_server: "fixture",
+				mcp_patterns: ["fixture_*"],
+				action_tool_map: { alpha: ["fixture_alpha"], beta: ["fixture_beta"] },
+			},
+		});
 		const asked = buildSelectableActions(keywordless);
-		expect(Object.keys(asked).length).toBeGreaterThan(0);
-		// ...and every one of its actions carries an empty keyword list, not a
-		// missing entry, so the question builder has something to iterate.
+		expect(Object.keys(asked).sort()).toEqual(["alpha", "beta"]);
+		// ...and every one of its actions carries an array, not a missing entry, so the
+		// question builder has something to iterate.
 		expect(Object.values(asked).every((k) => Array.isArray(k))).toBe(true);
 	});
 });
@@ -152,6 +167,77 @@ describe("SIO-1864: action_descriptions reach the selector", () => {
 				expect(Array.isArray(asked[action])).toBe(true);
 			}
 		}
+	});
+});
+
+// SIO-1864: every action now declares keywords (72/72, up from 20/72). The phrasing is
+// sourced from the DEVOPS-1354 "Agentic Investigations" epic -- 33 incident reports this
+// agent produced -- not invented from the action names.
+//
+// Keywords are not interchangeable with action_descriptions: descriptions only shape the
+// Jev question, while keywords drive matchActionsByKeywords AND the high-precision
+// ranking tier that sits above Jev scores in the tool budget (Greptile P1, PR #875).
+describe("SIO-1864: action_keywords coverage", () => {
+	const INCIDENT_ANALYZER_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
+
+	test("every action of every tool declares at least one keyword", () => {
+		const agent = loadAgent(INCIDENT_ANALYZER_DIR);
+		const withActions = agent.tools.filter((t) => getAvailableActions(t).length > 0);
+		expect(withActions.length).toBeGreaterThanOrEqual(7);
+
+		const gaps: string[] = [];
+		let total = 0;
+		for (const toolDef of withActions) {
+			const keywords = getActionKeywords(toolDef);
+			for (const action of getAvailableActions(toolDef)) {
+				total++;
+				if (!keywords[action]?.length) gaps.push(`${toolDef.name}.${action}`);
+			}
+		}
+		// Named, so a YAML edit that empties one set says WHICH one rather than a bare count.
+		expect(gaps).toEqual([]);
+		expect(total).toBeGreaterThanOrEqual(72);
+	});
+
+	test("no keyword is claimed by two actions of the same tool", () => {
+		const agent = loadAgent(INCIDENT_ANALYZER_DIR);
+		const collisions: string[] = [];
+		for (const toolDef of agent.tools) {
+			const owner = new Map<string, string>();
+			for (const [action, kws] of Object.entries(getActionKeywords(toolDef))) {
+				for (const kw of kws) {
+					const key = kw.toLowerCase();
+					const prev = owner.get(key);
+					// A shared keyword makes the deterministic pass ambiguous: both actions
+					// force-include, which is the over-selection the budget then has to cut.
+					if (prev && prev !== action) collisions.push(`${toolDef.name}: "${kw}" on ${prev} and ${action}`);
+					owner.set(key, action);
+				}
+			}
+		}
+		expect(collisions).toEqual([]);
+	});
+
+	test("real incident phrasing matches the right action, and boilerplate matches nothing", () => {
+		const agent = loadAgent(INCIDENT_ANALYZER_DIR);
+		const cb = agent.tools.find((t) => t.name === "couchbase-cluster-health");
+		if (!cb) throw new Error("couchbase-cluster-health not found");
+
+		// Phrasing lifted from DEVOPS-1407/1410/1412/1413 report bodies.
+		expect(matchActionsByKeywords("The Capella cluster is reporting fatal query errors", cb)).toContain(
+			"fatal_requests",
+		);
+		expect(matchActionsByKeywords("longest-running and most expensive queries", cb)).toContain("slow_queries");
+		expect(matchActionsByKeywords("list system indexes and flag indexes to drop", cb)).toContain("index_analysis");
+
+		// The negative that motivated dropping bare "scope"/"collection"/"bucket": this
+		// header line appears in EVERY DEVOPS-14xx report and must match nothing.
+		expect(
+			matchActionsByKeywords(
+				"AWS estates assessed: eu-oit-prd, eu-shared-services-prd - all findings are scoped to these two estates only",
+				cb,
+			),
+		).toEqual([]);
 	});
 });
 
