@@ -277,8 +277,14 @@ describe("SIO-1864: action_keywords coverage", () => {
 			const toolDef = agent.tools.find((t) => t.name === toolName);
 			if (!toolDef) throw new Error(`${toolName} not found`);
 			const matched = matchActionsByKeywords(query, toolDef);
-			if (!matched.includes(expected))
-				misses.push(`${toolName}: expected ${expected}, got [${matched}] for "${query.slice(0, 50)}..."`);
+			// Greptile (PR #879): assert the COMPLETE match set, not just membership.
+			// matchActionsByKeywords returns every matching action and mergeKeywordActions
+			// (sub-agent.ts:1646) unions all of them into the tool belt, so a future keyword that
+			// made one of these queries also match an unrelated action would broaden production
+			// tool selection while an includes() check stayed green. Verified against the live
+			// YAML: each of these queries matches exactly its one expected action today.
+			if (matched.length !== 1 || matched[0] !== expected)
+				misses.push(`${toolName}: expected exactly [${expected}], got [${matched}] for "${query.slice(0, 50)}..."`);
 		}
 		// Named, so a broken keyword says WHICH query it broke.
 		expect(misses).toEqual([]);
