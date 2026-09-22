@@ -8,6 +8,7 @@ import {
 	type LandingZoneImportDependencies,
 	landingZoneGitLabImportEnabled,
 	MAX_PENDING_MERGE_REQUESTS,
+	recoveryAnchorNeedsWrite,
 	resetLandingZoneGitLabImportStateForTests,
 	runLandingZoneGitLabImportSweep,
 } from "./gitlab-import.ts";
@@ -432,6 +433,15 @@ describe("importLandingZoneGitLabHistory", () => {
 			),
 		).rejects.toThrow("recovery anchor was not persisted");
 		expect(checkpoints).toEqual([]);
+	});
+
+	test("records an older recovery boundary even when a later anchor already exists", () => {
+		const anchor = (backfillStartAt: string) => ({
+			text: "Landing Zone GitLab import recovery anchor",
+			annotations: { backfill_start_at: backfillStartAt },
+		});
+		expect(recoveryAnchorNeedsWrite([anchor("2026-09-10T00:00:00.000Z")], "2026-09-01T00:00:00.000Z")).toBe(true);
+		expect(recoveryAnchorNeedsWrite([anchor("2026-08-01T00:00:00.000Z")], "2026-09-01T00:00:00.000Z")).toBe(false);
 	});
 
 	test("persists a reset checkpoint when GitLab's fixed-window total changes", async () => {

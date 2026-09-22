@@ -228,6 +228,17 @@ function parseToolPayload(value: unknown): unknown {
 	return JSON.parse(text.text) as unknown;
 }
 
+export function recoveryAnchorNeedsWrite(
+	existing: ReadonlyArray<{ annotations: Record<string, string> }>,
+	backfillStartAt: string,
+): boolean {
+	const requestedStart = Date.parse(backfillStartAt);
+	return !existing.some((hit) => {
+		const existingStart = Date.parse(hit.annotations.backfill_start_at ?? "");
+		return Number.isFinite(existingStart) && existingStart <= requestedStart;
+	});
+}
+
 async function invokeReadTool(name: string, input: Record<string, unknown>): Promise<unknown> {
 	const tool = getToolsForDataSource("landing-zone-iac").find((candidate) => candidate.name === name) as
 		| LandingZoneReadTool
@@ -254,10 +265,10 @@ function defaultDependencies(): LandingZoneImportDependencies {
 				allSessions: true,
 				deterministic: true,
 			});
-			if (existing.length > 0) return;
+			if (!recoveryAnchorNeedsWrite(existing, checkpoint.backfillStartAt)) return;
 			const recorded = await recordAgentFactNow(
 				"landing-zone-terraform",
-				`Landing Zone GitLab import recovery anchor for ${repository}`,
+				`Landing Zone GitLab import recovery anchor for ${repository} from ${checkpoint.backfillStartAt}`,
 				{
 					...annotations,
 					project_path: checkpoint.repositoryPath,

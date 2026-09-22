@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	bindingFromAnnotations,
+	earliestLandingZoneImportStarts,
 	incidentFromAnnotations,
 	invalidatedBindingFromAnnotations,
 	landingZoneImportStartFromAnnotations,
@@ -146,6 +147,44 @@ describe("SIO-1867 rebuild: Landing Zone GitLab import anchor", () => {
 		};
 		expect(landingZoneImportStartFromAnnotations({ ...base, project_id: "" })).toBeNull();
 		expect(landingZoneImportStartFromAnnotations({ ...base, backfill_start_at: "not-a-date" })).toBeNull();
+	});
+
+	test("keeps the earliest recovery boundary when a retry records an older anchor", () => {
+		expect(
+			earliestLandingZoneImportStarts([
+				{
+					repository: "aws-lz-account-creator",
+					projectId: "42",
+					projectPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+					backfillStartAt: "2026-09-10T00:00:00.000Z",
+				},
+				{
+					repository: "aws-lz-account-creator",
+					projectId: "42",
+					projectPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+					backfillStartAt: "2026-09-01T00:00:00.000Z",
+				},
+				{
+					repository: "aws-lz-network-core",
+					projectId: "84",
+					projectPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-network-core",
+					backfillStartAt: "2026-09-05T00:00:00.000Z",
+				},
+			]),
+		).toEqual([
+			{
+				repository: "aws-lz-account-creator",
+				projectId: "42",
+				projectPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+				backfillStartAt: "2026-09-01T00:00:00.000Z",
+			},
+			{
+				repository: "aws-lz-network-core",
+				projectId: "84",
+				projectPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-network-core",
+				backfillStartAt: "2026-09-05T00:00:00.000Z",
+			},
+		]);
 	});
 });
 

@@ -184,6 +184,19 @@ export interface LandingZoneImportStartRecord {
 	backfillStartAt: string;
 }
 
+export function earliestLandingZoneImportStarts(
+	records: ReadonlyArray<LandingZoneImportStartRecord>,
+): LandingZoneImportStartRecord[] {
+	const earliestByProject = new Map<string, LandingZoneImportStartRecord>();
+	for (const record of records) {
+		const current = earliestByProject.get(record.projectId);
+		if (!current || Date.parse(record.backfillStartAt) < Date.parse(current.backfillStartAt)) {
+			earliestByProject.set(record.projectId, record);
+		}
+	}
+	return [...earliestByProject.values()];
+}
+
 export function landingZoneImportStartFromAnnotations(a: AnnotationMap): LandingZoneImportStartRecord | null {
 	if (!a.repository || !a.project_id || !a.project_path) return null;
 	if (!z.string().datetime().safeParse(a.backfill_start_at).success) return null;
@@ -258,6 +271,7 @@ async function replayKind<T>(
 	write: (store: GraphStore, rec: T) => Promise<void>,
 	dryRun: boolean,
 	userId = INCIDENT_USER,
+	normalize: (records: T[]) => T[] = (records) => records,
 ): Promise<{ replayed: number; skipped: number }> {
 	const facts = await fetchFactsByKind(kind, userId);
 	const records: T[] = [];
@@ -267,9 +281,12 @@ async function replayKind<T>(
 		if (rec) records.push(rec);
 		else skipped += 1;
 	}
-	if (!dryRun && store) for (const rec of records) await write(store, rec);
-	process.stdout.write(`knowledge-graph rebuild: ${kind} -> ${records.length} replayed (${skipped} skipped).\n`);
-	return { replayed: records.length, skipped };
+	const normalizedRecords = normalize(records);
+	if (!dryRun && store) for (const rec of normalizedRecords) await write(store, rec);
+	process.stdout.write(
+		`knowledge-graph rebuild: ${kind} -> ${normalizedRecords.length} replayed (${skipped} skipped).\n`,
+	);
+	return { replayed: normalizedRecords.length, skipped };
 }
 
 async function rebuild(opts: RebuildOptions): Promise<void> {
@@ -308,6 +325,7 @@ async function rebuild(opts: RebuildOptions): Promise<void> {
 		applyLandingZoneImportStart,
 		opts.dryRun,
 		LANDING_ZONE_USER,
+		earliestLandingZoneImportStarts,
 	);
 
 	if (opts.dryRun) {
