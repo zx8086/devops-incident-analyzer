@@ -1,6 +1,6 @@
 <script lang="ts">
 // apps/web/src/lib/components/CompletedProgress.svelte
-import { ALL_NODE_LABELS } from "$lib/node-labels";
+import { nodeLabelFor } from "$lib/node-labels";
 import type { DataSourceFindings } from "$lib/stores/agent-reducer";
 import Icon from "./Icon.svelte";
 
@@ -16,6 +16,7 @@ let {
 	dataSourceResults,
 	dataSourceFindings,
 	outcome = "completed",
+	agent,
 }: {
 	responseTime?: number;
 	toolsUsed?: string[];
@@ -23,6 +24,7 @@ let {
 	dataSourceResults?: Map<string, DataSourceStatus>;
 	dataSourceFindings?: Map<string, DataSourceFindings>;
 	outcome?: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed" | "error";
+	agent?: string;
 } = $props();
 
 let expanded = $state(false);
@@ -200,10 +202,10 @@ function statusDotClass(status: string): string {
           <div class="mb-2.5">
             <span class="text-[0.5625rem] font-medium text-gray-500 uppercase tracking-wider">Pipeline</span>
             <div class="flex flex-wrap gap-1.5 mt-1">
-              {#each [...completedNodes.entries()] as [nodeId, data]}
+              {#each [...completedNodes.entries()] as [nodeId, data] (nodeId)}
                 <span class="inline-flex items-center gap-1 py-0.5 px-2 rounded bg-green-100 text-green-700 text-[0.625rem] font-medium">
                   <Icon name="check" class="w-2.5 h-2.5" />
-                  {ALL_NODE_LABELS[nodeId]?.completeLabel ?? nodeId}
+                  {nodeLabelFor(nodeId, agent)?.completeLabel ?? nodeId}
                   <span class="text-green-500 text-[0.5rem]">{(data.duration / 1000).toFixed(1)}s</span>
                 </span>
               {/each}
@@ -215,7 +217,7 @@ function statusDotClass(status: string): string {
           <div class="mb-2.5">
             <span class="text-[0.5625rem] font-medium text-gray-500 uppercase tracking-wider">Data Sources</span>
             <div class="flex flex-col gap-1 mt-1">
-              {#each dataSources as [id, ds]}
+              {#each dataSources as [id, ds] (id)}
                 <div class="flex items-center gap-2 py-1">
                   <div class="w-1.5 h-1.5 rounded-full shrink-0 {statusDotClass(ds.status)}"></div>
                   <span class="text-[0.6875rem] font-medium text-gray-800">{id}</span>
@@ -233,7 +235,7 @@ function statusDotClass(status: string): string {
           <div>
             <span class="text-[0.5625rem] font-medium text-gray-500 uppercase tracking-wider">Tools</span>
             <div class="flex flex-wrap gap-1 mt-1">
-              {#each toolsUsed as tool}
+              {#each toolsUsed as tool, index (`${tool}-${index}`)}
                 <span class="inline-flex items-center py-0.5 px-1.5 rounded bg-amber-100 text-amber-700 text-[0.5625rem] font-medium">
                   <Icon name="tool" class="w-2 h-2 mr-0.5" />
                   {tool}

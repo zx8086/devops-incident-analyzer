@@ -520,6 +520,7 @@ function handleSuggestionClick(suggestion: string) {
           {/if}
           <ChatMessage
             message={msg}
+            agent={agentStore.currentAgent}
             index={i}
             isLast={i === agentStore.messages.length - 1}
             isStreaming={false}
@@ -558,6 +559,7 @@ function handleSuggestionClick(suggestion: string) {
         {#if agentStore.currentContent}
           <ChatMessage
             message={{ id: "streaming", role: "assistant", content: agentStore.currentContent }}
+            agent={agentStore.currentAgent}
             index={agentStore.messages.length}
             isLast={true}
             isStreaming={true}
@@ -595,6 +597,7 @@ function handleSuggestionClick(suggestion: string) {
           {#if summaryMsg}
             <ChatMessage
               message={summaryMsg}
+              agent={agentStore.currentAgent}
               index={driftSummaryIndex}
               isLast={true}
               isStreaming={false}
@@ -629,6 +632,7 @@ function handleSuggestionClick(suggestion: string) {
           {#if synthSummaryMsg}
             <ChatMessage
               message={synthSummaryMsg}
+              agent={agentStore.currentAgent}
               index={syntheticsSummaryIndex}
               isLast={true}
               isStreaming={false}

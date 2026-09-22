@@ -2,7 +2,7 @@
 // apps/web/src/lib/components/GraphTriagePanel.svelte
 import { untrack } from "svelte";
 import { computeLayout, END_NODE, type GraphLayout, START_NODE, type Topology } from "$lib/graph-layout";
-import { ALL_NODE_LABELS } from "$lib/node-labels";
+import { nodeLabelFor } from "$lib/node-labels";
 import { runningFingerprint, shouldRevealRunning } from "./graph-triage-scroll";
 import Icon from "./Icon.svelte";
 import { isAtBottom } from "./pi-fleet-scroll";
@@ -189,7 +189,7 @@ function nodeLabel(id: string): string {
 function nodeSubtitle(id: string): string {
 	const duration = completedNodes.get(id);
 	if (duration) return `${(duration.duration / 1000).toFixed(1)}s`;
-	if (activeNodes.has(id)) return `${ALL_NODE_LABELS[id]?.activeLabel ?? "Running"}...`;
+	if (activeNodes.has(id)) return `${nodeLabelFor(id, agent)?.activeLabel ?? "Running"}...`;
 	return "";
 }
 

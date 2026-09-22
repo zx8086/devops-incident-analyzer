@@ -153,7 +153,7 @@ const EXTRA_COMPLETED_ONLY_NODES: readonly NodeLabel[] = [
 
 // Flat lookup covering every registered node of both graphs, for
 // CompletedProgress.svelte's `completeLabel` and GraphTriagePanel's subtitle.
-export const ALL_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.fromEntries(
+const SHARED_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.fromEntries(
 	[
 		...INCIDENT_NODES,
 		RESPONDER_NODE,
@@ -163,7 +163,23 @@ export const ALL_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.fromE
 		...IAC_DRIFT_NODES,
 		...IAC_FLEET_NODES,
 		...IAC_RENOVATE_NODES,
-		...LANDING_ZONE_NODES,
 		...EXTRA_COMPLETED_ONLY_NODES,
 	].map((n) => [n.id, n]),
 );
+
+const LANDING_ZONE_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.fromEntries(
+	LANDING_ZONE_NODES.map((node) => [node.id, node]),
+);
+
+// Generic lookup retained for callers without agent context. Landing Zone-only
+// node ids are included, while shared bootstrap/teardown ids keep their generic
+// labels so incident and Elastic IaC history is never relabelled by insertion order.
+export const ALL_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.freeze({
+	...LANDING_ZONE_NODE_LABELS,
+	...SHARED_NODE_LABELS,
+});
+
+export function nodeLabelFor(nodeId: string, agent?: string): NodeLabel | undefined {
+	if (agent === "landing-zone-terraform") return LANDING_ZONE_NODE_LABELS[nodeId] ?? ALL_NODE_LABELS[nodeId];
+	return ALL_NODE_LABELS[nodeId];
+}

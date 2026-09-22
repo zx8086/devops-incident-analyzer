@@ -5,6 +5,7 @@ import type { ActionResult, PendingAction, TicketProviderInfo } from "@devops-ag
 // server-only modules into the client bundle. Type-only, but kept on the deep
 // path to match CreateTicketCard's convention.
 import type { CreatedTicket } from "@devops-agent/shared/src/ticket-types.ts";
+import type { AgentId } from "$lib/agent-ids";
 import type { ChatMessage } from "$lib/stores/agent.svelte";
 import ActionConfirmationCard from "./ActionConfirmationCard.svelte";
 import AddCommentCard from "./AddCommentCard.svelte";
@@ -41,6 +42,7 @@ let {
 	threadTicket = null,
 	canCommentOnThreadTicket = false,
 	onTicketCreated,
+	agent,
 }: {
 	message: ChatMessage;
 	index: number;
@@ -62,6 +64,7 @@ let {
 	threadTicket?: CreatedTicket | null;
 	canCommentOnThreadTicket?: boolean;
 	onTicketCreated?: (ticket: CreatedTicket) => void;
+	agent?: AgentId;
 } = $props();
 
 let showTicketCard = $state(false);
@@ -172,6 +175,7 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
             dataSourceResults={message.dataSourceResults}
             dataSourceFindings={message.dataSourceFindings}
             outcome={message.outcome}
+            {agent}
           />
         {/if}
 
