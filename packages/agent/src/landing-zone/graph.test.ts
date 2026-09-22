@@ -121,4 +121,26 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.risk?.requiresHumanDecision).toBeTrue();
 		expect(result.outcome).toBe("blocked");
 	});
+
+	test("treats creating a review as review work rather than an infrastructure mutation", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage("Create a review of the VPC network configuration")], requestId: "request-review" },
+			{ configurable: { thread_id: "thread-review" } },
+		);
+
+		expect(result.intent).toBe("review");
+		expect(result.outcome).toBe("answered");
+	});
+
+	test("treats creating an example as learning rather than an infrastructure mutation", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage("Create an example of PVH account vending")], requestId: "request-example" },
+			{ configurable: { thread_id: "thread-example" } },
+		);
+
+		expect(result.intent).toBe("learn");
+		expect(result.outcome).toBe("answered");
+	});
 });
