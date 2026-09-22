@@ -170,6 +170,7 @@ function getMcpConfig() {
 		atlassianUrl: process.env.ATLASSIAN_MCP_URL,
 		awsUrl: process.env.AWS_MCP_URL,
 		elasticIacUrl: process.env.ELASTIC_IAC_MCP_URL,
+		landingZoneIacUrl: process.env.LANDING_ZONE_IAC_MCP_URL,
 		// SIO-967: in-process server mounted above; undefined when KG is disabled, the
 		// server failed to start, or the port's occupant must not have its tools registered
 		// (SIO-1645), so the bridge simply registers no kg_* tools.
