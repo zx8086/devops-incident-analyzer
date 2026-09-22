@@ -143,4 +143,21 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.intent).toBe("learn");
 		expect(result.outcome).toBe("answered");
 	});
+
+	test("fails closed for a comma-separated mutation after an informational artifact", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{
+				messages: [
+					new HumanMessage("Create a review of the VPC configuration, update the transit gateway to add peering"),
+				],
+				requestId: "request-artifact-change",
+			},
+			{ configurable: { thread_id: "thread-artifact-change" } },
+		);
+
+		expect(result.intent).toBe("propose-change");
+		expect(result.risk?.requiresHumanDecision).toBeTrue();
+		expect(result.outcome).toBe("blocked");
+	});
 });
