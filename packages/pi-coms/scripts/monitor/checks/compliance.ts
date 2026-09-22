@@ -9,6 +9,7 @@ import { errorMessage } from "../errors.ts";
 import type { Finding } from "../report.ts";
 import type { MonitorState } from "../state.ts";
 import type { AwsClient } from "./alarms.ts";
+import { buildArn, isChurnEligibleRule, lookupChurnOwned } from "./churn-tags.ts";
 import { diffSnapshot } from "./resource-drift.ts";
 
 // SIO-1740: a Config rule flipping a resource to NON_COMPLIANT was only visible
@@ -45,7 +46,21 @@ const SUMMARY_TYPES = 4;
 // every pair.
 const SAMPLE_RESOURCES = 25;
 
-export type CheckComplianceOpts = { now?: number; warnCap?: number; collapseAt?: number };
+export type CheckComplianceOpts = {
+	now?: number;
+	warnCap?: number;
+	collapseAt?: number;
+	// SIO-1868: all four are required together for churn classification. Absent
+	// any one of them the check behaves exactly as before, so a host that has
+	// not been given a tagging client keeps reporting every pair.
+	taggingClient?: AwsClient;
+	churnTagKeys?: string[];
+	// Rules eligible for churn classification. Omitted means the default
+	// (required-tags only); an empty array disables classification.
+	churnRulePatterns?: string[];
+	region?: string;
+	accountId?: string;
+};
 
 type PairEvidence = { rule: string; resourceType: string; resourceId: string };
 
@@ -115,6 +130,81 @@ function split(k: string): Pair {
 	const [rule, type, ...rest] = k.split(SEP);
 	return { rule: rule ?? "", type: type ?? "", id: rest.join(SEP) };
 }
+
+// SIO-1868: an autoscaler's resources churn by design, so a required-tags rule
+// reports them every day about the account's intended steady state. Ownership
+// tags are the only thing that separates those from a STABLE untagged resource
+// (an AWS-managed NAT/ELB/EKS-control-plane ENI), which stays reported.
+//
+// Only newly-flagged (warn) pairs are looked up: a cleared pair is already info
+// and its resource may well be deleted, so there would be nothing to read.
+async function classifyChurn(
+	findings: Finding[],
+	state: MonitorState,
+	at: string,
+	opts: CheckComplianceOpts,
+): Promise<Finding[]> {
+	const tagging = opts.taggingClient;
+	const churnKeys = opts.churnTagKeys ?? [];
+	if (!tagging || churnKeys.length === 0 || !opts.region || !opts.accountId) return findings;
+
+	const candidates = new Map<string, { finding: Finding; arn: string }>();
+	for (const f of findings) {
+		if (f.severity !== "warn") continue;
+		const ev = f.evidence as Partial<PairEvidence>;
+		if (!ev.resourceType || !ev.resourceId || !ev.rule) continue;
+		// Greptile P1 on #884: ownership is a property of the RESOURCE, not of the
+		// rule, so classifying on the tag alone suppressed every rule that fires on
+		// a Karpenter node -- including securityhub-ec2-instance-multiple-eni-check,
+		// which is live in eu-mendix-platform-prd and was in the 2026-09-21 digest.
+		// "This node churns" justifies ignoring a tagging violation on it; it does
+		// not justify ignoring a security finding on it. Eligibility is therefore
+		// per RULE, and the default matches only required-tags rules.
+		if (!isChurnEligibleRule(ev.rule, opts.churnRulePatterns)) continue;
+		const arn = buildArn(opts.region, opts.accountId, ev.resourceType, ev.resourceId);
+		// An unmappable resource type is reported unclassified: the safe direction.
+		if (arn) candidates.set(ev.resourceId, { finding: f, arn });
+	}
+	if (candidates.size === 0) return findings;
+
+	const lookup = await lookupChurnOwned(
+		tagging,
+		[...candidates.values()].map((c) => c.arn),
+		churnKeys,
+	);
+	// Fail OPEN: on a throttle or error every finding is reported. Hiding a real
+	// violation because an API call failed is the one outcome worth avoiding.
+	if (!lookup.complete) {
+		state.journal("check_error", {
+			check: "compliance",
+			stage: "churn-classification",
+			error: lookup.error ?? "unknown",
+			note: "findings reported unclassified",
+			at,
+		});
+		return findings;
+	}
+
+	const kept: Finding[] = [];
+	for (const f of findings) {
+		const id = (f.evidence as Partial<PairEvidence>).resourceId;
+		if (id === undefined || !lookup.churnOwned.has(id) || !candidates.has(id)) {
+			kept.push(f);
+			continue;
+		}
+		// Journalled in the ledger's own shape so the weekly suppression review
+		// counts these too: a silent drop is how accepted noise becomes forgotten
+		// noise. `suppressed_by` is a label, not a ledger pattern -- no row exists.
+		state.journal("suppressed_finding", {
+			...f,
+			suppressed_by: CHURN_LABEL,
+			reason: "resource carries an autoscaler ownership tag",
+		});
+	}
+	return kept;
+}
+
+export const CHURN_LABEL = "churn-tag:autoscaler-owned";
 
 export async function checkCompliance(
 	client: AwsClient,
@@ -249,10 +339,15 @@ export async function checkCompliance(
 			};
 		},
 	});
+	// SIO-1868: drop findings for resources an autoscaler owns, BEFORE collapsing
+	// -- collapseByRule reports its own count, so classifying afterwards would
+	// print a number that no longer matches what is reported.
+	const classified = await classifyChurn(diffed, state, at, opts);
+
 	// A rule rolled out across an estate flips hundreds of resources at once;
 	// the report names the first few and the overflow finding carries every
 	// omitted pair, so the journal keeps the identities the cap hides.
-	const collapsed = collapseByRule(diffed, at, opts.collapseAt ?? COLLAPSE_AT);
+	const collapsed = collapseByRule(classified, at, opts.collapseAt ?? COLLAPSE_AT);
 	const warns = collapsed.filter((f) => f.severity === "warn");
 	const rest = collapsed.filter((f) => f.severity !== "warn");
 	findings.push(...warns.slice(0, warnCap), ...rest);

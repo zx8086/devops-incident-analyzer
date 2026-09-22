@@ -388,22 +388,49 @@ export function suppressionReviewFromJournal(
 ): SuppressionReviewEntry[] {
 	const byPattern = new Map<string, { matches: number; sampleKeys: string[] }>();
 	for (const e of ledger) byPattern.set(e.pattern, { matches: 0, sampleKeys: [] });
+	// Greptile P2 on #884: a drop whose `suppressed_by` has no ledger row was
+	// counted against nothing and vanished. The compliance check's churn
+	// classification suppresses under a synthetic label with no row by design, so
+	// the review reported "the ledger is empty; nothing is being masked" while it
+	// was actively hiding findings -- the exact blind spot this report exists to
+	// prevent. Journal-only labels are therefore synthesised into entries.
+	const synthetic = new Map<string, { matches: number; sampleKeys: string[]; reason: string }>();
 	for (const r of rows) {
-		let payload: { suppressed_by?: unknown; dedup_key?: unknown };
+		let payload: { suppressed_by?: unknown; dedup_key?: unknown; reason?: unknown };
 		try {
 			payload = JSON.parse(r.payload);
 		} catch {
 			continue;
 		}
-		const entry = typeof payload.suppressed_by === "string" ? byPattern.get(payload.suppressed_by) : undefined;
-		if (!entry) continue;
+		if (typeof payload.suppressed_by !== "string") continue;
+		const label = payload.suppressed_by;
+		let entry = byPattern.get(label);
+		if (!entry) {
+			const existing = synthetic.get(label);
+			entry = existing ?? {
+				matches: 0,
+				sampleKeys: [],
+				reason: typeof payload.reason === "string" ? payload.reason : "(no reason recorded)",
+			};
+			if (!existing) synthetic.set(label, entry as { matches: number; sampleKeys: string[]; reason: string });
+		}
 		entry.matches++;
 		const key = typeof payload.dedup_key === "string" ? payload.dedup_key : null;
 		if (key && entry.sampleKeys.length < REVIEW_SAMPLE_CAP && !entry.sampleKeys.includes(key)) {
 			entry.sampleKeys.push(key);
 		}
 	}
-	return ledger.map((e) => ({ ...e, ...(byPattern.get(e.pattern) ?? { matches: 0, sampleKeys: [] }) }));
+	const fromLedger = ledger.map((e) => ({ ...e, ...(byPattern.get(e.pattern) ?? { matches: 0, sampleKeys: [] }) }));
+	// `created_at` is the ledger's field and there is no row to read it from, so
+	// the synthesised entry says where it came from instead of inventing a date.
+	const fromJournal = [...synthetic.entries()].map(([pattern, v]) => ({
+		pattern,
+		reason: v.reason,
+		created_at: "in code, not the ledger",
+		matches: v.matches,
+		sampleKeys: v.sampleKeys,
+	}));
+	return [...fromLedger, ...fromJournal];
 }
 
 // The anti-masking counterweight to the ledger: what each suppression ate in
@@ -478,10 +505,18 @@ export function formatDigest(d: DigestInput): string {
 	// Uninvestigated findings lead so they always survive the display cap: an
 	// investigated critical already has its diagnosis in an incident report,
 	// an uninvestigated warn has nobody looking at it (SIO-1623).
+	// The family is the last tiebreak, under uninvestigated and severity: one
+	// cause usually produces one family (a Karpenter consolidation is a run of
+	// compliance lines), so grouping them puts the repeated rule name in a block
+	// the eye can skip rather than scattering it through the list. It cannot
+	// disturb the two rules above it, which is why it sorts last.
 	const notables = (d.notables ?? [])
 		.filter((n) => n.severity !== "info")
 		.sort(
-			(a, b) => Number(b.uninvestigated) - Number(a.uninvestigated) || SEV_ORDER[a.severity] - SEV_ORDER[b.severity],
+			(a, b) =>
+				Number(b.uninvestigated) - Number(a.uninvestigated) ||
+				SEV_ORDER[a.severity] - SEV_ORDER[b.severity] ||
+				a.family.localeCompare(b.family),
 		);
 	const uninvestigated = notables.filter((n) => n.uninvestigated).length;
 
@@ -541,7 +576,14 @@ export function formatDigest(d: DigestInput): string {
 		// marker: the tag is what the web pane badges, and a reader scrolling a
 		// long digest should not have to look upwards to identify a line.
 		let lastResource: string | null = null;
-		for (const n of notables.slice(0, NOTABLE_CAP)) {
+		for (const [i, n] of notables.slice(0, NOTABLE_CAP).entries()) {
+			// One blank line between entries so each resource plus its wrapped
+			// summary reads as a block. A run of nine required-tags lines was a wall
+			// of text otherwise. Not a heading: the digest is also parsed by
+			// contracts/report.ts and re-styled by the web pane
+			// (apps/web/src/lib/digest-emphasis.ts), which both key off the existing
+			// line shapes -- a blank line adds no new shape for them to learn.
+			if (i > 0) lines.push("");
 			const marker = n.uninvestigated ? " [uninvestigated]" : "";
 			// A repeat count only when there IS a repeat, so the common
 			// single-occurrence line is unchanged.
@@ -554,9 +596,12 @@ export function formatDigest(d: DigestInput): string {
 			for (const line of wrapSummary(n.summary)) lines.push(`      ${line}`);
 		}
 		if (notables.length > NOTABLE_CAP) {
-			lines.push(`  - +${notables.length - NOTABLE_CAP} more warn+ finding(s) in the journal`);
+			lines.push("", `  - +${notables.length - NOTABLE_CAP} more warn+ finding(s) in the journal`);
 		}
-		if (uninvestigated > 0) lines.push(`- uninvestigated: ${uninvestigated}`);
+		// Blank line first: with entries now separated, a flush `- uninvestigated:`
+		// would read as part of the last entry's block rather than as the summary
+		// line for the whole list.
+		if (uninvestigated > 0) lines.push("", `- uninvestigated: ${uninvestigated}`);
 	}
 
 	lines.push("");

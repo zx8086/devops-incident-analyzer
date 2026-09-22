@@ -18,6 +18,7 @@ import { GuardDutyClient } from "@aws-sdk/client-guardduty";
 import { HealthClient } from "@aws-sdk/client-health";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { RDSClient } from "@aws-sdk/client-rds";
+import { ResourceGroupsTaggingAPIClient } from "@aws-sdk/client-resource-groups-tagging-api";
 import { S3Client } from "@aws-sdk/client-s3";
 import { SNSClient } from "@aws-sdk/client-sns";
 import { SQSClient } from "@aws-sdk/client-sqs";
@@ -44,6 +45,7 @@ import {
 import { s3Store, saveCheckpoint, statePrefix } from "./monitor/checkpoint.ts";
 import { checkAlarms, describeAllAlarms, isScalingTrigger } from "./monitor/checks/alarms.ts";
 import { certRegions, checkCerts, checkListenerCerts } from "./monitor/checks/certs.ts";
+import { parseChurnRulePatterns, parseChurnTagKeys } from "./monitor/checks/churn-tags.ts";
 import { checkCompliance } from "./monitor/checks/compliance.ts";
 import { COST_DEFAULTS, checkCost } from "./monitor/checks/cost.ts";
 import { checkDbEvents } from "./monitor/checks/db-events.ts";
@@ -93,6 +95,7 @@ import {
 } from "./monitor/report.ts";
 import { publishReportToSns, snsTopicFromEnv } from "./monitor/report-email.ts";
 import { MonitorState } from "./monitor/state.ts";
+import { loadSuppressionManifest, selectForAccount } from "./monitor/suppression-manifest.ts";
 
 const ACCOUNT_ID = process.env.AWS_ACCOUNT_ID ?? "unknown";
 // SIO-1832: the friendly account name (a fleet.yaml spoke key, reaching the host
@@ -249,6 +252,19 @@ const WATCHLIST = (process.env.PI_MONITOR_WATCHLIST ?? "")
 const CERT_WARN_DAYS = Number(process.env.PI_MONITOR_CERT_WARN_DAYS ?? 30);
 const CERT_CRIT_DAYS = Number(process.env.PI_MONITOR_CERT_CRIT_DAYS ?? 7);
 const STATE_DB = process.env.PI_MONITOR_STATE_DB ?? path.join(os.homedir(), ".pi", "monitor", "state.db");
+// SIO-1868: ships inside the bundle next to deploy/, so a rollout carries the
+// reviewed suppression list with the code it applies to. Overridable for tests.
+const SUPPRESSIONS_FILE =
+	process.env.PI_MONITOR_SUPPRESSIONS_FILE ?? path.resolve(import.meta.dir, "..", "deploy", "suppressions.yaml");
+// SIO-1868: ownership tag keys that mark a resource as autoscaler-created, so a
+// required-tags violation on it is churn rather than drift. Defaults ON (the
+// repo's kill-switch convention); an explicitly empty value turns the whole
+// classification off without touching the check.
+const CHURN_TAG_KEYS = parseChurnTagKeys(process.env.PI_MONITOR_CHURN_TAGS);
+// Which rules may be classified as churn. Ownership is a property of the
+// resource, not the rule: a security rule firing on a churning node is still a
+// security finding, so the default is required-tags only.
+const CHURN_RULE_PATTERNS = parseChurnRulePatterns(process.env.PI_MONITOR_CHURN_RULES);
 // SIO-1745: the root volume dies with the instance, and a userdata-affecting
 // change (pi_model among them) replaces it. Derived from the bundle uri the
 // host already has, so enabling this adds no userdata variable -- which would
@@ -516,6 +532,11 @@ function main(): void {
 	// the 24 hourly runs in every prd account (whole check lost, digest DEGRADED).
 	// Adaptive mode slows the client down after a throttle instead of failing.
 	const config = new ConfigServiceClient({ region, retryMode: "adaptive", maxAttempts: 10 });
+	// SIO-1868: ownership tags separate autoscaler churn from a stable untagged
+	// resource. Adaptive for the same reason as the Config client: one call per
+	// 100 newly-flagged pairs, and a throttle here must degrade to reporting
+	// everything rather than losing the check.
+	const tagging = new ResourceGroupsTaggingAPIClient({ region, retryMode: "adaptive", maxAttempts: 5 });
 	const guardduty = new GuardDutyClient({ region });
 	// SIO-1748 workload-state clients. The ELBv2 client above is region-keyed
 	// for the cert scan; the targets check wants the host region only, since a
@@ -556,6 +577,24 @@ function main(): void {
 			log(`checkpoint (${trigger}) FAILED: ${errorMessage(e)}`);
 		}
 	};
+
+	// SIO-1868: reconcile the committed suppression manifest into the ledger
+	// before any check runs, so the first cycle after a rollout already honours
+	// it. Never fatal: a missing file is the normal case on a dev checkout, and
+	// a corrupt one must leave the existing ledger standing rather than drop
+	// every file suppression at once.
+	const manifest = loadSuppressionManifest(SUPPRESSIONS_FILE);
+	if (manifest.ok) {
+		const wanted = selectForAccount(manifest.entries, ACCOUNT_NAME);
+		const { added, updated, removed } = state.reconcileFileSuppressions(wanted);
+		if (added.length + updated.length + removed.length > 0) {
+			log(
+				`suppression manifest: ${added.length} added, ${updated.length} updated, ${removed.length} removed (${wanted.length} apply to this account)`,
+			);
+		}
+	} else if (manifest.reason !== "missing") {
+		log(`suppression manifest ${manifest.reason}: ${manifest.detail}; existing ledger left unchanged`);
+	}
 
 	const gate = {
 		name: "identity",
@@ -705,7 +744,17 @@ function main(): void {
 						excludePrefixes: LOGS_EXCLUDE.length > 0 ? LOGS_EXCLUDE : undefined,
 					}),
 			},
-			{ name: "compliance", run: () => checkCompliance(config, state) },
+			{
+				name: "compliance",
+				run: () =>
+					checkCompliance(config, state, {
+						taggingClient: tagging,
+						churnTagKeys: CHURN_TAG_KEYS,
+						churnRulePatterns: CHURN_RULE_PATTERNS,
+						region,
+						accountId: ACCOUNT_ID,
+					}),
+			},
 			{ name: "guardduty", run: () => checkGuardDuty(guardduty, state) },
 			{ name: "db-events", run: () => checkDbEvents(rds, state) },
 			{ name: "nodegroups", run: () => checkNodegroups(eks, state) },
