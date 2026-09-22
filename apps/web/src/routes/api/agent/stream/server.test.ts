@@ -237,6 +237,7 @@ const invokeAgentMock = mock(
 // no interrupt is ever raised, so a stub returning undefined keeps the existing
 // done-event path intact.
 const buildLangSmithTagsMock = mock(() => [] as string[]);
+const getLastAssistantTextMock = mock(async () => "");
 mock.module("$lib/server/langsmith-tags", () => ({
 	buildLangSmithTags: buildLangSmithTagsMock,
 }));
@@ -247,7 +248,7 @@ mock.module("$lib/server/agent", () => ({
 	getPipelineNodes: mock(async () => new Set(["classify", "aggregateMitigation", "followUp", "proposeMonitor"])),
 	getPendingInterrupt: mock(async () => undefined),
 	// stream/+server.ts imports this for the elastic-iac final-message path.
-	getLastAssistantText: mock(async () => ""),
+	getLastAssistantText: getLastAssistantTextMock,
 	// SIO-930: stream/+server.ts imports this to label the elastic-iac done event.
 	getIacTurnOutcome: mock(async () => "completed"),
 	// SIO-476: stream/+server.ts calls this after each completed turn.
@@ -364,6 +365,25 @@ describe("POST /api/agent/stream -- clientTimeZone", () => {
 });
 
 describe("POST /api/agent/stream — SSE stream", () => {
+	test("surfaces the final Landing Zone assistant message before completion", async () => {
+		getLastAssistantTextMock.mockImplementationOnce(async () => "PVH account vending uses the account YAML surface.");
+
+		const response = await POST(
+			makeRequest({
+				agentName: "landing-zone-terraform",
+				messages: [{ role: "user", content: "How does PVH create an AWS account?" }],
+				threadId: "thread-landing-zone",
+			}),
+		);
+
+		const events = await collectSse(response);
+		expect(events).toContainEqual({
+			type: "message",
+			content: "PVH account vending uses the account YAML surface.",
+		});
+		expect(events.at(-1)?.type).toBe("done");
+	});
+
 	test("forwards aggregator chunks, then done", async () => {
 		invokeAgentMock.mockImplementationOnce(async () => ({
 			async *[Symbol.asyncIterator]() {

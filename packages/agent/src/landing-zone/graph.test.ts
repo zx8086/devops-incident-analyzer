@@ -1,4 +1,4 @@
-// agent/src/landing-zone/graph.test.ts
+// packages/agent/src/landing-zone/graph.test.ts
 
 import { describe, expect, test } from "bun:test";
 import { HumanMessage } from "@langchain/core/messages";
@@ -71,5 +71,39 @@ describe("buildLandingZoneGraph", () => {
 		for (const edge of EXPECTED_EDGES) {
 			expect(edges).toContainEqual(edge);
 		}
+	});
+
+	test("keeps informational account-creation questions out of the change path", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage("How does PVH create an AWS account?")], requestId: "request-learn" },
+			{ configurable: { thread_id: "thread-learn" } },
+		);
+
+		expect(result.intent).toBe("learn");
+		expect(result.outcome).toBe("answered");
+	});
+
+	test("persists the user-facing answer as the final assistant message", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage("Explain account vending")], requestId: "request-answer" },
+			{ configurable: { thread_id: "thread-answer" } },
+		);
+
+		expect(result.messages.at(-1)?.getType()).toBe("ai");
+		expect(result.response).toBe("Live evidence not collected yet.");
+		expect(result.messages.at(-1)?.content).toBe("Live evidence not collected yet.");
+	});
+
+	test("still blocks an imperative account-creation request without live evidence", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage("Create an AWS account for MarTech")], requestId: "request-change" },
+			{ configurable: { thread_id: "thread-change" } },
+		);
+
+		expect(result.intent).toBe("propose-change");
+		expect(result.outcome).toBe("blocked");
 	});
 });

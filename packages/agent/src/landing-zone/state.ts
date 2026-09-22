@@ -1,4 +1,4 @@
-// agent/src/landing-zone/state.ts
+// packages/agent/src/landing-zone/state.ts
 
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 import type {

@@ -1,6 +1,6 @@
-// agent/src/landing-zone/nodes.ts
+// packages/agent/src/landing-zone/nodes.ts
 
-import type { BaseMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import type { LandingZoneStateType } from "./state.ts";
 import type { LandingZoneIntent } from "./types.ts";
 
@@ -22,8 +22,8 @@ export async function classifyLandingZoneRequest(state: LandingZoneStateType): P
 	const text = latestText(state.messages);
 	let intent: LandingZoneIntent = "understand";
 	if (/\b(review|validate|check|plan)\b/.test(text)) intent = "review";
+	else if (/\b(learn|teach|example|show me|how does|how do|what is|explain)\b/.test(text)) intent = "learn";
 	else if (/\b(change|create|add|modify|update|implement)\b/.test(text)) intent = "propose-change";
-	else if (/\b(learn|teach|example|show me)\b/.test(text)) intent = "learn";
 	return { intent };
 }
 
@@ -88,10 +88,12 @@ export async function assessLandingZoneRisk(state: LandingZoneStateType): Promis
 
 export async function answerLandingZoneQuestion(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
 	if (state.blockedReason) {
-		return { response: state.blockedReason, outcome: "blocked" };
+		return { messages: [new AIMessage(state.blockedReason)], response: state.blockedReason, outcome: "blocked" };
 	}
+	const response = state.reconciliation?.conclusion ?? "No evidence conclusion is available.";
 	return {
-		response: state.reconciliation?.conclusion ?? "No evidence conclusion is available.",
+		messages: [new AIMessage(response)],
+		response,
 		outcome: "answered",
 	};
 }

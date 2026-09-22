@@ -1,4 +1,4 @@
-// agent/src/landing-zone/types.ts
+// packages/agent/src/landing-zone/types.ts
 
 import { z } from "zod";
 
