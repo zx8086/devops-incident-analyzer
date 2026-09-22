@@ -122,10 +122,20 @@ tool_mapping:
       - incident ticket
       - incident tickets
     runbook_lookup:
-      - runbook
-      - ops doc
-      - playbook
-      - remediation steps
+      - deployment runbook
+      - deploy runbook
+      - release runbook
+      - onboarding doc
+      - setup doc
+      - environment setup
+      - how to deploy
+      - how to release
+      - release procedure
+      - deployment procedure
+      - get access
+      - request access
+      - feature flag
+      - log level
     jira_query:
       - jira ticket
       - jira tickets
@@ -139,6 +149,6 @@ tool_mapping:
       - cql
   action_descriptions:
     incident_correlation: when looking for Jira tickets linked to the incident, its services, or its domain terms (search plus the linked-incident and history composers, with readers for every hit)
-    runbook_lookup: when looking for Confluence runbooks or ops docs for the failure (search plus the runbook composer, with page readers)
+    runbook_lookup: "when looking for PROCEDURAL Confluence docs about a service -- setup, access, release procedure, feature flags, log levels (search plus the runbook composer, with page readers). SIO-1844 measured this space: it holds no incident runbooks, so it does not answer how to fix a failure"
     jira_query: when running an explicit JQL query against Jira
     confluence_query: when running an explicit CQL query against Confluence

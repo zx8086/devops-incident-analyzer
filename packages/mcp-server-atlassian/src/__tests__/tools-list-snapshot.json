@@ -27,7 +27,7 @@
 		}
 	},
 	"getRunbookForAlert": {
-		"surfaceHash": "072da034722f7351042524102f5a581662d3e91d3ec4229a5afbdb0c813a1b20",
+		"surfaceHash": "77cf3e6c764ccc958bb3ba3cb620011194a2c067495d3a5903c112dcae1a5afe",
 		"annotations": {
 			"readOnlyHint": true,
 			"destructiveHint": false

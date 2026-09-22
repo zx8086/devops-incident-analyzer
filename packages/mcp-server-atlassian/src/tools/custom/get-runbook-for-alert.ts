@@ -294,7 +294,11 @@ export function registerGetRunbookForAlert(server: McpServer, proxy: AtlassianMc
 		"getRunbookForAlert",
 		{
 			description:
-				"Search Confluence for runbooks relevant to a service alert. Returns pages ranked by relevance score.",
+				"Search Confluence for PROCEDURAL and onboarding documentation related to a service: " +
+				"environment setup, access and credentials, release and deploy procedure, feature flags, " +
+				"log levels. Returns pages ranked by relevance score. SIO-1844: this space contains no " +
+				"incident runbooks -- for 'what do I do about this failure', the incident runbooks live in " +
+				"the agent's own knowledge tree and are selected by the orchestrator, not found here.",
 			inputSchema: {
 				service: z.string().describe("Service name to find runbooks for"),
 				errorKeywords: errorKeywordsField.describe("Error keywords to include in the search"),
