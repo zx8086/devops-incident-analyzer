@@ -85,30 +85,31 @@ export async function gatherLandingZoneEvidence(_state: LandingZoneStateType): P
 export async function reconcileLandingZoneEvidence(
 	state: LandingZoneStateType,
 ): Promise<Partial<LandingZoneStateType>> {
-	const degradedSources = state.evidenceResults
-		.filter((result) => result.status !== "observed")
-		.map((result) => result.source);
 	return {
 		reconciliation: {
+			status: state.evidenceResults.length > 0 ? "pending" : "unknown",
 			conclusion:
 				state.evidenceResults.length > 0
 					? "Evidence collected for reconciliation."
 					: "Live evidence not collected yet.",
-			classification: state.evidenceResults.length > 0 ? "Observed" : "Unverified",
+			comparisons: [],
 			conflicts: [],
-			degradedSources,
+			unavailableSources: [],
 		},
 	};
 }
 
 export async function assessLandingZoneRisk(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
-	const blocked = state.reconciliation?.classification === "Unverified" && state.intent === "propose-change";
+	const blocked = state.reconciliation?.status === "unknown" && state.intent === "propose-change";
 	return {
 		blockedReason: blocked ? "A proposed change requires current live evidence." : null,
 		risk: {
 			level: blocked ? "blocked" : state.intent === "propose-change" ? "high" : "low",
 			reasons: blocked ? ["Live repository and work-in-flight evidence is unavailable."] : [],
 			requiresHumanDecision: state.intent === "propose-change",
+			blocked,
+			stopConditions: blocked ? ["Required live repository evidence is unavailable."] : [],
+			requiredEvidenceSources: state.intent === "propose-change" ? ["gitlab"] : [],
 		},
 	};
 }

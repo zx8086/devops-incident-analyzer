@@ -47,6 +47,8 @@ describe("Landing Zone state contract", () => {
 			reconciliation: null,
 			risk: null,
 			response: null,
+			responseCitations: [],
+			topologyStates: [],
 			blockedReason: null,
 			outcome: "pending",
 			proposedChangeReview: null,
