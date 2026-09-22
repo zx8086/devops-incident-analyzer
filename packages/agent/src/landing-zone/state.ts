@@ -8,6 +8,7 @@ import type {
 	TopologyEvidenceState,
 } from "@devops-agent/shared";
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
+import type { EvidenceCollectionOutcome } from "./evidence.ts";
 import type { LandingZoneIntent, LandingZoneOutcome, ProposedChangeReview } from "./types.ts";
 
 const replace = <T>(fallback: T) => ({
@@ -22,6 +23,13 @@ export const LandingZoneState = Annotation.Root({
 	repositoryScope: Annotation<string[]>(replace<string[]>([])),
 	accountScope: Annotation<string[]>(replace<string[]>([])),
 	selectedKnowledge: Annotation<string[]>(replace<string[]>([])),
+	gitlabEvidence: Annotation<EvidenceCollectionOutcome | null>(replace<EvidenceCollectionOutcome | null>(null)),
+	okfEvidence: Annotation<EvidenceCollectionOutcome | null>(replace<EvidenceCollectionOutcome | null>(null)),
+	terraformDocsEvidence: Annotation<EvidenceCollectionOutcome | null>(replace<EvidenceCollectionOutcome | null>(null)),
+	awsDocsEvidence: Annotation<EvidenceCollectionOutcome | null>(replace<EvidenceCollectionOutcome | null>(null)),
+	awsApiEvidence: Annotation<EvidenceCollectionOutcome | null>(replace<EvidenceCollectionOutcome | null>(null)),
+	memoryEvidence: Annotation<EvidenceCollectionOutcome | null>(replace<EvidenceCollectionOutcome | null>(null)),
+	knowledgeGraphEvidence: Annotation<EvidenceCollectionOutcome | null>(replace<EvidenceCollectionOutcome | null>(null)),
 	evidenceResults: Annotation<EvidenceItem[]>(replace<EvidenceItem[]>([])),
 	reconciliation: Annotation<EvidenceReconciliation | null>(replace<EvidenceReconciliation | null>(null)),
 	risk: Annotation<LandingZoneRiskAssessment | null>(replace<LandingZoneRiskAssessment | null>(null)),

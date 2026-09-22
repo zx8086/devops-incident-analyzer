@@ -93,12 +93,12 @@ export interface AgentMemoryHealth {
 export interface AgentMemoryClient {
 	// create-if-missing; swallows 409 conflict so callers can call freely.
 	// SIO-952: metadata stamps which agent owns the user (e.g. { agent, role }).
-	ensureUser(userId: string, name: string, metadata?: AnnotationMap): Promise<void>;
+	ensureUser(userId: string, name: string, metadata?: AnnotationMap, signal?: AbortSignal): Promise<void>;
 	// SIO-952: annotations/metadata label the conversation (e.g. { agent, datasources }).
 	ensureSession(
 		userId: string,
 		sessionId: string,
-		opts?: { annotations?: AnnotationMap; metadata?: AnnotationMap },
+		opts?: { annotations?: AnnotationMap; metadata?: AnnotationMap; signal?: AbortSignal },
 	): Promise<void>;
 	// SIO-991: return the service's AddMemoryResponse (block_ids + counts) so callers can log
 	// the created Couchbase block ids. Empty result ({ blockIds: [], accepted: 0, rejected: 0 })
@@ -113,7 +113,13 @@ export interface AgentMemoryClient {
 	searchMemory(
 		ref: AgentMemoryUserRef,
 		query: string,
-		opts?: { allSessions?: boolean; relevantK?: number; minScore?: number; annotations?: AnnotationMap },
+		opts?: {
+			allSessions?: boolean;
+			relevantK?: number;
+			minScore?: number;
+			annotations?: AnnotationMap;
+			signal?: AbortSignal;
+		},
 	): Promise<MemoryHit[]>;
 	// SIO-952: stamp final annotations/metadata on the session (e.g. { outcome }).
 	updateSession(
@@ -198,13 +204,20 @@ function isBackendUnavailableBody(text: string): boolean {
 // handling (requeue + saturation cooldown), every other site treats it as transient.
 export class ServiceUnavailableError extends BackendUnavailableError {}
 
-async function amFetch<T>(config: AgentMemoryConfig, method: string, path: string, body?: unknown): Promise<T> {
+async function amFetch<T>(
+	config: AgentMemoryConfig,
+	method: string,
+	path: string,
+	body?: unknown,
+	signal?: AbortSignal,
+): Promise<T> {
 	const headers: Record<string, string> = { "Content-Type": "application/json" };
 	if (config.bearerToken) headers.Authorization = `Bearer ${config.bearerToken}`;
 	const res = await fetch(`${config.baseUrl}${path}`, {
 		method,
 		headers,
 		body: body === undefined ? undefined : JSON.stringify(body),
+		signal,
 	});
 	if (!res.ok) {
 		const text = await res.text().catch(() => "");
@@ -264,9 +277,9 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 	const memoryPath = (ref: AgentMemoryUserRef) => `/users/${enc(ref.userId)}/sessions/${enc(ref.sessionId)}/memory`;
 
 	return {
-		async ensureUser(userId, name, metadata) {
+		async ensureUser(userId, name, metadata, signal) {
 			try {
-				await amFetch(config, "POST", "/users", { user_id: userId, name, metadata: metadata ?? null });
+				await amFetch(config, "POST", "/users", { user_id: userId, name, metadata: metadata ?? null }, signal);
 			} catch (error) {
 				if (!(error instanceof ConflictError)) throw error;
 			}
@@ -274,11 +287,17 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 
 		async ensureSession(userId, sessionId, opts) {
 			try {
-				await amFetch(config, "POST", `/users/${enc(userId)}/sessions`, {
-					session_id: sessionId,
-					annotations: opts?.annotations ?? null,
-					metadata: opts?.metadata ?? null,
-				});
+				await amFetch(
+					config,
+					"POST",
+					`/users/${enc(userId)}/sessions`,
+					{
+						session_id: sessionId,
+						annotations: opts?.annotations ?? null,
+						metadata: opts?.metadata ?? null,
+					},
+					opts?.signal,
+				);
 			} catch (error) {
 				if (!(error instanceof ConflictError)) throw error;
 			}
@@ -324,17 +343,23 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 			// cap); a large pasted incident used as the recall seed 400s ("maximum input length is
 			// 8192 tokens"), surfaced as a 502 MODEL_SERVICE_ERROR. Head-truncate before sending.
 			const boundedQuery = truncateForEmbedding(query);
-			const res = await amFetch<MemoryResponseShape>(config, "POST", `${memoryPath(ref)}/search`, {
-				...(deterministic ? {} : { query: boundedQuery }),
-				filters: {
-					session_ids: opts?.allSessions ? "all" : undefined,
-					// SIO-1359: deterministic recalls are exhaustive by contract, so send a high
-					// ceiling instead of inheriting the server's default of 10.
-					relevant_k: opts?.relevantK ?? (deterministic ? DETERMINISTIC_RELEVANT_K : null),
-					// SIO-959: structured annotation filter (e.g. { kind: "fleet-upgrade-dispatched" }).
-					annotations: opts?.annotations ?? undefined,
+			const res = await amFetch<MemoryResponseShape>(
+				config,
+				"POST",
+				`${memoryPath(ref)}/search`,
+				{
+					...(deterministic ? {} : { query: boundedQuery }),
+					filters: {
+						session_ids: opts?.allSessions ? "all" : undefined,
+						// SIO-1359: deterministic recalls are exhaustive by contract, so send a high
+						// ceiling instead of inheriting the server's default of 10.
+						relevant_k: opts?.relevantK ?? (deterministic ? DETERMINISTIC_RELEVANT_K : null),
+						// SIO-959: structured annotation filter (e.g. { kind: "fleet-upgrade-dispatched" }).
+						annotations: opts?.annotations ?? undefined,
+					},
 				},
-			});
+				opts?.signal,
+			);
 			const minScore = opts?.minScore;
 			return (res?.memory_blocks ?? [])
 				.filter((b) => b.status === undefined || b.status === "ready")

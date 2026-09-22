@@ -1,8 +1,9 @@
 // packages/agent/src/landing-zone/graph.test.ts
 
 import { describe, expect, test } from "bun:test";
-import type { EvidenceItem } from "@devops-agent/shared";
+import type { EvidenceItem, EvidenceSource } from "@devops-agent/shared";
 import { HumanMessage } from "@langchain/core/messages";
+import type { LandingZoneEvidenceCollectors } from "./evidence.ts";
 import { buildLandingZoneGraph } from "./graph.ts";
 import { assessLandingZoneRisk } from "./nodes.ts";
 import type { LandingZoneStateType } from "./state.ts";
@@ -13,7 +14,14 @@ const EXPECTED_NODES = [
 	"classifyRequest",
 	"resolveScope",
 	"selectPvhKnowledge",
-	"gatherEvidence",
+	"collectGitLabEvidence",
+	"collectOkfEvidence",
+	"collectTerraformDocsEvidence",
+	"collectAwsDocsEvidence",
+	"collectAwsApiEvidence",
+	"collectMemoryEvidence",
+	"collectKnowledgeGraphEvidence",
+	"joinEvidence",
 	"reconcileEvidence",
 	"assessRisk",
 	"answerQuestion",
@@ -25,8 +33,7 @@ const EXPECTED_EDGES = [
 	["bootstrap", "classifyRequest"],
 	["classifyRequest", "resolveScope"],
 	["resolveScope", "selectPvhKnowledge"],
-	["selectPvhKnowledge", "gatherEvidence"],
-	["gatherEvidence", "reconcileEvidence"],
+	["joinEvidence", "reconcileEvidence"],
 	["reconcileEvidence", "assessRisk"],
 	["assessRisk", "answerQuestion"],
 	["answerQuestion", "teardown"],
@@ -40,6 +47,13 @@ const BASE_STATE_INPUT = {
 	repositoryScope: ["aws-lz-account-creator"],
 	accountScope: [],
 	selectedKnowledge: ["repos/aws-lz-account-creator.md"],
+	gitlabEvidence: null,
+	okfEvidence: null,
+	terraformDocsEvidence: null,
+	awsDocsEvidence: null,
+	awsApiEvidence: null,
+	memoryEvidence: null,
+	knowledgeGraphEvidence: null,
 	evidenceResults: [],
 	reconciliation: null,
 	risk: null,
@@ -70,6 +84,13 @@ function proposedChangeState(evidenceResults: EvidenceItem[]): LandingZoneStateT
 		repositoryScope: ["aws-lz-account-creator"],
 		accountScope: [],
 		selectedKnowledge: [],
+		gitlabEvidence: null,
+		okfEvidence: null,
+		terraformDocsEvidence: null,
+		awsDocsEvidence: null,
+		awsApiEvidence: null,
+		memoryEvidence: null,
+		knowledgeGraphEvidence: null,
 		evidenceResults,
 		reconciliation: {
 			status: "pending",
@@ -86,6 +107,27 @@ function proposedChangeState(evidenceResults: EvidenceItem[]): LandingZoneStateT
 		outcome: "pending",
 		proposedChangeReview: null,
 	};
+}
+
+function successfulCollectors(calls: EvidenceSource[]): LandingZoneEvidenceCollectors {
+	const sources: EvidenceSource[] = [
+		"pvh-okf",
+		"gitlab",
+		"terraform-docs",
+		"aws-docs",
+		"aws-api",
+		"memory",
+		"knowledge-graph",
+	];
+	return Object.fromEntries(
+		sources.map((source) => [
+			source,
+			async () => {
+				calls.push(source);
+				return [{ ...observedEvidence, id: `${source}:graph`, source }];
+			},
+		]),
+	) as unknown as LandingZoneEvidenceCollectors;
 }
 
 describe("Landing Zone state contract", () => {
@@ -166,6 +208,10 @@ describe("buildLandingZoneGraph", () => {
 		for (const edge of EXPECTED_EDGES) {
 			expect(edges).toContainEqual(edge);
 		}
+		for (const collector of EXPECTED_NODES.filter((node) => node.startsWith("collect"))) {
+			expect(edges).toContainEqual(["selectPvhKnowledge", collector]);
+			expect(edges).toContainEqual([collector, "joinEvidence"]);
+		}
 	});
 
 	test("keeps informational account-creation questions out of the change path", async () => {
@@ -179,6 +225,22 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.outcome).toBe("answered");
 	});
 
+	test("fans injected collectors into the join and leaves unauthorised AWS live state uncalled", async () => {
+		const calls: EvidenceSource[] = [];
+		const graph = await buildLandingZoneGraph({
+			checkpointerType: "memory",
+			collectors: successfulCollectors(calls),
+		});
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage("Review account vending")], requestId: "request-fanout" },
+			{ configurable: { thread_id: "thread-fanout" } },
+		);
+
+		expect(calls).toContainAllValues(["pvh-okf", "gitlab", "terraform-docs", "aws-docs", "memory", "knowledge-graph"]);
+		expect(calls).not.toContain("aws-api");
+		expect(result.evidenceResults.map((item) => item.source)).toContain("gitlab");
+	});
+
 	test("persists the user-facing answer as the final assistant message", async () => {
 		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
 		const result = await graph.invoke(
@@ -187,8 +249,8 @@ describe("buildLandingZoneGraph", () => {
 		);
 
 		expect(result.messages.at(-1)?.getType()).toBe("ai");
-		expect(result.response).toBe("Live evidence not collected yet.");
-		expect(result.messages.at(-1)?.content).toBe("Live evidence not collected yet.");
+		expect(result.response).toBe("Evidence collected for reconciliation.");
+		expect(result.messages.at(-1)?.content).toBe("Evidence collected for reconciliation.");
 	});
 
 	test("still blocks an imperative account-creation request without live evidence", async () => {

@@ -17,6 +17,7 @@ interface FetchCall {
 	url: string;
 	method: string;
 	body: unknown;
+	signal?: AbortSignal | null;
 }
 
 // Installs a fetch stub that records calls and replies per a status/body map
@@ -32,7 +33,7 @@ function stubFetch(replies: Record<string, { status: number; body?: unknown }>):
 		const method = init?.method ?? "GET";
 		const path = url.replace("http://mem.test", "");
 		const body = init?.body ? JSON.parse(init.body as string) : undefined;
-		calls.push({ url, method, body });
+		calls.push({ url, method, body, signal: init?.signal });
 		const reply = replies[`${method} ${path}`] ?? { status: 200, body: {} };
 		return new Response(reply.body === undefined ? null : JSON.stringify(reply.body), { status: reply.status });
 	}) as typeof fetch;
@@ -185,6 +186,20 @@ describe("createFetchAgentMemoryClient", () => {
 			{ text: "mid", score: 0.5 },
 		]);
 		expect(calls[0]?.body).toMatchObject({ query: "kafka lag", filters: { session_ids: "all", relevant_k: 5 } });
+		restore();
+	});
+
+	test("searchMemory passes its cancellation signal to fetch", async () => {
+		const { calls, restore } = stubFetch({
+			"POST /users/incident-analyzer/sessions/t-1/memory/search": {
+				status: 200,
+				body: { count: 0, memory_blocks: [] },
+			},
+		});
+		const controller = new AbortController();
+		const client = createFetchAgentMemoryClient(CONFIG);
+		await client.searchMemory(REF, "account", { signal: controller.signal });
+		expect(calls[0]?.signal).toBe(controller.signal);
 		restore();
 	});
 
