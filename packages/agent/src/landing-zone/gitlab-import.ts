@@ -18,7 +18,7 @@ import {
 } from "@devops-agent/knowledge-graph";
 import { z } from "zod";
 import { getToolsForDataSource } from "../mcp-bridge.ts";
-import { recordAgentFactNow, searchAgentMemory } from "../memory-backend.ts";
+import { recordAgentFactNow, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
 
 export type LandingZoneImportOutcome = "proposed" | "declined" | "pipeline-failed" | "merged-unverified" | "applied";
 
@@ -255,7 +255,7 @@ function defaultDependencies(): LandingZoneImportDependencies {
 				deterministic: true,
 			});
 			if (existing.length > 0) return;
-			await recordAgentFactNow(
+			const recorded = await recordAgentFactNow(
 				"landing-zone-terraform",
 				`Landing Zone GitLab import recovery anchor for ${repository}`,
 				{
@@ -264,6 +264,9 @@ function defaultDependencies(): LandingZoneImportDependencies {
 					backfill_start_at: checkpoint.backfillStartAt,
 				},
 			);
+			if (!recorded && selectedBackend() === "agent-memory") {
+				throw new Error(`Landing Zone GitLab recovery anchor was not persisted for ${repository}`);
+			}
 		},
 		listMergeRequests: async (input) =>
 			HistoricalMergeRequestPageSchema.parse(
@@ -512,8 +515,8 @@ export async function importLandingZoneGitLabHistory(
 	};
 
 	const persistCheckpoint = async (checkpoint: LandingZoneImportCheckpoint): Promise<void> => {
-		await resolvedDependencies.recordCheckpoint?.(resolvedDependencies.store, checkpoint);
 		await resolvedDependencies.recordRecoveryStart?.(options.repository, checkpoint);
+		await resolvedDependencies.recordCheckpoint?.(resolvedDependencies.store, checkpoint);
 	};
 
 	const processMergeRequest = async (

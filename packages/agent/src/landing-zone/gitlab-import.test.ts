@@ -412,6 +412,28 @@ describe("importLandingZoneGitLabHistory", () => {
 		]);
 	});
 
+	test("does not advance the graph checkpoint when the durable recovery anchor fails", async () => {
+		const fixture = dependencies([mr({ updatedAt: "2026-09-04T00:00:00.000Z" })]);
+		const checkpoints: unknown[] = [];
+		const persisted: LandingZoneImportDependencies = {
+			...fixture.dependencies,
+			recordCheckpoint: async (_store, checkpoint) => {
+				checkpoints.push(checkpoint);
+			},
+			recordRecoveryStart: async () => {
+				throw new Error("Landing Zone GitLab recovery anchor was not persisted");
+			},
+		};
+
+		await expect(
+			importLandingZoneGitLabHistory(
+				{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
+				persisted,
+			),
+		).rejects.toThrow("recovery anchor was not persisted");
+		expect(checkpoints).toEqual([]);
+	});
+
 	test("persists a reset checkpoint when GitLab's fixed-window total changes", async () => {
 		const fixture = dependencies();
 		const checkpoints: unknown[] = [];
