@@ -166,6 +166,27 @@ export async function listMergeRequestPipelines(client: GitLabReadClient, input:
 	};
 }
 
+export async function listProjectDeployments(
+	client: GitLabReadClient,
+	input: { repository: string; commitSha: string },
+) {
+	const repository = resolveRepository(input.repository);
+	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
+	if (!client.projectDeployments) throw new Error("GitLab deployments evidence is unavailable");
+	const { provenance } = await repositoryProvenance(client, repository);
+	const deployments = [];
+	let page = 1;
+	let truncated = false;
+	for (let read = 0; read < 3; read++) {
+		const result = await client.projectDeployments(repository.projectPath, page, 20);
+		deployments.push(...result.deployments.filter((deployment) => deployment.sha === input.commitSha));
+		if (!result.nextPage) break;
+		page = result.nextPage;
+		if (read === 2) truncated = true;
+	}
+	return { repository, deployments, provenance: { ...provenance, truncated } };
+}
+
 export async function readPipelinePlan(client: GitLabReadClient, input: { repository: string; pipelineId: number }) {
 	const repository = resolveRepository(input.repository);
 	const { provenance } = await repositoryProvenance(client, repository);

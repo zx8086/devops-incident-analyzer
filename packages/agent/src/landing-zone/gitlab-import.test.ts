@@ -23,6 +23,7 @@ function mr(
 		createdAt: string;
 		updatedAt: string;
 		mergeCommitSha: string;
+		commitSha: string;
 		verifiedLiveState: boolean;
 	}> = {},
 ) {
@@ -212,7 +213,12 @@ describe("importLandingZoneGitLabHistory", () => {
 
 		expect(result.outcomes).toEqual(["merged-unverified"]);
 		expect(recorded.find((entry) => entry.type === "change")).toMatchObject({
-			value: { id: "gitlab:42:7:commit-7", outcome: "merged-unverified", repositoryId: "gitlab-project:42" },
+			value: {
+				id: "gitlab:42:7",
+				commitSha: "commit-7",
+				outcome: "merged-unverified",
+				repositoryId: "gitlab-project:42",
+			},
 		});
 		expect(recorded.find((entry) => entry.type === "plan")).toMatchObject({
 			value: { pipelineId: "99", plan: { id: "gitlab:plan:99", status: "success" } },
@@ -223,7 +229,7 @@ describe("importLandingZoneGitLabHistory", () => {
 		["open MR", mr({ state: "opened" }), [pipeline()], "proposed"],
 		["closed unmerged MR", mr({ state: "closed" }), [pipeline()], "declined"],
 		["failed pipeline", mr(), [pipeline({ status: "failed" })], "pipeline-failed"],
-		["verified deployment", mr(), [pipeline({ isVerifiedDeployment: true })], "applied"],
+		["MR-scoped pipeline", mr(), [pipeline({ isVerifiedDeployment: true })], "merged-unverified"],
 		["missing artifacts", mr(), [pipeline()], "merged-unverified"],
 	] as const)("maps %s to the safe outcome", async (_fixture, mergeRequest, pipelines, expected) => {
 		const fixture = dependencies([mergeRequest], pipelines);
@@ -250,6 +256,20 @@ describe("importLandingZoneGitLabHistory", () => {
 		const result = await importLandingZoneGitLabHistory(
 			{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
 			fixture.dependencies,
+		);
+		expect(result.outcomes).toEqual(["applied"]);
+	});
+
+	test("requires a successful deployment for the exact merge SHA before marking an MR applied", async () => {
+		const fixture = dependencies([mr()], [pipeline({ isVerifiedDeployment: true })]);
+		const result = await importLandingZoneGitLabHistory(
+			{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
+			{
+				...fixture.dependencies,
+				listDeployments: async () => ({ deployments: [{ sha: "commit-7", status: "success" }] }),
+			} as LandingZoneImportDependencies & {
+				listDeployments: () => Promise<{ deployments: Array<{ sha: string; status: string }> }>;
+			},
 		);
 		expect(result.outcomes).toEqual(["applied"]);
 	});
@@ -477,6 +497,26 @@ describe("importLandingZoneGitLabHistory", () => {
 		expect(result).toMatchObject({ outcomes: ["merged-unverified"] });
 	});
 
+	test("continues scheduled reconciliation after one repository fails", async () => {
+		const fixture = dependencies([mr()]);
+		const scheduled: LandingZoneImportDependencies = {
+			...fixture.dependencies,
+			listRepositories: async () => [
+				{ name: "aws-lz-ami", availability: "active" },
+				{ name: "aws-lz-account-creator", availability: "active" },
+			],
+			readCheckpoint: async () => ({ projectId: "42", updatedAfter: "2026-09-01T00:00:00.000Z" }),
+			listMergeRequests: async ({ repository }) => {
+				if (repository === "aws-lz-ami") throw new Error("GitLab unavailable");
+				return { project: PROJECT, mergeRequests: [mr()], total: 1 };
+			},
+		};
+
+		const result = await runLandingZoneGitLabImportSweep(undefined, scheduled);
+		expect(result.outcomes).toEqual(["merged-unverified"]);
+		expect(result.projectErrors).toEqual([{ repository: "aws-lz-ami", message: "GitLab unavailable" }]);
+	});
+
 	test("keeps replay writes idempotent through stable GitLab entity keys", async () => {
 		const fixture = dependencies([mr()], [pipeline({ hasTerraformPlan: true })]);
 		const options = { repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 };
@@ -484,9 +524,24 @@ describe("importLandingZoneGitLabHistory", () => {
 		await importLandingZoneGitLabHistory(options, fixture.dependencies);
 
 		const changes = fixture.recorded.filter((entry) => entry.type === "change");
-		expect(changes.map((entry) => (entry.value as { id: string }).id)).toEqual([
-			"gitlab:42:7:commit-7",
-			"gitlab:42:7:commit-7",
-		]);
+		expect(changes.map((entry) => (entry.value as { id: string }).id)).toEqual(["gitlab:42:7", "gitlab:42:7"]);
+	});
+
+	test("uses one logical change identity when an MR advances from open to merged", async () => {
+		const fixture = dependencies([mr({ state: "opened", mergeCommitSha: undefined, commitSha: "head-7" })], []);
+		await importLandingZoneGitLabHistory(
+			{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
+			fixture.dependencies,
+		);
+		const merged = dependencies([mr({ mergeCommitSha: "merge-7" })], []);
+		merged.dependencies.writers = fixture.dependencies.writers;
+		await importLandingZoneGitLabHistory(
+			{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
+			merged.dependencies,
+		);
+
+		const changes = fixture.recorded.filter((entry) => entry.type === "change");
+		expect(changes.map((entry) => (entry.value as { id: string }).id)).toEqual(["gitlab:42:7", "gitlab:42:7"]);
+		expect(changes.map((entry) => (entry.value as { commitSha?: string }).commitSha)).toEqual(["head-7", "merge-7"]);
 	});
 });

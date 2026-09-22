@@ -239,6 +239,12 @@ export interface GitLabHistoricalPipeline {
 	isVerifiedDeployment: boolean;
 }
 
+export interface GitLabDeployment {
+	sha: string;
+	status: string;
+	pipelineId?: number;
+}
+
 export interface GitLabReadClient {
 	project(projectPath: string): Promise<GitLabProject>;
 	tree(projectPath: string, ref?: string, recursive?: boolean, path?: string): Promise<GitLabTreeResult>;
@@ -255,6 +261,14 @@ export interface GitLabReadClient {
 		perPage: number,
 	): Promise<{ mergeRequests: GitLabHistoricalMergeRequest[]; total: number; nextPage?: number }>;
 	mergeRequestPipelines(projectPath: string, iid: number): Promise<GitLabHistoricalPipeline[]>;
+	projectDeployments?(
+		projectPath: string,
+		page: number,
+		perPage: number,
+	): Promise<{
+		deployments: GitLabDeployment[];
+		nextPage?: number;
+	}>;
 }
 
 export interface Provenance {
@@ -315,6 +329,13 @@ const GitLabHistoricalPipelinesResponseSchema = z.array(
 		web_url: z.string(),
 		created_at: z.string(),
 		updated_at: z.string(),
+	}),
+);
+const GitLabDeploymentsResponseSchema = z.array(
+	z.object({
+		sha: z.string(),
+		status: z.string(),
+		deployable: z.object({ pipeline: z.object({ id: z.number().int() }).optional() }).optional(),
 	}),
 );
 
@@ -490,6 +511,21 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 					};
 				}),
 			);
+		},
+		async projectDeployments(projectPath, page, perPage) {
+			const response = await responseFor(
+				`${projectApiPath(projectPath)}/deployments?${new URLSearchParams({ status: "success", page: String(page), per_page: String(perPage) }).toString()}`,
+			);
+			const deployments = GitLabDeploymentsResponseSchema.parse(await response.json()).map((deployment) => ({
+				sha: deployment.sha,
+				status: deployment.status,
+				...(deployment.deployable?.pipeline?.id && { pipelineId: deployment.deployable.pipeline.id }),
+			}));
+			const nextPage = response.headers.get("x-next-page");
+			return {
+				deployments,
+				...(nextPage && /^\d+$/.test(nextPage) && Number(nextPage) > 0 && { nextPage: Number(nextPage) }),
+			};
 		},
 	};
 }

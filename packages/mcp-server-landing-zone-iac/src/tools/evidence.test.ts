@@ -3,6 +3,7 @@ import {
 	findRepresentativeExamples,
 	listHistoricalMergeRequests,
 	listMergeRequestPipelines,
+	listProjectDeployments,
 	readPipelinePlan,
 } from "./evidence.ts";
 import type { GitLabReadClient } from "./repositories.ts";
@@ -60,6 +61,20 @@ function fakeClient(): GitLabReadClient {
 }
 
 describe("representative evidence", () => {
+	test("filters bounded successful deployment evidence to the exact commit SHA", async () => {
+		const client = fakeClient();
+		client.projectDeployments = async () => ({
+			deployments: [
+				{ sha: "other-sha", status: "success" },
+				{ sha: "merge-sha", status: "success", pipelineId: 99 },
+			],
+		});
+		const result = await listProjectDeployments(client, {
+			repository: "aws-lz-account-creator",
+			commitSha: "merge-sha",
+		});
+		expect(result.deployments).toEqual([{ sha: "merge-sha", status: "success", pipelineId: 99 }]);
+	});
 	test("returns schema, generator, test, five active examples, and relevant open work", async () => {
 		const evidence = await findRepresentativeExamples(fakeClient(), {
 			repository: "aws-lz-account-creator",

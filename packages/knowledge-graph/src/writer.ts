@@ -218,6 +218,7 @@ export async function recordModuleUsage(store: GraphStore, input: ModuleUsageRec
 export interface LandingZoneChangeRecord {
 	id: string;
 	repositoryId: string;
+	commitSha?: string;
 	rootId?: string;
 	workflow?: string;
 	threadId?: string;
@@ -239,11 +240,12 @@ export interface LandingZoneChangeRecord {
 export async function recordLandingZoneChange(store: GraphStore, change: LandingZoneChangeRecord): Promise<void> {
 	if (!change.id || !change.repositoryId) return;
 	await store.run(
-		"MERGE (c:ConfigChange {id: $id}) SET c.workflow = coalesce($workflow, c.workflow), c.summary = coalesce($summary, c.summary), c.createdAt = coalesce(c.createdAt, $createdAt), c.lastSyncedAt = coalesce($lastSyncedAt, c.lastSyncedAt), c.source = coalesce($source, c.source), c.evidenceTruncated = coalesce($evidenceTruncated, c.evidenceTruncated), c.outcome = CASE WHEN $outcome IS NULL THEN coalesce(c.outcome, 'proposed') WHEN c.outcome = 'applied' THEN c.outcome WHEN $outcome = 'proposed' AND c.outcome IS NOT NULL THEN c.outcome ELSE $outcome END",
+		"MERGE (c:ConfigChange {id: $id}) SET c.workflow = coalesce($workflow, c.workflow), c.summary = coalesce($summary, c.summary), c.commitSha = coalesce($commitSha, c.commitSha), c.createdAt = coalesce(c.createdAt, $createdAt), c.lastSyncedAt = coalesce($lastSyncedAt, c.lastSyncedAt), c.source = coalesce($source, c.source), c.evidenceTruncated = coalesce($evidenceTruncated, c.evidenceTruncated), c.outcome = CASE WHEN $outcome IS NULL THEN coalesce(c.outcome, 'proposed') WHEN c.outcome = 'applied' THEN c.outcome WHEN $outcome = 'proposed' AND c.outcome IS NOT NULL THEN c.outcome ELSE $outcome END",
 		{
 			id: change.id,
 			workflow: change.workflow ?? null,
 			summary: change.summary ?? null,
+			commitSha: change.commitSha ?? null,
 			createdAt: change.createdAt ?? new Date().toISOString(),
 			lastSyncedAt: change.lastSyncedAt ?? null,
 			source: change.source ?? null,

@@ -9,6 +9,7 @@ import {
 	listHistoricalMergeRequests,
 	listMergeRequestPipelines,
 	listOpenChanges,
+	listProjectDeployments,
 	readPipelinePlan,
 } from "./tools/evidence.ts";
 import {
@@ -116,6 +117,19 @@ function registerAll(server: McpServer, client: GitLabReadClient): void {
 			annotations: READ_ONLY_ANNOTATIONS,
 		},
 		async (args) => listMergeRequestPipelines(client, args).then(textResult).catch(errorResult),
+	);
+
+	server.registerTool(
+		"lz_list_project_deployments",
+		{
+			description: "List bounded successful deployment metadata for one exact SHA without environment payloads.",
+			inputSchema: {
+				repository: RepositoryParam,
+				commitSha: z.string().min(1).max(128).describe("Exact merge commit SHA to correlate"),
+			},
+			annotations: READ_ONLY_ANNOTATIONS,
+		},
+		async (args) => listProjectDeployments(client, args).then(textResult).catch(errorResult),
 	);
 
 	server.registerTool(

@@ -49,6 +49,11 @@ export interface HistoricalPipeline {
 	isVerifiedDeployment: boolean;
 }
 
+export interface HistoricalDeployment {
+	sha: string;
+	status: string;
+}
+
 export interface HistoricalProvenance {
 	source: "gitlab";
 	retrievedAt: string;
@@ -88,6 +93,10 @@ export interface LandingZoneImportDependencies {
 		repository: string;
 		iid: number;
 	}) => Promise<{ pipelines: HistoricalPipeline[]; provenance?: HistoricalProvenance }>;
+	listDeployments?: (input: {
+		repository: string;
+		commitSha: string;
+	}) => Promise<{ deployments: HistoricalDeployment[]; provenance?: HistoricalProvenance }>;
 	store: GraphStore;
 	writers: {
 		recordRepository: (store: GraphStore, record: LandingZoneRepositoryRecord) => Promise<void>;
@@ -104,6 +113,7 @@ export interface LandingZoneImportResult {
 
 export interface LandingZoneGitLabImportSweepResult extends LandingZoneImportResult {
 	requiresCheckpoint?: true;
+	projectErrors?: Array<{ repository: string; message: string }>;
 }
 
 const HistoricalProjectSchema = z
@@ -202,6 +212,15 @@ function defaultDependencies(): LandingZoneImportDependencies {
 			HistoricalPipelinePageSchema.parse(
 				await invokeReadTool("lz_list_merge_request_pipelines", { repository: input.repository, iid: input.iid }),
 			),
+		listDeployments: async (input) =>
+			z
+				.object({
+					deployments: z.array(z.object({ sha: z.string().min(1), status: z.string().min(1) })),
+					provenance: z
+						.object({ source: z.literal("gitlab"), retrievedAt: z.string().datetime(), truncated: z.boolean() })
+						.optional(),
+				})
+				.parse(await invokeReadTool("lz_list_project_deployments", input)),
 		store: undefined as unknown as GraphStore,
 		writers: {
 			recordRepository: recordLandingZoneRepository,
@@ -216,12 +235,17 @@ export function landingZoneGitLabImportEnabled(): boolean {
 	return isKnowledgeGraphEnabled();
 }
 
-function outcomeFor(mr: HistoricalMergeRequest, pipelines: HistoricalPipeline[]): LandingZoneImportOutcome {
+function outcomeFor(
+	mr: HistoricalMergeRequest,
+	pipelines: HistoricalPipeline[],
+	deployments: HistoricalDeployment[],
+	commitSha: string,
+): LandingZoneImportOutcome {
 	if (mr.state === "opened") return "proposed";
 	if (mr.state === "closed") return "declined";
 	if (
 		mr.verifiedLiveState ||
-		pipelines.some((pipeline) => pipeline.isVerifiedDeployment && pipeline.status === "success")
+		deployments.some((deployment) => deployment.sha === commitSha && deployment.status === "success")
 	)
 		return "applied";
 	if (pipelines.some((pipeline) => pipeline.status === "failed")) return "pipeline-failed";
@@ -302,16 +326,20 @@ export async function importLandingZoneGitLabHistory(
 			seenMrIds.add(stableMrId);
 			if (seenMrIds.size > 10_000)
 				throw new Error(`GitLab import stable MR ID safety limit exceeded for ${options.repository}`);
-			const pipelinePage = await resolvedDependencies.listPipelines({ repository: options.repository, iid: mr.iid });
-			const pipelines = pipelinePage.pipelines;
-			const outcome = outcomeFor(mr, pipelines);
-			outcomes.push(outcome);
 			const mrId = `${projectId}:${mr.iid}`;
 			const commitSha = mr.mergeCommitSha ?? mr.commitSha;
 			if (!commitSha) throw new Error(`GitLab merge request ${mrId} did not provide a commit SHA`);
+			const pipelinePage = await resolvedDependencies.listPipelines({ repository: options.repository, iid: mr.iid });
+			const pipelines = pipelinePage.pipelines;
+			const deployments =
+				(await resolvedDependencies.listDeployments?.({ repository: options.repository, commitSha }))?.deployments ??
+				[];
+			const outcome = outcomeFor(mr, pipelines, deployments, commitSha);
+			outcomes.push(outcome);
 			await resolvedDependencies.writers.recordChange(resolvedDependencies.store, {
-				id: `gitlab:${mrId}:${commitSha}`,
+				id: `gitlab:${mrId}`,
 				repositoryId,
+				commitSha,
 				summary: mr.title,
 				createdAt: mr.createdAt,
 				lastSyncedAt: page.provenance?.retrievedAt,
@@ -384,6 +412,7 @@ export async function runLandingZoneGitLabImportSweep(
 	if (!providedDependencies) dependencies.store = await getGraphStore();
 	const repositories = (await dependencies.listRepositories?.()) ?? [];
 	const outcomes: LandingZoneImportOutcome[] = [];
+	const projectErrors: Array<{ repository: string; message: string }> = [];
 	let requiresCheckpoint = false;
 	for (const repository of repositories) {
 		if (repository.availability !== "active") continue;
@@ -392,8 +421,19 @@ export async function runLandingZoneGitLabImportSweep(
 			requiresCheckpoint = true;
 			continue;
 		}
-		const result = await importLandingZoneGitLabHistory({ repository: repository.name, checkpoint }, dependencies);
-		outcomes.push(...result.outcomes);
+		try {
+			const result = await importLandingZoneGitLabHistory({ repository: repository.name, checkpoint }, dependencies);
+			outcomes.push(...result.outcomes);
+		} catch (error) {
+			projectErrors.push({
+				repository: repository.name,
+				message: error instanceof Error ? error.message : "Landing Zone GitLab import failed",
+			});
+		}
 	}
-	return { outcomes, ...(requiresCheckpoint && { requiresCheckpoint: true }) };
+	return {
+		outcomes,
+		...(requiresCheckpoint && { requiresCheckpoint: true }),
+		...(projectErrors.length > 0 && { projectErrors }),
+	};
 }
