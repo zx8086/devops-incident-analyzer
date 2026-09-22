@@ -344,6 +344,57 @@ describe("importLandingZoneGitLabHistory", () => {
 		expect(checkpoints[0]).toMatchObject({ inProgress: { expectedTotal: 3, nextPage: 1, seenMrIds: [] } });
 	});
 
+	test("rejects a later historical page from another GitLab project before writing its window", async () => {
+		const writes: string[] = [];
+		const checkpoints: unknown[] = [];
+		const firstPage = { project: PROJECT, mergeRequests: [mr()], total: 2, nextPage: 2 };
+		const secondPage = {
+			project: { ...PROJECT, id: 99, path: "pvhcorp/dhco/aws/aws-landing-zone/other-project" },
+			mergeRequests: [mr({ iid: 8, mergeCommitSha: "commit-8" })],
+			total: 2,
+		};
+		const dependencies: LandingZoneImportDependencies = {
+			listMergeRequests: async ({ page }) => {
+				if (page === 1) return firstPage;
+				if (page === 2) return secondPage;
+				throw new Error(`Unexpected historical page ${page}`);
+			},
+			listPipelines: async () => ({ pipelines: [] }),
+			recordCheckpoint: async (_store, checkpoint) => {
+				checkpoints.push(checkpoint);
+			},
+			writers: {
+				recordRepository: async () => {
+					writes.push("repository");
+				},
+				recordChange: async () => {
+					writes.push("change");
+				},
+				recordPipeline: async () => {
+					writes.push("pipeline");
+				},
+				recordPlan: async () => {
+					writes.push("plan");
+				},
+			},
+			store: {} as never,
+		};
+
+		let failure: unknown;
+		try {
+			await importLandingZoneGitLabHistory(
+				{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 2 },
+				dependencies,
+			);
+		} catch (error) {
+			failure = error;
+		}
+
+		expect(failure).toMatchObject({ message: "Historical MR page project 99 does not match GitLab project 42" });
+		expect(writes).toEqual([]);
+		expect(checkpoints).toEqual([]);
+	});
+
 	test("carries bounded GitLab provenance into every imported graph record", async () => {
 		const recorded: Array<Record<string, unknown>> = [];
 		await importLandingZoneGitLabHistory(

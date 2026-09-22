@@ -240,6 +240,7 @@ export async function importLandingZoneGitLabHistory(
 	if (!Number.isInteger(maxPages) || maxPages < 1) throw new Error("maxPages must be a positive integer");
 	const outcomes: LandingZoneImportOutcome[] = [];
 	let projectId = options.checkpoint?.projectId;
+	let expectedProjectId = options.checkpoint?.projectId;
 	const upperBound = options.checkpoint?.inProgress?.upperBound ?? new Date().toISOString();
 	let expectedTotal = options.checkpoint?.inProgress?.expectedTotal;
 	let nextPage = options.checkpoint?.inProgress?.nextPage ?? 1;
@@ -251,15 +252,14 @@ export async function importLandingZoneGitLabHistory(
 			updatedBefore: upperBound,
 			page: nextPage,
 		});
+		const pageProjectId = String(page.project.id);
+		if (expectedProjectId && pageProjectId !== expectedProjectId) {
+			throw new Error(`Historical MR page project ${pageProjectId} does not match GitLab project ${expectedProjectId}`);
+		}
+		expectedProjectId ??= pageProjectId;
 		if (expectedTotal !== undefined && page.total !== expectedTotal) {
-			const pageProjectId = String(page.project.id);
-			if (options.checkpoint?.projectId !== pageProjectId) {
-				throw new Error(
-					`Checkpoint project ${options.checkpoint?.projectId} does not match GitLab project ${pageProjectId}`,
-				);
-			}
 			const checkpoint = {
-				projectId: pageProjectId,
+				projectId: expectedProjectId,
 				updatedAfter,
 				inProgress: { upperBound, expectedTotal: page.total, nextPage: 1, seenMrIds: [] },
 			};
