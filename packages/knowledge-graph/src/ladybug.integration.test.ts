@@ -368,6 +368,112 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		await store.close();
 	});
 
+	test("Landing Zone applied replay preserves newer evidence and deterministically accepts an equal observation", async () => {
+		const store = new LadybugStore(join(dir, "lz-applied-replay-order"));
+		await store.init();
+		await recordLandingZoneRepository(store, {
+			group: { id: "gitlab-group:pvhcorp", path: "pvhcorp" },
+			repository: {
+				id: "gitlab-project:42",
+				groupId: "gitlab-group:pvhcorp",
+				path: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+				name: "aws-lz-account-creator",
+			},
+		});
+		const writeApplied = async (input: {
+			commitSha: string;
+			source: "gitlab-deployment" | "live-state";
+			observedAt: string;
+			retrievedAt: string;
+			pipelineId?: string;
+			truncated: boolean;
+		}) =>
+			recordLandingZoneChange(store, {
+				id: "applied-replay",
+				repositoryId: "gitlab-project:42",
+				commitSha: input.commitSha,
+				lastSyncedAt: input.retrievedAt,
+				source: input.source,
+				truncated: input.truncated,
+				outcome: "applied",
+				outcomeEvidence: {
+					source: input.source,
+					observedAt: input.observedAt,
+					retrievedAt: input.retrievedAt,
+					commitSha: input.commitSha,
+					...(input.pipelineId && { pipelineId: input.pipelineId }),
+					truncated: input.truncated,
+				},
+			});
+		const readApplied = async () =>
+			store.run<{
+				outcome: string;
+				observedAt: string;
+				retrievedAt: string;
+				commitSha: string;
+				source: string;
+				sha: string;
+				pipelineId: string | null;
+				truncated: boolean;
+				evidenceTruncated: boolean;
+			}>(
+				"MATCH (c:ConfigChange {id: $id}) RETURN c.outcome AS outcome, c.outcomeObservedAt AS observedAt, c.outcomeRetrievedAt AS retrievedAt, c.commitSha AS commitSha, c.source AS source, c.outcomeEvidenceSha AS sha, c.outcomeEvidencePipelineId AS pipelineId, c.outcomeEvidenceTruncated AS truncated, c.evidenceTruncated AS evidenceTruncated",
+				{ id: "applied-replay" },
+			);
+
+		await writeApplied({
+			commitSha: "newer-sha",
+			source: "gitlab-deployment",
+			observedAt: "2026-09-22T16:00:00.000Z",
+			retrievedAt: "2026-09-22T16:01:00.000Z",
+			pipelineId: "200",
+			truncated: true,
+		});
+		await writeApplied({
+			commitSha: "older-sha",
+			source: "live-state",
+			observedAt: "2026-09-22T15:00:00.000Z",
+			retrievedAt: "2026-09-22T15:01:00.000Z",
+			pipelineId: "100",
+			truncated: false,
+		});
+		expect(await readApplied()).toEqual([
+			{
+				outcome: "applied",
+				observedAt: "2026-09-22T16:00:00.000Z",
+				retrievedAt: "2026-09-22T16:01:00.000Z",
+				commitSha: "newer-sha",
+				source: "gitlab-deployment",
+				sha: "newer-sha",
+				pipelineId: "200",
+				truncated: true,
+				evidenceTruncated: true,
+			},
+		]);
+
+		await writeApplied({
+			commitSha: "equal-sha",
+			source: "live-state",
+			observedAt: "2026-09-22T16:00:00.000Z",
+			retrievedAt: "2026-09-22T16:02:00.000Z",
+			truncated: false,
+		});
+		expect(await readApplied()).toEqual([
+			{
+				outcome: "applied",
+				observedAt: "2026-09-22T16:00:00.000Z",
+				retrievedAt: "2026-09-22T16:02:00.000Z",
+				commitSha: "equal-sha",
+				source: "live-state",
+				sha: "equal-sha",
+				pipelineId: null,
+				truncated: false,
+				evidenceTruncated: false,
+			},
+		]);
+		await store.close();
+	});
+
 	test("init -> parameterized write -> read round-trip", async () => {
 		const store = new LadybugStore(join(dir, "db"));
 		await store.init();

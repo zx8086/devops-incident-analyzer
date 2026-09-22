@@ -259,6 +259,37 @@ describe("GitLab deployment pagination", () => {
 
 	test.each([
 		[
+			"unterminated relation quote",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next',
+		],
+		[
+			"unbalanced target angle bracket",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5; rel="next"',
+		],
+		[
+			"missing parameter delimiter",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5> rel="next"',
+		],
+		[
+			"malformed relation parameter",
+			"<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel",
+		],
+	] as const)("rejects a structurally malformed Link header with %s", async (_case, link) => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: { "x-page": "4", "x-per-page": "20", link },
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20)).rejects.toThrow(/Link|parameter/i);
+	});
+
+	test.each([
+		[
 			"malformed advertised next relation",
 			{
 				link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=oops>; title="page"; rel="next"',

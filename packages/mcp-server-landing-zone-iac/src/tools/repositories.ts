@@ -411,38 +411,122 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 		const parts: string[] = [];
 		let start = 0;
 		let quoted = false;
-		let angleDepth = 0;
+		let escaped = false;
+		let angleOpen = false;
 		for (let index = 0; index < value.length; index++) {
 			const character = value[index];
-			if (character === '"' && value[index - 1] !== "\\") quoted = !quoted;
-			if (quoted) continue;
-			if (character === "<") angleDepth++;
-			else if (character === ">" && angleDepth > 0) angleDepth--;
-			else if (character === "," && angleDepth === 0) {
-				parts.push(value.slice(start, index).trim());
+			if (quoted) {
+				if (escaped) escaped = false;
+				else if (character === "\\") escaped = true;
+				else if (character === '"') quoted = false;
+				continue;
+			}
+			if (character === '"') quoted = true;
+			else if (character === "<") {
+				if (angleOpen) throw new Error("GitLab response contained a malformed Link header");
+				angleOpen = true;
+			} else if (character === ">") {
+				if (!angleOpen) throw new Error("GitLab response contained a malformed Link header");
+				angleOpen = false;
+			} else if (character === "," && !angleOpen) {
+				const part = value.slice(start, index).trim();
+				if (!part) throw new Error("GitLab response contained a malformed Link header");
+				parts.push(part);
 				start = index + 1;
 			}
 		}
-		parts.push(value.slice(start).trim());
-		return parts.filter(Boolean);
+		if (quoted || escaped || angleOpen) throw new Error("GitLab response contained a malformed Link header");
+		const finalPart = value.slice(start).trim();
+		if (!finalPart) throw new Error("GitLab response contained a malformed Link header");
+		parts.push(finalPart);
+		return parts;
+	}
+
+	function parseLinkHeader(value: string): Array<{ target: string; relations: string[] }> {
+		const tokenCharacter = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]$/;
+		const isControlCharacter = (character: string): boolean => {
+			const code = character.charCodeAt(0);
+			return code <= 31 || code === 127;
+		};
+		return linkParts(value).map((part) => {
+			let cursor = 0;
+			const skipWhitespace = () => {
+				while (part[cursor] === " " || part[cursor] === "\t") cursor++;
+			};
+			skipWhitespace();
+			if (part[cursor] !== "<") throw new Error("GitLab response contained a malformed Link target");
+			const targetEnd = part.indexOf(">", cursor + 1);
+			if (targetEnd < 0) throw new Error("GitLab response contained a malformed Link target");
+			const target = part.slice(cursor + 1, targetEnd);
+			if (!target || /[<>\s"]/.test(target) || Array.from(target).some(isControlCharacter))
+				throw new Error("GitLab response contained a malformed Link target");
+			cursor = targetEnd + 1;
+			const relations: string[] = [];
+			let sawRelation = false;
+			while (cursor < part.length) {
+				skipWhitespace();
+				if (cursor >= part.length) break;
+				if (part[cursor] !== ";") throw new Error("GitLab response contained a malformed Link parameter delimiter");
+				cursor++;
+				skipWhitespace();
+				const nameStart = cursor;
+				while (cursor < part.length && tokenCharacter.test(part[cursor] ?? "")) cursor++;
+				if (cursor === nameStart) throw new Error("GitLab response contained a malformed Link parameter");
+				const name = part.slice(nameStart, cursor).toLowerCase();
+				skipWhitespace();
+				if (part[cursor] !== "=") throw new Error("GitLab response contained a malformed Link parameter");
+				cursor++;
+				skipWhitespace();
+
+				let parameterValue = "";
+				if (part[cursor] === '"') {
+					cursor++;
+					let closed = false;
+					while (cursor < part.length) {
+						const character = part[cursor];
+						if (character === "\\") {
+							cursor++;
+							if (cursor >= part.length) throw new Error("GitLab response contained a malformed Link quoted value");
+							parameterValue += part[cursor];
+							cursor++;
+						} else if (character === '"') {
+							closed = true;
+							cursor++;
+							break;
+						} else {
+							if (character === undefined || isControlCharacter(character))
+								throw new Error("GitLab response contained a malformed Link quoted value");
+							parameterValue += character;
+							cursor++;
+						}
+					}
+					if (!closed) throw new Error("GitLab response contained a malformed Link quoted value");
+				} else {
+					const valueStart = cursor;
+					while (cursor < part.length && tokenCharacter.test(part[cursor] ?? "")) cursor++;
+					if (cursor === valueStart) throw new Error("GitLab response contained a malformed Link parameter value");
+					parameterValue = part.slice(valueStart, cursor);
+				}
+
+				if (name === "rel") {
+					if (sawRelation) throw new Error("GitLab response contained duplicate Link relation parameters");
+					sawRelation = true;
+					const parsedRelations = parameterValue.split(/\s+/).filter(Boolean);
+					if (parsedRelations.length === 0)
+						throw new Error("GitLab response contained a malformed Link relation parameter");
+					relations.push(...parsedRelations);
+				}
+			}
+			return { target, relations };
+		});
 	}
 
 	function nextPageFromLink(value: string | null, requestedPage: number): number | undefined {
 		if (!value) return undefined;
 		let advertisedNext: number | undefined;
-		for (const part of linkParts(value)) {
-			const relationParameters = part
-				.split(";")
-				.slice(1)
-				.map((parameter) => parameter.trim());
-			const isNext = relationParameters.some((parameter) => {
-				const match = parameter.match(/^rel\s*=\s*(?:"([^"]*)"|([^\s;]+))$/i);
-				const relations = (match?.[1] ?? match?.[2] ?? "").split(/\s+/);
-				return relations.some((relation) => relation.toLowerCase() === "next");
-			});
+		for (const { target, relations } of parseLinkHeader(value)) {
+			const isNext = relations.some((relation) => relation.toLowerCase() === "next");
 			if (!isNext) continue;
-			const target = part.match(/^<([^>]+)>/)?.[1];
-			if (!target) throw new Error("GitLab response advertised a malformed next-page link");
 			let rawPage: string | null;
 			try {
 				rawPage = new URL(target, apiRoot).searchParams.get("page");
