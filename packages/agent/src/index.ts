@@ -102,9 +102,12 @@ export {
 	type LandingZoneMemoryScope,
 	type LandingZoneMemoryWriteDependencies,
 	type LandingZoneOutcomeInput,
+	type LandingZoneTurnMemoryDependencies,
 	memoryEnrichLandingZone,
 	recordLandingZoneDecision,
 	recordLandingZoneOutcome,
+	recordLandingZoneTurn,
+	renderLandingZonePriorMemory,
 } from "./landing-zone/memory.ts";
 export { LandingZoneState, type LandingZoneStateType } from "./landing-zone/state.ts";
 export {

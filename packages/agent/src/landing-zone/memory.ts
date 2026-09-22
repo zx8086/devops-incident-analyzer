@@ -1,7 +1,7 @@
 import { type AnnotationMap, redactPiiContent } from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
 import { searchAgentMemory } from "../memory-backend.ts";
-import { type KeyDecision, recordKeyDecision } from "../memory-writer.ts";
+import { appendDailyLog, type DailyLogEntry, type KeyDecision, recordKeyDecision } from "../memory-writer.ts";
 import type { LandingZoneStateType } from "./state.ts";
 import type { LandingZoneMemoryKind, LandingZonePriorMemory } from "./types.ts";
 
@@ -10,8 +10,9 @@ const REVALIDATION_NOTE = true as const;
 const UNSAFE_DURABLE_CONTENT =
 	/\b(?:terraform\s+state\s+value|plan[- ]sensitive\s+value|sensitive\s+plan\s+value|\.tfstate\b)|[<(]sensitive value[>)]|"sensitive"\s*:\s*true/i;
 const SECRET_ASSIGNMENT =
-	/\b(password|passwd|secret|token|credential|private[_ -]?key|client[_ -]?secret|access[_ -]?key)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi;
+	/\b([a-z][a-z0-9_-]*(?:password|passwd|secret|token|credential|private[_-]?key|client[_-]?secret|access[_-]?key)|password|passwd|secret|token|credential|private[_-]?key|client[_-]?secret|access[_-]?key|(?:database|db|postgres|postgresql|mysql|mongodb|redis|amqp)[_-]?url)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi;
 const AWS_ACCESS_KEY = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g;
+const CONNECTION_CREDENTIALS = /\b([a-z][a-z0-9+.-]*):\/\/[^\s/@:]+:[^\s/@]+@/gi;
 const REPOSITORY_MEMORY_KIND: Readonly<Record<string, LandingZoneMemoryKind>> = {
 	"aws-lz-account-creator": "account-vending",
 	"aws-lz-network-workloads": "network-onboarding",
@@ -51,8 +52,17 @@ export interface LandingZoneMemoryWriteDependencies {
 	recordDecision: (decision: KeyDecision) => void;
 }
 
+export interface LandingZoneTurnMemoryDependencies {
+	appendBreadcrumb: (entry: DailyLogEntry) => void;
+	recordOutcome: (input: LandingZoneOutcomeInput) => boolean;
+}
+
 const defaultMemoryDependencies: LandingZoneMemoryDependencies = { search: searchAgentMemory };
 const defaultWriteDependencies: LandingZoneMemoryWriteDependencies = { recordDecision: recordKeyDecision };
+const defaultTurnMemoryDependencies: LandingZoneTurnMemoryDependencies = {
+	appendBreadcrumb: appendDailyLog,
+	recordOutcome: recordLandingZoneOutcome,
+};
 
 function latestQuery(messages: BaseMessage[]): string {
 	const content = messages.at(-1)?.content;
@@ -83,6 +93,7 @@ function safeDurableText(text: string): string | null {
 	if (UNSAFE_DURABLE_CONTENT.test(text)) return null;
 	return redactPiiContent(text)
 		.replace(AWS_ACCESS_KEY, "[REDACTED]")
+		.replace(CONNECTION_CREDENTIALS, "$1://[REDACTED]@")
 		.replace(SECRET_ASSIGNMENT, (_match, key: string) => `${key}=[REDACTED]`);
 }
 
@@ -160,4 +171,41 @@ export function recordLandingZoneOutcome(
 		...(input.kind === "in-flight-change" ? { ttlSeconds: input.ttlSeconds } : {}),
 	});
 	return true;
+}
+
+export function renderLandingZonePriorMemory(priorMemory: LandingZonePriorMemory[]): string {
+	if (priorMemory.length === 0) return "";
+	const items = priorMemory
+		.slice(0, 3)
+		.map((item) => `- ${item.text.slice(0, 500)}`)
+		.join("\n");
+	return `\n\nPrior experience (advisory; revalidate against current live evidence):\n${items}`;
+}
+
+export function recordLandingZoneTurn(
+	state: LandingZoneStateType,
+	dependencies: LandingZoneTurnMemoryDependencies = defaultTurnMemoryDependencies,
+): boolean {
+	const datasources = [...new Set(state.evidenceResults.map((item) => item.source))];
+	dependencies.appendBreadcrumb({
+		requestId: state.requestId,
+		services: state.repositoryScope,
+		datasources,
+		summary: `${state.intent} turn ended ${state.outcome}. ${state.reconciliation?.conclusion ?? "No evidence conclusion."}`,
+	});
+
+	const currentGitLabEvidence = state.evidenceResults.some(
+		(item) => item.source === "gitlab" && item.status === "observed" && item.freshness.status === "current",
+	);
+	if (state.intent !== "review" || !state.reconciliation || !currentGitLabEvidence) return false;
+	return dependencies.recordOutcome({
+		requestId: state.requestId,
+		summary: `Landing Zone review ended ${state.outcome}: ${state.reconciliation.conclusion}`,
+		confirmed: true,
+		kind: "plan-outcome",
+		...(oneValue(state.repositoryScope) ? { repository: oneValue(state.repositoryScope) } : {}),
+		...(oneValue(state.accountScope) ? { account: oneValue(state.accountScope) } : {}),
+		workflow: state.intent,
+		configChangeId: state.requestId,
+	});
 }

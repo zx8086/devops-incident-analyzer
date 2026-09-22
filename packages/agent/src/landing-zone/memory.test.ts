@@ -6,6 +6,8 @@ import {
 	memoryEnrichLandingZone,
 	recordLandingZoneDecision,
 	recordLandingZoneOutcome,
+	recordLandingZoneTurn,
+	renderLandingZonePriorMemory,
 } from "./memory.ts";
 import type { LandingZoneStateType } from "./state.ts";
 
@@ -104,6 +106,19 @@ describe("memoryEnrichLandingZone", () => {
 		expect(result.priorMemory).toHaveLength(1);
 		expect(result.priorMemory?.[0]?.text).toBe("Use the reviewed exception; token=[REDACTED]");
 	});
+
+	test("renders recalled experience as advisory content requiring live revalidation", () => {
+		expect(
+			renderLandingZonePriorMemory([
+				{
+					text: "A previous account review used the YAML authoring surface.",
+					annotations: { kind: "account-vending" },
+					advisory: true,
+					requiresLiveRevalidation: true,
+				},
+			]),
+		).toContain("Prior experience (advisory; revalidate against current live evidence)");
+	});
 });
 
 describe("Landing Zone memory writes", () => {
@@ -149,6 +164,22 @@ describe("Landing Zone memory writes", () => {
 			annotations: { kind: "key-decision", repository: "aws-lz-account-creator" },
 		});
 		expect(writes[0]).not.toHaveProperty("ttlSeconds");
+	});
+
+	test("redacts prefixed credential keys and credential-bearing connection URLs", () => {
+		const writes: KeyDecisionFixture[] = [];
+		const recorded = recordLandingZoneDecision(
+			{
+				requestId: "decision-secret-forms",
+				decision: "db_password=hunter2 api_token=token-value DATABASE_URL=postgres://app:password@db.internal/app",
+				reviewed: true,
+				kind: "key-decision",
+			},
+			{ recordDecision: (write) => writes.push(write) },
+		);
+
+		expect(recorded).toBeTrue();
+		expect(writes[0]?.decision).toBe("db_password=[REDACTED] api_token=[REDACTED] DATABASE_URL=[REDACTED]");
 	});
 
 	test("rejects unreviewed decisions and Terraform state or sensitive plan values", () => {
@@ -236,5 +267,73 @@ describe("Landing Zone memory writes", () => {
 			),
 		).toBeFalse();
 		expect(writes).toEqual([]);
+	});
+});
+
+type KeyDecisionFixture = Parameters<NonNullable<Parameters<typeof recordLandingZoneDecision>[1]>["recordDecision"]>[0];
+
+describe("recordLandingZoneTurn", () => {
+	test("writes a breadcrumb and persists an evidence-confirmed review outcome", () => {
+		const breadcrumbs: unknown[] = [];
+		const outcomes: unknown[] = [];
+		const recorded = recordLandingZoneTurn(
+			state({
+				intent: "review",
+				outcome: "answered",
+				evidenceResults: [
+					{
+						id: "gitlab:account",
+						claimKey: "account-authoring-surface",
+						source: "gitlab",
+						retrievedAt: "2026-09-22T10:30:00.000Z",
+						status: "observed",
+						summary: "Account requests use YAML.",
+						provenance: { repository: "aws-lz-account-creator", path: "accounts/example.yml" },
+						freshness: { status: "current" },
+					},
+				],
+				reconciliation: {
+					status: "aligned",
+					conclusion: "The live authoring surface matches the PVH contract.",
+					comparisons: [],
+					conflicts: [],
+					unavailableSources: [],
+				},
+			}),
+			{
+				appendBreadcrumb: (entry) => breadcrumbs.push(entry),
+				recordOutcome: (input) => {
+					outcomes.push(input);
+					return true;
+				},
+			},
+		);
+
+		expect(recorded).toBeTrue();
+		expect(breadcrumbs).toHaveLength(1);
+		expect(outcomes[0]).toMatchObject({
+			confirmed: true,
+			kind: "plan-outcome",
+			repository: "aws-lz-account-creator",
+			account: "martech-dev",
+			workflow: "review",
+			configChangeId: "change-123",
+		});
+	});
+
+	test("keeps non-review turns as expiring breadcrumbs without durable outcomes", () => {
+		const breadcrumbs: unknown[] = [];
+		const outcomes: unknown[] = [];
+		const recorded = recordLandingZoneTurn(state({ intent: "learn", outcome: "answered" }), {
+			appendBreadcrumb: (entry) => breadcrumbs.push(entry),
+			recordOutcome: (input) => {
+				outcomes.push(input);
+				return true;
+			},
+		});
+
+		expect(recorded).toBeFalse();
+		expect(breadcrumbs).toHaveLength(1);
+		expect(outcomes).toEqual([]);
 	});
 });

@@ -9,7 +9,7 @@ import {
 	type LandingZoneEvidenceCollectors,
 } from "./evidence.ts";
 import { selectLandingZoneKnowledge } from "./knowledge-selector.ts";
-import { memoryEnrichLandingZone } from "./memory.ts";
+import { memoryEnrichLandingZone, recordLandingZoneTurn, renderLandingZonePriorMemory } from "./memory.ts";
 import { reconcileEvidence } from "./reconciliation.ts";
 import { assessRisk } from "./risk.ts";
 import type { LandingZoneStateType } from "./state.ts";
@@ -232,19 +232,22 @@ export async function assessLandingZoneRisk(state: LandingZoneStateType): Promis
 }
 
 export async function answerLandingZoneQuestion(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
+	const priorMemory = renderLandingZonePriorMemory(state.priorMemory);
 	if (state.blockedReason) {
-		return { messages: [new AIMessage(state.blockedReason)], response: state.blockedReason, outcome: "blocked" };
+		const response = `${state.blockedReason}${priorMemory}`;
+		return { messages: [new AIMessage(response)], response, outcome: "blocked" };
 	}
 	const conclusion = state.reconciliation?.conclusion ?? "No evidence conclusion is available.";
 	const limits = state.risk?.reasons ?? [];
-	const response = limits.length > 0 ? `${conclusion} Limits: ${limits.join(" ")}` : conclusion;
+	const answer = limits.length > 0 ? `${conclusion} Limits: ${limits.join(" ")}` : conclusion;
+	const response = `${answer}${priorMemory}`;
 	return {
 		messages: [new AIMessage(response)],
 		response,
 		outcome: "answered",
 	};
 }
-
-export async function teardownLandingZone(_state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
+export async function teardownLandingZone(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
+	recordLandingZoneTurn(state);
 	return {};
 }
