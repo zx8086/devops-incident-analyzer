@@ -85,7 +85,8 @@ describe("loadAgent(landing-zone-terraform)", () => {
 
 		expect(agent.manifest.name).toBe("pvh-landing-zone-terraform-agent");
 		expect([...agent.skills.keys()]).toContain("search-memory");
-		expect(agent.manifest.tools).toEqual(["landing-zone"]);
+		expect([...agent.skills.keys()]).toContain("query-knowledge-graph");
+		expect(agent.manifest.tools).toEqual(["landing-zone", "knowledge-graph"]);
 		expect(agent.hooks?.bootstrap?.steps).toEqual([
 			"load_live_memory",
 			"load_wiki_index",
@@ -97,14 +98,28 @@ describe("loadAgent(landing-zone-terraform)", () => {
 
 	test("exposes only read-only Landing Zone tool actions", () => {
 		const agent = loadLandingZoneAgent();
-		const tool = agent.tools.find((entry) => entry.name === "landing-zone");
-		expect(tool).toBeDefined();
-		expect(tool?.annotations?.read_only).toBe(true);
-		expect(tool?.annotations?.requires_confirmation).toBe(false);
-		expect(tool?.tool_mapping?.mcp_server).toBe("landing-zone-iac");
-		expect(tool?.tool_mapping?.mcp_patterns).toEqual(["lz_*"]);
+		const landingZoneTool = agent.tools.find((entry) => entry.name === "landing-zone");
+		expect(landingZoneTool).toBeDefined();
+		expect(landingZoneTool?.annotations?.read_only).toBe(true);
+		expect(landingZoneTool?.annotations?.requires_confirmation).toBe(false);
+		expect(landingZoneTool?.tool_mapping?.mcp_server).toBe("landing-zone-iac");
+		expect(landingZoneTool?.tool_mapping?.mcp_patterns).toEqual(["lz_*"]);
 
-		const actionNames = Object.keys(tool?.tool_mapping?.action_tool_map ?? {});
+		const graphTool = agent.tools.find((entry) => entry.name === "knowledge-graph");
+		expect(graphTool?.annotations?.read_only).toBe(true);
+		expect(graphTool?.annotations?.requires_confirmation).toBe(false);
+		expect(graphTool?.tool_mapping?.mcp_server).toBe("knowledge-graph");
+		expect(graphTool?.tool_mapping?.mcp_patterns).toEqual(["kg_*"]);
+		expect(Object.values(graphTool?.tool_mapping?.action_tool_map ?? {}).flat()).toEqual([
+			"kg_lz_repository_history",
+			"kg_lz_module_consumers",
+			"kg_lz_account_roots",
+			"kg_lz_mr_outcome",
+			"kg_lz_repository_standards",
+			"kg_run_cypher",
+		]);
+
+		const actionNames = agent.tools.flatMap((tool) => Object.keys(tool.tool_mapping?.action_tool_map ?? {}));
 		const forbidden = /(apply|destroy|state|branch|commit|merge|approve|pipeline|write|create|update|delete|mutate)/i;
 		expect(actionNames.filter((action) => forbidden.test(action))).toEqual([]);
 	});

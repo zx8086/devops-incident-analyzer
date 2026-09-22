@@ -8,17 +8,22 @@
 // erroring (mirrors the SIO-966 runKnowledgeGraphQuery wording).
 
 import {
+	accountManagingRoots,
 	appliedChanges,
 	changeHistoryForStackInstance,
 	deploymentsRunningStack,
 	type GraphStore,
 	getGraphStore,
 	ipToWorkload,
+	mergeRequestPipelineOutcome,
 	networkMapForService,
 	priorChangesForDeployment,
 	priorRootCauses,
+	repositoryChangeHistory,
 	stacksUsingModule,
+	standardsForRepository,
 	successfulPromptChanges,
+	terraformModuleConsumers,
 } from "@devops-agent/knowledge-graph";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -36,6 +41,7 @@ const GRAPH_UNAVAILABLE =
 	"KNOWLEDGE GRAPH UNAVAILABLE (store could not be opened). Do NOT answer from memory, " +
 	"specs, or runbooks -- you have no graph evidence. Tell the user the knowledge graph is " +
 	"unavailable and the answer cannot be verified.";
+const GRAPH_INCOMPLETE = "The graph may be incomplete; verify against live GitLab before concluding absence.";
 
 // SIO-968: gate on the SERVER'S STARTUP CONFIG, not a per-call process.env re-read.
 // The earlier per-call isKnowledgeGraphEnabled() read process.env at request time,
@@ -55,6 +61,111 @@ function makeResolveStore(enabled: boolean): () => Promise<GraphStore | string> 
 
 export function registerCuratedTools(server: McpServer, enabled: boolean): void {
 	const resolveStore = makeResolveStore(enabled);
+	server.registerTool(
+		"kg_lz_repository_history",
+		{
+			description:
+				"Landing Zone repository change history with MR, pipeline, and Terraform plan outcomes. Read-only; graph results never replace live GitLab verification.",
+			inputSchema: {
+				repository: z.string().min(1).describe("Full GitLab repository path"),
+				limit: z.number().int().positive().max(200).optional().describe("Max rows to return (default 20)"),
+			},
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
+		async ({ repository, limit }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await repositoryChangeHistory(store, repository, limit ?? 20);
+			if (rows.length === 0) return text(`No recorded changes for ${repository}. ${GRAPH_INCOMPLETE}`);
+			const lines = rows.map((row) => {
+				const mr = row.mrUrl ? `; MR ${row.mrUrl}` : "";
+				const pipeline = row.pipelineId ? `; pipeline ${row.pipelineId} ${row.pipelineStatus || "status unknown"}` : "";
+				const plan = row.planId
+					? `; plan ${row.planId} ${row.planStatus || "status unknown"}${row.planSummary ? ` (${row.planSummary})` : ""}`
+					: "";
+				return `- ${row.changeId} [${row.outcome}] ${row.summary || "(summary unavailable)"}${mr}${pipeline}${plan}`;
+			});
+			return text(`Landing Zone changes for ${repository}:\n${lines.join("\n")}`);
+		},
+	);
+
+	server.registerTool(
+		"kg_lz_module_consumers",
+		{
+			description: "Landing Zone Terraform roots that consume one local or shared Terraform module. Read-only.",
+			inputSchema: { moduleId: z.string().min(1).describe("Stable TerraformModule id") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
+		async ({ moduleId }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await terraformModuleConsumers(store, moduleId);
+			if (rows.length === 0) return text(`No recorded consumers for ${moduleId}. ${GRAPH_INCOMPLETE}`);
+			return text(
+				`Terraform roots consuming ${moduleId}:\n${rows.map((row) => `- ${row.rootId} (${row.repositoryPath}:${row.rootPath})`).join("\n")}`,
+			);
+		},
+	);
+
+	server.registerTool(
+		"kg_lz_account_roots",
+		{
+			description: "Landing Zone Terraform roots explicitly recorded as managing AWS accounts. Read-only.",
+			inputSchema: { repository: z.string().min(1).optional().describe("Optional full GitLab repository path") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
+		async ({ repository }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await accountManagingRoots(store, repository);
+			if (rows.length === 0) return text(`No account-managing Terraform roots are recorded. ${GRAPH_INCOMPLETE}`);
+			return text(
+				`Account-managing Terraform roots:\n${rows.map((row) => `- ${row.rootId} (${row.repositoryPath}:${row.rootPath})`).join("\n")}`,
+			);
+		},
+	);
+
+	server.registerTool(
+		"kg_lz_mr_outcome",
+		{
+			description:
+				"Recorded Landing Zone change, pipeline, and Terraform plan outcome for one merge request. Read-only.",
+			inputSchema: { mrUrl: z.url().describe("Full GitLab merge request URL") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
+		async ({ mrUrl }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const row = await mergeRequestPipelineOutcome(store, mrUrl);
+			if (!row) return text(`No recorded outcome for ${mrUrl}. ${GRAPH_INCOMPLETE}`);
+			const pipeline = row.pipelineId ? `; pipeline ${row.pipelineId} ${row.pipelineStatus || "status unknown"}` : "";
+			const plan = row.planId
+				? `; plan ${row.planId} ${row.planStatus || "status unknown"}${row.planSummary ? ` (${row.planSummary})` : ""}`
+				: "";
+			return text(`${row.changeId} [${row.outcome}] MR ${row.mrUrl}${pipeline}${plan}`);
+		},
+	);
+
+	server.registerTool(
+		"kg_lz_repository_standards",
+		{
+			description: "Standards and accepted ADR records governing one Landing Zone repository. Read-only.",
+			inputSchema: { repository: z.string().min(1).describe("Full GitLab repository path") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
+		async ({ repository }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await standardsForRepository(store, repository);
+			if (rows.length === 0) return text(`No governing standards are recorded for ${repository}. ${GRAPH_INCOMPLETE}`);
+			const lines = rows.map((row) => {
+				const adr = row.adrId ? ` implements ${row.adrTitle || row.adrId} [${row.adrStatus || "status unknown"}]` : "";
+				return `- ${row.standardTitle || row.standardId} [${row.standardStatus || "status unknown"}]${adr}`;
+			});
+			return text(`Standards governing ${repository}:\n${lines.join("\n")}`);
+		},
+	);
+
 	server.registerTool(
 		"kg_deployments_running_stack",
 		{

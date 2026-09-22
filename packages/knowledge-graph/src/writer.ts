@@ -6,13 +6,29 @@
 
 import { validTopologyEdges } from "./reader.ts";
 import {
+	type AdrNode,
+	AdrNodeSchema,
 	APP_MAP_DISCOVERED_BY,
 	type BindingKind,
+	type GitLabGroupNode,
+	GitLabGroupNodeSchema,
 	type IpBindingRecord,
 	NETWORK_DISCOVERED_BY,
 	type NetworkTopologyRecord,
 	NetworkTopologyRecordSchema,
 	ORBIT_DISCOVERED_BY,
+	type RepositoryNode,
+	RepositoryNodeSchema,
+	type SharedModuleNode,
+	SharedModuleNodeSchema,
+	type StandardNode,
+	StandardNodeSchema,
+	type TerraformModuleNode,
+	TerraformModuleNodeSchema,
+	type TerraformPlanNode,
+	TerraformPlanNodeSchema,
+	type TerraformRootNode,
+	TerraformRootNodeSchema,
 	TOPOLOGY_DISCOVERED_BY,
 	TOPOLOGY_KINDS,
 	type TopologyEdgeKind,
@@ -32,6 +48,239 @@ export interface EntityGraph {
 	apiRoutes?: string[];
 	// Service-to-service dependency edges.
 	dependencies?: Array<{ from: string; to: string }>;
+}
+
+export interface LandingZoneRepositoryRecord {
+	group: GitLabGroupNode;
+	repository: RepositoryNode;
+}
+
+export async function recordLandingZoneRepository(
+	store: GraphStore,
+	record: LandingZoneRepositoryRecord,
+): Promise<void> {
+	const lastSyncedAt = record.repository.lastSyncedAt ?? record.group.lastSyncedAt ?? new Date().toISOString();
+	const group = GitLabGroupNodeSchema.parse({ ...record.group, lastSyncedAt });
+	const repository = RepositoryNodeSchema.parse({ ...record.repository, lastSyncedAt });
+	await store.run(
+		"MERGE (g:GitLabGroup {id: $id}) SET g.path = $path, g.name = coalesce($name, g.name), g.webUrl = coalesce($webUrl, g.webUrl), g.lastSyncedAt = $lastSyncedAt",
+		{ id: group.id, path: group.path, name: group.name ?? null, webUrl: group.webUrl ?? null, lastSyncedAt },
+	);
+	await store.run(
+		"MERGE (r:Repository {id: $id}) SET r.groupId = $groupId, r.path = $path, r.name = coalesce($name, r.name), r.defaultBranch = coalesce($defaultBranch, r.defaultBranch), r.webUrl = coalesce($webUrl, r.webUrl), r.commitSha = coalesce($commitSha, r.commitSha), r.lastSyncedAt = $lastSyncedAt",
+		{
+			id: repository.id,
+			groupId: repository.groupId,
+			path: repository.path,
+			name: repository.name ?? null,
+			defaultBranch: repository.defaultBranch ?? null,
+			webUrl: repository.webUrl ?? null,
+			commitSha: repository.commitSha ?? null,
+			lastSyncedAt,
+		},
+	);
+	await store.run(
+		"MATCH (g:GitLabGroup {id: $groupId}), (r:Repository {id: $repositoryId}) MERGE (g)-[:CONTAINS]->(r)",
+		{ groupId: group.id, repositoryId: repository.id },
+	);
+}
+
+export type TerraformRootRecord = TerraformRootNode;
+
+export async function recordTerraformRoot(store: GraphStore, input: TerraformRootRecord): Promise<void> {
+	const root = TerraformRootNodeSchema.parse(input);
+	await store.run(
+		"MERGE (tr:TerraformRoot {id: $id}) SET tr.repositoryId = $repositoryId, tr.path = $path, tr.managesAccounts = coalesce($managesAccounts, tr.managesAccounts), tr.lastSyncedAt = $lastSyncedAt",
+		{
+			id: root.id,
+			repositoryId: root.repositoryId,
+			path: root.path,
+			managesAccounts: root.managesAccounts ?? null,
+			lastSyncedAt: root.lastSyncedAt ?? new Date().toISOString(),
+		},
+	);
+	await store.run(
+		"MATCH (r:Repository {id: $repositoryId}), (tr:TerraformRoot {id: $id}) MERGE (r)-[:REPOSITORY_CONTAINS_ROOT]->(tr)",
+		{ repositoryId: root.repositoryId, id: root.id },
+	);
+}
+
+export interface ModuleUsageRecord {
+	rootId: string;
+	module: TerraformModuleNode;
+	sharedModule?: SharedModuleNode;
+}
+
+export async function recordModuleUsage(store: GraphStore, input: ModuleUsageRecord): Promise<void> {
+	if (!input.rootId) return;
+	const module = TerraformModuleNodeSchema.parse(input.module);
+	await store.run(
+		"MERGE (tm:TerraformModule {id: $id}) SET tm.repositoryId = $repositoryId, tm.path = $path, tm.name = coalesce($name, tm.name), tm.lastSyncedAt = $lastSyncedAt",
+		{
+			id: module.id,
+			repositoryId: module.repositoryId,
+			path: module.path,
+			name: module.name ?? null,
+			lastSyncedAt: module.lastSyncedAt ?? new Date().toISOString(),
+		},
+	);
+	await store.run(
+		"MATCH (tr:TerraformRoot {id: $rootId}), (tm:TerraformModule {id: $moduleId}) MERGE (tr)-[:ROOT_USES_MODULE]->(tm)",
+		{ rootId: input.rootId, moduleId: module.id },
+	);
+	if (!input.sharedModule) return;
+	const shared = SharedModuleNodeSchema.parse(input.sharedModule);
+	await store.run(
+		"MERGE (sm:SharedModule {id: $id}) SET sm.source = $source, sm.version = coalesce($version, sm.version), sm.lastSyncedAt = $lastSyncedAt",
+		{
+			id: shared.id,
+			source: shared.source,
+			version: shared.version ?? null,
+			lastSyncedAt: shared.lastSyncedAt ?? new Date().toISOString(),
+		},
+	);
+	await store.run(
+		"MATCH (tm:TerraformModule {id: $moduleId}), (sm:SharedModule {id: $sharedModuleId}) MERGE (tm)-[:MODULE_USES_SHARED_MODULE]->(sm)",
+		{ moduleId: module.id, sharedModuleId: shared.id },
+	);
+}
+
+export interface LandingZoneChangeRecord {
+	id: string;
+	repositoryId: string;
+	rootId?: string;
+	workflow?: string;
+	threadId?: string;
+	summary?: string;
+	createdAt?: string;
+	mergeRequest?: {
+		id: string;
+		projectId: string;
+		iid: string;
+		webUrl: string;
+		lastSyncedAt?: string;
+	};
+	outcome?: LandingZoneChangeOutcome;
+}
+
+export async function recordLandingZoneChange(store: GraphStore, change: LandingZoneChangeRecord): Promise<void> {
+	if (!change.id || !change.repositoryId) return;
+	await store.run(
+		"MERGE (c:ConfigChange {id: $id}) SET c.workflow = coalesce($workflow, c.workflow), c.summary = coalesce($summary, c.summary), c.createdAt = coalesce(c.createdAt, $createdAt), c.outcome = CASE WHEN $outcome IS NULL THEN coalesce(c.outcome, 'proposed') WHEN c.outcome = 'applied' THEN c.outcome WHEN $outcome = 'proposed' AND c.outcome IS NOT NULL THEN c.outcome ELSE $outcome END",
+		{
+			id: change.id,
+			workflow: change.workflow ?? null,
+			summary: change.summary ?? null,
+			createdAt: change.createdAt ?? new Date().toISOString(),
+			outcome: change.outcome ?? null,
+		},
+	);
+	await store.run(
+		"MATCH (c:ConfigChange {id: $id}), (r:Repository {id: $repositoryId}) MERGE (c)-[:CHANGE_TARGETS_REPOSITORY]->(r)",
+		{ id: change.id, repositoryId: change.repositoryId },
+	);
+	if (change.rootId) {
+		await store.run("MERGE (tr:TerraformRoot {id: $rootId})", { rootId: change.rootId });
+		await store.run(
+			"MATCH (c:ConfigChange {id: $id}), (tr:TerraformRoot {id: $rootId}) MERGE (c)-[:CHANGE_TARGETS_ROOT]->(tr)",
+			{ id: change.id, rootId: change.rootId },
+		);
+	}
+	if (change.mergeRequest) {
+		const mr = change.mergeRequest;
+		await store.run(
+			"MERGE (m:MergeRequest {url: $id}) SET m.webUrl = $webUrl, m.projectId = $projectId, m.iid = $iid, m.lastSyncedAt = $lastSyncedAt",
+			{
+				id: mr.id,
+				webUrl: mr.webUrl,
+				projectId: mr.projectId,
+				iid: mr.iid,
+				lastSyncedAt: mr.lastSyncedAt ?? new Date().toISOString(),
+			},
+		);
+		await store.run("MATCH (c:ConfigChange {id: $id}), (m:MergeRequest {url: $mrId}) MERGE (c)-[:PROPOSED_IN]->(m)", {
+			id: change.id,
+			mrId: mr.id,
+		});
+	}
+	if (change.workflow) {
+		await store.run("MERGE (w:Workflow {name: $name})", { name: change.workflow });
+		await store.run("MATCH (c:ConfigChange {id: $id}), (w:Workflow {name: $name}) MERGE (c)-[:VIA_WORKFLOW]->(w)", {
+			id: change.id,
+			name: change.workflow,
+		});
+	}
+	if (change.threadId) {
+		await store.run("MERGE (s:Session {threadId: $threadId})", { threadId: change.threadId });
+		await store.run(
+			"MATCH (c:ConfigChange {id: $id}), (s:Session {threadId: $threadId}) MERGE (c)-[:IN_SESSION]->(s)",
+			{ id: change.id, threadId: change.threadId },
+		);
+	}
+}
+
+export interface TerraformPlanRecord {
+	pipelineId: string;
+	plan: TerraformPlanNode;
+}
+
+export async function recordTerraformPlan(store: GraphStore, input: TerraformPlanRecord): Promise<void> {
+	if (!input.pipelineId) return;
+	const plan = TerraformPlanNodeSchema.parse(input.plan);
+	await store.run("MERGE (p:Pipeline {id: $pipelineId})", { pipelineId: input.pipelineId });
+	await store.run(
+		"MERGE (tp:TerraformPlan {id: $id}) SET tp.status = coalesce($status, tp.status), tp.summary = coalesce($summary, tp.summary), tp.artifactUrl = coalesce($artifactUrl, tp.artifactUrl), tp.createdAt = coalesce(tp.createdAt, $createdAt)",
+		{
+			id: plan.id,
+			status: plan.status ?? null,
+			summary: plan.summary ?? null,
+			artifactUrl: plan.artifactUrl ?? null,
+			createdAt: plan.createdAt ?? new Date().toISOString(),
+		},
+	);
+	await store.run(
+		"MATCH (p:Pipeline {id: $pipelineId}), (tp:TerraformPlan {id: $planId}) MERGE (p)-[:PRODUCED]->(tp)",
+		{ pipelineId: input.pipelineId, planId: plan.id },
+	);
+}
+
+export interface GovernanceBindingRecord {
+	repositoryId: string;
+	standard: StandardNode;
+	adr?: AdrNode;
+}
+
+export async function recordGovernanceBinding(store: GraphStore, input: GovernanceBindingRecord): Promise<void> {
+	if (!input.repositoryId) return;
+	const standard = StandardNodeSchema.parse(input.standard);
+	await store.run(
+		"MERGE (s:Standard {id: $id}) SET s.title = coalesce($title, s.title), s.status = coalesce($status, s.status), s.url = coalesce($url, s.url)",
+		{
+			id: standard.id,
+			title: standard.title ?? null,
+			status: standard.status ?? null,
+			url: standard.url ?? null,
+		},
+	);
+	await store.run(
+		"MATCH (r:Repository {id: $repositoryId}), (s:Standard {id: $standardId}) MERGE (r)-[:GOVERNED_BY]->(s)",
+		{ repositoryId: input.repositoryId, standardId: standard.id },
+	);
+	if (!input.adr) return;
+	const adr = AdrNodeSchema.parse(input.adr);
+	await store.run(
+		"MERGE (a:ADR {id: $id}) SET a.title = coalesce($title, a.title), a.status = coalesce($status, a.status), a.url = coalesce($url, a.url)",
+		{
+			id: adr.id,
+			title: adr.title ?? null,
+			status: adr.status ?? null,
+			url: adr.url ?? null,
+		},
+	);
+	await store.run("MATCH (s:Standard {id: $standardId}), (a:ADR {id: $adrId}) MERGE (s)-[:IMPLEMENTS]->(a)", {
+		standardId: standard.id,
+		adrId: adr.id,
+	});
 }
 
 async function mergeNodes(store: GraphStore, label: string, key: string, values: string[] | undefined): Promise<void> {
@@ -377,6 +626,7 @@ export async function invalidateBindingByHuman(
 // SIO-965: the change-outcome lifecycle. A turn opens as "proposed"; the
 // recordIacOutcome node later promotes it to applied/rejected/failed.
 export type ChangeOutcome = "proposed" | "applied" | "rejected" | "failed";
+export type LandingZoneChangeOutcome = ChangeOutcome | "declined" | "pipeline-failed" | "merged-unverified";
 
 // SIO-954: one elastic-iac maker turn's proposed change. filePaths is collapsed
 // to a single filePath property on the ConfigChange node (the first path, or a
@@ -457,32 +707,59 @@ export async function recordIacChange(store: GraphStore, change: IacChangeRecord
 
 // SIO-965: record (or update) the GitLab CI pipeline for an MR. pipelineId is the
 // numeric GitLab id; it is stringified for primary-key uniformity.
-export interface PipelineRecord {
+interface PipelineRecordBase {
 	mrUrl: string;
 	pipelineId: number | string;
 	status?: string;
 	url?: string;
+	updatedAt?: string;
 }
+
+export type PipelineRecord =
+	| (PipelineRecordBase & { mrId?: never; projectId?: never; iid?: never; createdAt?: string })
+	| (PipelineRecordBase & { mrId: string; projectId: string; iid: string; createdAt: string });
 
 export async function recordPipeline(store: GraphStore, pipeline: PipelineRecord): Promise<void> {
 	const id = String(pipeline.pipelineId ?? "");
 	if (!pipeline.mrUrl || !id) return;
-	await store.run("MERGE (pl:Pipeline {id: $id}) SET pl.status = $status, pl.url = $url", {
-		id,
-		status: pipeline.status ?? "",
-		url: pipeline.url ?? "",
-	});
-	await store.run("MERGE (m:MergeRequest {url: $url})", { url: pipeline.mrUrl });
+	if (pipeline.mrId && !pipeline.createdAt) throw new Error("Landing Zone pipelines require createdAt");
+	const mrId = pipeline.mrId ?? pipeline.mrUrl;
+	await store.run(
+		"MERGE (pl:Pipeline {id: $id}) SET pl.status = coalesce($status, pl.status), pl.url = coalesce($url, pl.url), pl.createdAt = coalesce(pl.createdAt, $createdAt), pl.updatedAt = coalesce($updatedAt, pl.updatedAt)",
+		{
+			id,
+			status: pipeline.status ?? null,
+			url: pipeline.url ?? null,
+			createdAt: pipeline.createdAt ?? null,
+			updatedAt: pipeline.updatedAt ?? null,
+		},
+	);
+	await store.run(
+		"MERGE (m:MergeRequest {url: $mrId}) SET m.webUrl = coalesce($mrUrl, m.webUrl), m.projectId = coalesce($projectId, m.projectId), m.iid = coalesce($iid, m.iid)",
+		{
+			mrId,
+			mrUrl: pipeline.mrUrl,
+			projectId: pipeline.projectId ?? null,
+			iid: pipeline.iid ?? null,
+		},
+	);
 	await store.run("MATCH (m:MergeRequest {url: $mr}), (pl:Pipeline {id: $id}) MERGE (m)-[:RAN]->(pl)", {
-		mr: pipeline.mrUrl,
+		mr: mrId,
 		id,
 	});
 }
 
 // SIO-965: promote a change's outcome once its pipeline reaches a terminal state.
-export async function setChangeOutcome(store: GraphStore, changeId: string, outcome: ChangeOutcome): Promise<void> {
+export async function setChangeOutcome(
+	store: GraphStore,
+	changeId: string,
+	outcome: LandingZoneChangeOutcome,
+): Promise<void> {
 	if (!changeId) return;
-	await store.run("MATCH (c:ConfigChange {id: $id}) SET c.outcome = $outcome", { id: changeId, outcome });
+	await store.run(
+		"MATCH (c:ConfigChange {id: $id}) SET c.outcome = CASE WHEN c.outcome = 'applied' THEN c.outcome WHEN $outcome = 'proposed' AND c.outcome IS NOT NULL THEN c.outcome ELSE $outcome END",
+		{ id: changeId, outcome },
+	);
 }
 
 // SIO-1527: attach an MR to an existing ConfigChange WITHOUT touching its other properties.
@@ -562,7 +839,7 @@ export async function mrUrlHasChange(store: GraphStore, url: string): Promise<bo
 	// Prefix filter BEFORE the limit: an unfiltered LIMIT could evict the one non-import row when
 	// an MR accumulates many gitlab: changes. STARTS WITH is proven against the live lbug store.
 	const rows = await store.run<{ id: string }>(
-		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest {url: $url}) WHERE NOT c.id STARTS WITH 'gitlab:' RETURN c.id AS id LIMIT 1",
+		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest) WHERE (m.url = $url OR m.webUrl = $url) AND NOT c.id STARTS WITH 'gitlab:' RETURN c.id AS id LIMIT 1",
 		{ url },
 	);
 	return rows.length > 0;

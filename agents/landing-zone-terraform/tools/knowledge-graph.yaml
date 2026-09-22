@@ -1,0 +1,58 @@
+name: knowledge-graph
+description: >
+  Read-only relationship and change-history queries for the PVH AWS Landing Zone.
+  Graph results are imported evidence and must be revalidated against live GitLab
+  or the authoritative ADR source before reporting current state.
+version: 0.1.0
+input_schema:
+  type: object
+  properties:
+    action:
+      type: string
+      enum: [repository_history, module_consumers, account_roots, mr_outcome, repository_standards, ad_hoc_read]
+      description: Read-only graph question to answer
+  required: [action]
+output_schema:
+  type: object
+  properties:
+    evidence: { type: object }
+annotations:
+  requires_confirmation: false
+  read_only: true
+  cost: low
+
+prompt_template: >
+  Query imported Landing Zone graph evidence. Empty results do not prove absence,
+  merge does not prove apply, and current claims require live-source verification.
+
+tool_mapping:
+  mcp_server: knowledge-graph
+  mcp_patterns:
+    - "kg_*"
+  action_tool_map:
+    repository_history:
+      - kg_lz_repository_history
+    module_consumers:
+      - kg_lz_module_consumers
+    account_roots:
+      - kg_lz_account_roots
+    mr_outcome:
+      - kg_lz_mr_outcome
+    repository_standards:
+      - kg_lz_repository_standards
+    ad_hoc_read:
+      - kg_run_cypher
+  action_descriptions:
+    repository_history: when reading imported repository changes and their delivery outcomes
+    module_consumers: when finding Terraform roots that consume a local or shared module
+    account_roots: when finding Terraform roots explicitly recorded as managing AWS accounts
+    mr_outcome: when distinguishing proposed, merged, pipeline-tested, and applied change states
+    repository_standards: when reading imported standards and ADR relationships for a repository
+    ad_hoc_read: when no curated graph reader covers the requested relationship
+  action_keywords:
+    repository_history: [history, changed, changes, repository]
+    module_consumers: [module, consumer, consumers, blast radius]
+    account_roots: [account, accounts, terraform root]
+    mr_outcome: [merge request, pipeline, plan, applied]
+    repository_standards: [standard, standards, adr, governed]
+    ad_hoc_read: [graph, relationship, cypher]

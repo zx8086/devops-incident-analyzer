@@ -46,6 +46,11 @@ describe("curated kg_* tools", () => {
 			"kg_deployments_running_stack",
 			// SIO-1204: reverse-IP cache lookup.
 			"kg_ip_to_workload",
+			"kg_lz_account_roots",
+			"kg_lz_module_consumers",
+			"kg_lz_mr_outcome",
+			"kg_lz_repository_history",
+			"kg_lz_repository_standards",
 			// SIO-1204: persisted per-service network map.
 			"kg_network_map",
 			"kg_prior_root_causes",
@@ -53,6 +58,84 @@ describe("curated kg_* tools", () => {
 			"kg_stacks_using_module",
 			"kg_successful_prompts",
 		]);
+	});
+
+	test("Landing Zone curated tools render repository history and state graph incompleteness on empty results", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("CHANGE_TARGETS_REPOSITORY", [
+			{
+				changeId: "change-42",
+				summary: "Add account",
+				outcome: "applied",
+				createdAt: "2026-09-22T15:00:00.000Z",
+				mrUrl: "https://gitlab.com/example/-/merge_requests/42",
+				pipelineId: "9001",
+				pipelineStatus: "success",
+				planId: "plan-9001",
+				planStatus: "succeeded",
+				planSummary: "1 to add, 0 to change, 0 to destroy",
+			},
+		]);
+		_setGraphStoreForTesting(store);
+		const client = await connectedClient();
+		const output = await call(client, "kg_lz_repository_history", {
+			repository: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+		});
+		expect(output).toContain("change-42 [applied] Add account");
+		expect(output).toContain("pipeline 9001 success");
+		expect(output).toContain("plan plan-9001 succeeded");
+
+		_setGraphStoreForTesting(new InMemoryGraphStore());
+		const empty = await call(await connectedClient(), "kg_lz_repository_history", {
+			repository: "pvhcorp/dhco/aws/aws-landing-zone/missing",
+		});
+		expect(empty).toContain("graph may be incomplete");
+		expect(empty).toContain("verify against live GitLab");
+	});
+
+	test("Landing Zone curated tools expose module consumers, account roots, MR outcome, and standards", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("ROOT_USES_MODULE", [
+			{ rootId: "account:/", rootPath: ".", repositoryPath: "pvhcorp/dhco/aws/aws-landing-zone/account" },
+		]);
+		store.stub("managesAccounts = true", [
+			{ rootId: "account:/", rootPath: ".", repositoryPath: "pvhcorp/dhco/aws/aws-landing-zone/account" },
+		]);
+		store.stub("m.webUrl = $mrUrl", [
+			{
+				changeId: "change-42",
+				outcome: "applied",
+				mrUrl: "https://gitlab.com/example/-/merge_requests/42",
+				pipelineId: "9001",
+				pipelineStatus: "success",
+				planId: "plan-9001",
+				planStatus: "succeeded",
+				planSummary: "1 to add, 0 to change, 0 to destroy",
+			},
+		]);
+		store.stub("GOVERNED_BY", [
+			{
+				standardId: "pvh-terraform-standards",
+				standardTitle: "PVH Terraform Standards",
+				standardStatus: "accepted",
+				standardUrl: "https://example/standard",
+				adrId: "adr-account-vending",
+				adrTitle: "Account vending",
+				adrStatus: "accepted",
+				adrUrl: "https://example/adr",
+			},
+		]);
+		_setGraphStoreForTesting(store);
+		const client = await connectedClient();
+
+		expect(await call(client, "kg_lz_module_consumers", { moduleId: "account:modules/basic" })).toContain("account:/");
+		expect(await call(client, "kg_lz_account_roots", {})).toContain("account:/");
+		expect(
+			await call(client, "kg_lz_mr_outcome", { mrUrl: "https://gitlab.com/example/-/merge_requests/42" }),
+		).toContain("change-42 [applied]");
+		expect(await call(client, "kg_lz_repository_standards", { repository: "account" })).toContain(
+			"PVH Terraform Standards [accepted] implements Account vending [accepted]",
+		);
 	});
 
 	test("loud-fail when disabled: tells the model not to answer from prose", async () => {

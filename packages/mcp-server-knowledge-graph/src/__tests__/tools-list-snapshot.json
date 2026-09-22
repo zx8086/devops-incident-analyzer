@@ -27,6 +27,41 @@
 			"destructiveHint": false
 		}
 	},
+	"kg_lz_account_roots": {
+		"surfaceHash": "46410ed49d8e51e21068128b8f95a1bc9a2f8b678e1159f15b77a64700bc9f30",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_lz_module_consumers": {
+		"surfaceHash": "1db507f058f15b33a12c8276b7865e8d5221d30dad04d7889552512856c567f9",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_lz_mr_outcome": {
+		"surfaceHash": "58ae616873c9464d9114c35e7cf4b26e8fb634a88762511133a079a110d41aa7",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_lz_repository_history": {
+		"surfaceHash": "cc18e0962340688d858aa85e4e35766c698b8262cb8d912badc8857f8853ed9a",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_lz_repository_standards": {
+		"surfaceHash": "c54f83bd647f8bca593310720247c3d96bf5ed9ab30716386a0c74fd87f678ef",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
 	"kg_network_map": {
 		"surfaceHash": "f3a06b750f2af3eece9faedb00bdab55dbd316e5235f0bba7d46041e6e2f5035",
 		"annotations": {
@@ -42,7 +77,7 @@
 		}
 	},
 	"kg_run_cypher": {
-		"surfaceHash": "c29bf0b14de9748c94ee27f14ecc53933d8bab6a6ed392e1a82e8208c4680818",
+		"surfaceHash": "ca46e6ec1a05b236918165636b674d55d22cf1ff31b2838e4ab3c7346101fb8c",
 		"annotations": {
 			"readOnlyHint": true,
 			"destructiveHint": false

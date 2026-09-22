@@ -17,6 +17,147 @@ import type { GraphStore } from "./store.ts";
 // dependency on the mcp-server-knowledge-graph tool layer).
 const LIMIT_SCHEMA = z.number().int().positive().max(200);
 
+export interface LandingZoneChangeHistoryEntry {
+	changeId: string;
+	summary: string;
+	outcome: string;
+	createdAt: string;
+	mrUrl: string;
+	pipelineId: string;
+	pipelineStatus: string;
+	planId: string;
+	planStatus: string;
+	planSummary: string;
+}
+
+function shapeLandingZoneOutcome(row: Record<string, unknown>): LandingZoneChangeHistoryEntry {
+	return {
+		changeId: String(row.changeId ?? ""),
+		summary: String(row.summary ?? ""),
+		outcome: String(row.outcome ?? "proposed"),
+		createdAt: String(row.createdAt ?? ""),
+		mrUrl: String(row.mrUrl ?? ""),
+		pipelineId: String(row.pipelineId ?? ""),
+		pipelineStatus: String(row.pipelineStatus ?? ""),
+		planId: String(row.planId ?? ""),
+		planStatus: String(row.planStatus ?? ""),
+		planSummary: String(row.planSummary ?? ""),
+	};
+}
+
+export async function repositoryChangeHistory(
+	store: GraphStore,
+	repositoryPath: string,
+	limit = 20,
+): Promise<LandingZoneChangeHistoryEntry[]> {
+	if (!repositoryPath) return [];
+	LIMIT_SCHEMA.parse(limit);
+	const changes = await store.run<Record<string, unknown>>(
+		"MATCH (c:ConfigChange)-[:CHANGE_TARGETS_REPOSITORY]->(r:Repository {path: $repositoryPath}) RETURN c.id AS changeId, c.summary AS summary, c.outcome AS outcome, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
+		{ repositoryPath, limit },
+	);
+	return Promise.all(
+		changes.map(async (change) => {
+			const deliveries = await store.run<Record<string, unknown>>(
+				"MATCH (c:ConfigChange {id: $changeId}) OPTIONAL MATCH (c)-[:PROPOSED_IN]->(m:MergeRequest) OPTIONAL MATCH (m)-[:RAN]->(p:Pipeline) OPTIONAL MATCH (p)-[:PRODUCED]->(tp:TerraformPlan) RETURN coalesce(m.webUrl, m.url, '') AS mrUrl, p.id AS pipelineId, p.status AS pipelineStatus, tp.id AS planId, tp.status AS planStatus, tp.summary AS planSummary, p.createdAt AS pipelineCreatedAt, CAST(p.id AS INT64) AS pipelineOrder ORDER BY pipelineCreatedAt DESC, pipelineOrder DESC LIMIT 1",
+				{ changeId: String(change.changeId ?? "") },
+			);
+			return shapeLandingZoneOutcome({ ...change, ...(deliveries[0] ?? {}) });
+		}),
+	);
+}
+
+export interface TerraformRootConsumer {
+	rootId: string;
+	rootPath: string;
+	repositoryPath: string;
+}
+
+function shapeTerraformRoot(row: Record<string, unknown>): TerraformRootConsumer {
+	return {
+		rootId: String(row.rootId ?? ""),
+		rootPath: String(row.rootPath ?? ""),
+		repositoryPath: String(row.repositoryPath ?? ""),
+	};
+}
+
+export async function terraformModuleConsumers(store: GraphStore, moduleId: string): Promise<TerraformRootConsumer[]> {
+	if (!moduleId) return [];
+	const localRows = await store.run<Record<string, unknown>>(
+		"MATCH (r:Repository)-[:REPOSITORY_CONTAINS_ROOT]->(tr:TerraformRoot)-[:ROOT_USES_MODULE]->(tm:TerraformModule {id: $moduleId}) RETURN tr.id AS rootId, tr.path AS rootPath, r.path AS repositoryPath ORDER BY repositoryPath, rootPath",
+		{ moduleId },
+	);
+	const sharedRows = await store.run<Record<string, unknown>>(
+		"MATCH (r:Repository)-[:REPOSITORY_CONTAINS_ROOT]->(tr:TerraformRoot)-[:ROOT_USES_MODULE]->(tm:TerraformModule)-[:MODULE_USES_SHARED_MODULE]->(sm:SharedModule {id: $moduleId}) RETURN tr.id AS rootId, tr.path AS rootPath, r.path AS repositoryPath ORDER BY repositoryPath, rootPath",
+		{ moduleId },
+	);
+	return [
+		...new Map(
+			[...localRows, ...sharedRows].map((row) => {
+				const shaped = shapeTerraformRoot(row);
+				return [shaped.rootId, shaped];
+			}),
+		).values(),
+	];
+}
+
+export async function accountManagingRoots(
+	store: GraphStore,
+	repositoryPath?: string,
+): Promise<TerraformRootConsumer[]> {
+	const repositoryFilter = repositoryPath ? " AND r.path = $repositoryPath" : "";
+	const rows = await store.run<Record<string, unknown>>(
+		`MATCH (r:Repository)-[:REPOSITORY_CONTAINS_ROOT]->(tr:TerraformRoot) WHERE tr.managesAccounts = true${repositoryFilter} RETURN tr.id AS rootId, tr.path AS rootPath, r.path AS repositoryPath ORDER BY repositoryPath, rootPath`,
+		repositoryPath ? { repositoryPath } : undefined,
+	);
+	return rows.map(shapeTerraformRoot);
+}
+
+export type MergeRequestPipelineOutcome = Omit<LandingZoneChangeHistoryEntry, "summary" | "createdAt">;
+
+export async function mergeRequestPipelineOutcome(
+	store: GraphStore,
+	mrUrl: string,
+): Promise<MergeRequestPipelineOutcome | null> {
+	if (!mrUrl) return null;
+	const rows = await store.run<Record<string, unknown>>(
+		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest) WHERE m.webUrl = $mrUrl OR m.url = $mrUrl OPTIONAL MATCH (m)-[:RAN]->(p:Pipeline) OPTIONAL MATCH (p)-[:PRODUCED]->(tp:TerraformPlan) RETURN c.id AS changeId, c.summary AS summary, c.outcome AS outcome, c.createdAt AS createdAt, coalesce(m.webUrl, m.url) AS mrUrl, p.id AS pipelineId, p.status AS pipelineStatus, tp.id AS planId, tp.status AS planStatus, tp.summary AS planSummary, p.createdAt AS pipelineCreatedAt, CAST(p.id AS INT64) AS pipelineOrder ORDER BY pipelineCreatedAt DESC, pipelineOrder DESC LIMIT 1",
+		{ mrUrl },
+	);
+	if (!rows[0]) return null;
+	const { summary: _summary, createdAt: _createdAt, ...outcome } = shapeLandingZoneOutcome(rows[0]);
+	return outcome;
+}
+
+export interface RepositoryStandard {
+	standardId: string;
+	standardTitle: string;
+	standardStatus: string;
+	standardUrl: string;
+	adrId: string;
+	adrTitle: string;
+	adrStatus: string;
+	adrUrl: string;
+}
+
+export async function standardsForRepository(store: GraphStore, repositoryPath: string): Promise<RepositoryStandard[]> {
+	if (!repositoryPath) return [];
+	const rows = await store.run<Record<string, unknown>>(
+		"MATCH (r:Repository {path: $repositoryPath})-[:GOVERNED_BY]->(s:Standard) OPTIONAL MATCH (s)-[:IMPLEMENTS]->(a:ADR) RETURN s.id AS standardId, s.title AS standardTitle, s.status AS standardStatus, s.url AS standardUrl, a.id AS adrId, a.title AS adrTitle, a.status AS adrStatus, a.url AS adrUrl ORDER BY standardId, adrId",
+		{ repositoryPath },
+	);
+	return rows.map((row) => ({
+		standardId: String(row.standardId ?? ""),
+		standardTitle: String(row.standardTitle ?? ""),
+		standardStatus: String(row.standardStatus ?? ""),
+		standardUrl: String(row.standardUrl ?? ""),
+		adrId: String(row.adrId ?? ""),
+		adrTitle: String(row.adrTitle ?? ""),
+		adrStatus: String(row.adrStatus ?? ""),
+		adrUrl: String(row.adrUrl ?? ""),
+	}));
+}
+
 export interface ServiceDependency {
 	from: string;
 	to: string;
@@ -471,7 +612,7 @@ export async function priorChangesForDeployment(
 		mrUrl: string | null;
 		createdAt: string;
 	}>(
-		"MATCH (d:ElasticDeployment {name: $name})-[:CHANGED_BY]->(c:ConfigChange) OPTIONAL MATCH (c)-[:PROPOSED_IN]->(m:MergeRequest) RETURN c.id AS id, c.workflow AS workflow, c.summary AS summary, m.url AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
+		"MATCH (d:ElasticDeployment {name: $name})-[:CHANGED_BY]->(c:ConfigChange) OPTIONAL MATCH (c)-[:PROPOSED_IN]->(m:MergeRequest) RETURN c.id AS id, c.workflow AS workflow, c.summary AS summary, coalesce(m.webUrl, m.url) AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
 		{ name: deployment, limit },
 	);
 	return rows.map((r) => ({
@@ -556,7 +697,7 @@ export async function changeHistoryForStackInstance(
 		mrUrl: string | null;
 		createdAt: string;
 	}>(
-		"MATCH (c:ConfigChange)-[:TARGETS]->(si:StackInstance {id: $sid}) OPTIONAL MATCH (c)-[:PROPOSED_IN]->(m:MergeRequest) RETURN c.id AS id, c.workflow AS workflow, c.summary AS summary, c.outcome AS outcome, m.url AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
+		"MATCH (c:ConfigChange)-[:TARGETS]->(si:StackInstance {id: $sid}) OPTIONAL MATCH (c)-[:PROPOSED_IN]->(m:MergeRequest) RETURN c.id AS id, c.workflow AS workflow, c.summary AS summary, c.outcome AS outcome, coalesce(m.webUrl, m.url) AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
 		{ sid: stackInstanceId, limit },
 	);
 	return rows.map((r) => ({
@@ -592,7 +733,7 @@ export async function successfulPromptChanges(store: GraphStore, limit = 20): Pr
 		mrUrl: string;
 		createdAt: string;
 	}>(
-		"MATCH (p:Prompt) MATCH (c:ConfigChange {id: p.id})-[:PROPOSED_IN]->(m:MergeRequest) WHERE c.outcome = 'applied' RETURN p.text AS prompt, c.summary AS summary, c.workflow AS workflow, m.url AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
+		"MATCH (p:Prompt) MATCH (c:ConfigChange {id: p.id})-[:PROPOSED_IN]->(m:MergeRequest) WHERE c.outcome = 'applied' RETURN p.text AS prompt, c.summary AS summary, c.workflow AS workflow, coalesce(m.webUrl, m.url) AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
 		{ limit: safeLimit },
 	);
 	return rows.map((r) => ({
@@ -633,7 +774,7 @@ export async function appliedChanges(store: GraphStore, limit = 20): Promise<App
 		mrUrl: string | null;
 		createdAt: string;
 	}>(
-		"MATCH (c:ConfigChange) WHERE c.outcome = 'applied' OPTIONAL MATCH (c)-[:PROPOSED_IN]->(m:MergeRequest) OPTIONAL MATCH (p:Prompt {id: c.id}) RETURN p.text AS prompt, c.summary AS summary, c.workflow AS workflow, m.url AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
+		"MATCH (c:ConfigChange) WHERE c.outcome = 'applied' OPTIONAL MATCH (c)-[:PROPOSED_IN]->(m:MergeRequest) OPTIONAL MATCH (p:Prompt {id: c.id}) RETURN p.text AS prompt, c.summary AS summary, c.workflow AS workflow, coalesce(m.webUrl, m.url) AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
 		{ limit: safeLimit },
 	);
 	return rows.map((r) => ({
@@ -657,7 +798,7 @@ export interface ProposedConfigChange {
 
 export async function proposedChangesWithMr(store: GraphStore, limit = 200): Promise<ProposedConfigChange[]> {
 	const rows = await store.run<{ id: string; mrUrl: string | null; outcome: string | null }>(
-		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest) WHERE c.outcome = 'proposed' OR c.outcome IS NULL RETURN c.id AS id, m.url AS mrUrl, c.outcome AS outcome LIMIT $limit",
+		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest) WHERE c.outcome = 'proposed' OR c.outcome IS NULL RETURN c.id AS id, coalesce(m.webUrl, m.url) AS mrUrl, c.outcome AS outcome LIMIT $limit",
 		{ limit },
 	);
 	return rows
