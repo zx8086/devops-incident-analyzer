@@ -9,6 +9,8 @@ import {
 	type LandingZoneEvidenceCollectors,
 } from "./evidence.ts";
 import { selectLandingZoneKnowledge } from "./knowledge-selector.ts";
+import { reconcileEvidence } from "./reconciliation.ts";
+import { assessRisk } from "./risk.ts";
 import type { LandingZoneStateType } from "./state.ts";
 import type { LandingZoneIntent } from "./types.ts";
 
@@ -133,57 +135,81 @@ export async function joinLandingZoneEvidence(state: LandingZoneStateType): Prom
 export async function reconcileLandingZoneEvidence(
 	state: LandingZoneStateType,
 ): Promise<Partial<LandingZoneStateType>> {
+	const comparisons = reconcileEvidence(state.evidenceResults);
+	const conflicts = comparisons
+		.filter((comparison) => comparison.alignment === "divergent" || comparison.alignment === "exception")
+		.map(
+			(comparison) =>
+				`${comparison.claim}: ${comparison.alignment}; retain the live implementation and escalate before changing it.`,
+		);
+	const unavailableSources = [
+		state.gitlabEvidence,
+		state.okfEvidence,
+		state.terraformDocsEvidence,
+		state.awsDocsEvidence,
+		state.awsApiEvidence,
+		state.memoryEvidence,
+		state.knowledgeGraphEvidence,
+	]
+		.filter((outcome) => outcome?.status === "unavailable")
+		.map((outcome) => outcome?.source)
+		.filter((source): source is EvidenceSource => source !== undefined);
+	const status = (() => {
+		if (comparisons.length === 0) return "unknown" as const;
+		if (conflicts.length > 0) return "conflicting-evidence" as const;
+		if (comparisons.some((comparison) => comparison.alignment === "unverified")) return "unknown" as const;
+		if (comparisons.some((comparison) => comparison.alignment === "unresolved")) return "pending" as const;
+		return "aligned" as const;
+	})();
+	const conclusion = (() => {
+		if (status === "unknown")
+			return "Evidence is unavailable or unverified; no repository-specific conclusion can be made.";
+		if (status === "conflicting-evidence") {
+			return "Authoritative sources disagree; preserve the live implementation and request a platform decision before change.";
+		}
+		if (status === "pending")
+			return "Available evidence supports an explanation, but the full contract is not yet corroborated.";
+		return "Current PVH, repository, Terraform, and AWS evidence is aligned for the evaluated claims.";
+	})();
 	return {
 		reconciliation: {
-			status: state.evidenceResults.length > 0 ? "pending" : "unknown",
-			conclusion:
-				state.evidenceResults.length > 0
-					? "Evidence collected for reconciliation."
-					: "Live evidence not collected yet.",
-			comparisons: [],
-			conflicts: [],
-			unavailableSources: [
-				state.gitlabEvidence,
-				state.okfEvidence,
-				state.terraformDocsEvidence,
-				state.awsDocsEvidence,
-				state.awsApiEvidence,
-				state.memoryEvidence,
-				state.knowledgeGraphEvidence,
-			]
-				.filter((outcome) => outcome?.status === "unavailable")
-				.map((outcome) => outcome?.source)
-				.filter((source): source is EvidenceSource => source !== undefined),
+			status,
+			conclusion,
+			comparisons,
+			conflicts,
+			unavailableSources,
 		},
 	};
 }
 
 export async function assessLandingZoneRisk(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
-	const requiredEvidenceSources: EvidenceSource[] = state.intent === "propose-change" ? ["gitlab"] : [];
-	const missingEvidenceSources = requiredEvidenceSources.filter((source) => {
-		if (state.reconciliation?.unavailableSources.includes(source)) return true;
-		return !state.evidenceResults.some(
-			(item) => item.source === source && item.status === "observed" && item.freshness.status === "current",
-		);
+	if (!state.reconciliation) {
+		const blockedReason = "Evidence reconciliation is required before risk can be assessed.";
+		return {
+			blockedReason,
+			risk: {
+				level: "blocked",
+				reasons: [blockedReason],
+				requiresHumanDecision: true,
+				blocked: true,
+				stopConditions: [blockedReason],
+				requiredEvidenceSources: state.intent === "propose-change" ? ["gitlab"] : [],
+			},
+		};
+	}
+	const risk = assessRisk(state.reconciliation, {
+		intent: state.intent,
+		requestText: latestText(state.messages),
+		currentEvidenceSources: state.evidenceResults
+			.filter((item) => item.status === "observed" && item.freshness.status === "current")
+			.map((item) => item.source),
+		repositories: state.repositoryScope,
+		evidence: state.evidenceResults,
 	});
-	const blocked =
-		state.intent === "propose-change" &&
-		(state.reconciliation?.status === "unknown" || missingEvidenceSources.length > 0);
-	const blockedReason = blocked
-		? missingEvidenceSources.length > 0
-			? `Required live evidence is unavailable: ${missingEvidenceSources.join(", ")}.`
-			: "A proposed change requires current live evidence."
-		: null;
+	const blockedReason = risk.blocked ? (risk.stopConditions[0] ?? "The proposed change is blocked by policy.") : null;
 	return {
 		blockedReason,
-		risk: {
-			level: blocked ? "blocked" : state.intent === "propose-change" ? "high" : "low",
-			reasons: blocked ? [blockedReason ?? "Required live evidence is unavailable."] : [],
-			requiresHumanDecision: state.intent === "propose-change",
-			blocked,
-			stopConditions: blocked ? ["Required live repository evidence is unavailable."] : [],
-			requiredEvidenceSources,
-		},
+		risk,
 	};
 }
 
@@ -191,7 +217,9 @@ export async function answerLandingZoneQuestion(state: LandingZoneStateType): Pr
 	if (state.blockedReason) {
 		return { messages: [new AIMessage(state.blockedReason)], response: state.blockedReason, outcome: "blocked" };
 	}
-	const response = state.reconciliation?.conclusion ?? "No evidence conclusion is available.";
+	const conclusion = state.reconciliation?.conclusion ?? "No evidence conclusion is available.";
+	const limits = state.risk?.reasons ?? [];
+	const response = limits.length > 0 ? `${conclusion} Limits: ${limits.join(" ")}` : conclusion;
 	return {
 		messages: [new AIMessage(response)],
 		response,

@@ -72,7 +72,7 @@ const observedEvidence = {
 	retrievedAt: "2026-09-22T10:30:00.000Z",
 	status: "observed",
 	summary: "Account requests are authored in YAML.",
-	provenance: { path: "accounts/example.yml" },
+	provenance: { repository: "aws-lz-account-creator", path: "accounts/example.yml" },
 	freshness: { status: "current" },
 } as const;
 
@@ -249,8 +249,12 @@ describe("buildLandingZoneGraph", () => {
 		);
 
 		expect(result.messages.at(-1)?.getType()).toBe("ai");
-		expect(result.response).toBe("Evidence collected for reconciliation.");
-		expect(result.messages.at(-1)?.content).toBe("Evidence collected for reconciliation.");
+		expect(result.response).toContain(
+			"Available evidence supports an explanation, but the full contract is not yet corroborated.",
+		);
+		expect(result.response).toContain("general guidance only");
+		if (!result.response) throw new Error("expected a user-facing response");
+		expect(result.messages.at(-1)?.content).toBe(result.response);
 	});
 
 	test("still blocks an imperative account-creation request without live evidence", async () => {
