@@ -50,6 +50,15 @@ export const NODE_LABELS = [
 	// (== the turn's ConfigChange id when it opens an MR, so a prompt links to its
 	// change for free). RAW text, no truncation, no redaction.
 	"Prompt",
+	// SIO-1867: PVH Landing Zone repository, Terraform, plan, and governance model.
+	"GitLabGroup",
+	"Repository",
+	"TerraformRoot",
+	"TerraformModule",
+	"SharedModule",
+	"TerraformPlan",
+	"Standard",
+	"ADR",
 	// SIO-1100: telemetry-binding substrate. A TelemetrySource is one concrete
 	// observability coordinate (a log group, index, APM service name, topic...) that
 	// a service was observed to use. An Alias is a raw source-specific name that
@@ -102,6 +111,19 @@ export const REL_TYPES = [
 	"RAN",
 	// SIO-1038: a turn's Prompt -> the Session (thread) it was asked in.
 	"PROMPTED_IN",
+	// SIO-1867: Landing Zone physical relationship tables. Ladybug relationship
+	// tables are endpoint-typed, so additional CONTAINS, USES_MODULE, and TARGETS
+	// endpoint pairs use explicit table names instead of changing the established
+	// Elastic IaC tables above.
+	"CONTAINS",
+	"REPOSITORY_CONTAINS_ROOT",
+	"ROOT_USES_MODULE",
+	"MODULE_USES_SHARED_MODULE",
+	"CHANGE_TARGETS_REPOSITORY",
+	"CHANGE_TARGETS_ROOT",
+	"PRODUCED",
+	"GOVERNED_BY",
+	"IMPLEMENTS",
 	// SIO-1100: telemetry-binding edges. OBSERVED_IN is the bi-temporal service ->
 	// telemetry-source binding (confidence/provenance/validity on the edge);
 	// RESOLVES_TO maps a raw Alias to its canonical Service; DISCOVERED_DURING is
@@ -245,7 +267,13 @@ export const SessionNodeSchema = z.object({ threadId: z.string().min(1) }).stric
 // Pipeline.id is a STRING (the numeric GitLab pipeline id, stringified by the
 // writer) for primary-key uniformity with every other node in the graph.
 export const PipelineNodeSchema = z
-	.object({ id: z.string().min(1), status: z.string().optional(), url: z.string().optional() })
+	.object({
+		id: z.string().min(1),
+		status: z.string().optional(),
+		url: z.string().optional(),
+		createdAt: z.string().optional(),
+		updatedAt: z.string().optional(),
+	})
 	.strict();
 // SIO-1038: verbatim per-turn user prompt. text holds the RAW, untruncated prompt.
 export const PromptNodeSchema = z
@@ -254,6 +282,81 @@ export const PromptNodeSchema = z
 		text: z.string().optional(),
 		agent: z.string().optional(),
 		createdAt: z.string().optional(),
+	})
+	.strict();
+// SIO-1867: Landing Zone repository, Terraform, plan, and governance writer
+// boundaries. Stable IDs are caller-composed from GitLab paths and Terraform
+// paths; all mutable source metadata remains optional for incremental imports.
+export const GitLabGroupNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		path: z.string().min(1),
+		name: z.string().optional(),
+		webUrl: z.string().optional(),
+		lastSyncedAt: z.string().optional(),
+	})
+	.strict();
+export const RepositoryNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		groupId: z.string().min(1),
+		path: z.string().min(1),
+		name: z.string().optional(),
+		defaultBranch: z.string().optional(),
+		webUrl: z.string().optional(),
+		commitSha: z.string().optional(),
+		lastSyncedAt: z.string().optional(),
+	})
+	.strict();
+export const TerraformRootNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		repositoryId: z.string().min(1),
+		path: z.string().min(1),
+		managesAccounts: z.boolean().optional(),
+		lastSyncedAt: z.string().optional(),
+	})
+	.strict();
+export const TerraformModuleNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		repositoryId: z.string().min(1),
+		path: z.string().min(1),
+		name: z.string().optional(),
+		lastSyncedAt: z.string().optional(),
+	})
+	.strict();
+export const SharedModuleNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		source: z.string().min(1),
+		version: z.string().optional(),
+		lastSyncedAt: z.string().optional(),
+	})
+	.strict();
+export const TerraformPlanNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		status: z.string().optional(),
+		summary: z.string().optional(),
+		artifactUrl: z.string().optional(),
+		createdAt: z.string().optional(),
+	})
+	.strict();
+export const StandardNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		title: z.string().optional(),
+		status: z.string().optional(),
+		url: z.string().optional(),
+	})
+	.strict();
+export const AdrNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		title: z.string().optional(),
+		status: z.string().optional(),
+		url: z.string().optional(),
 	})
 	.strict();
 // SIO-1100: the closed set of telemetry-binding kinds. Each maps a per-datasource
@@ -393,6 +496,14 @@ export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
 export type SessionNode = z.infer<typeof SessionNodeSchema>;
 export type PipelineNode = z.infer<typeof PipelineNodeSchema>;
 export type PromptNode = z.infer<typeof PromptNodeSchema>;
+export type GitLabGroupNode = z.infer<typeof GitLabGroupNodeSchema>;
+export type RepositoryNode = z.infer<typeof RepositoryNodeSchema>;
+export type TerraformRootNode = z.infer<typeof TerraformRootNodeSchema>;
+export type TerraformModuleNode = z.infer<typeof TerraformModuleNodeSchema>;
+export type SharedModuleNode = z.infer<typeof SharedModuleNodeSchema>;
+export type TerraformPlanNode = z.infer<typeof TerraformPlanNodeSchema>;
+export type StandardNode = z.infer<typeof StandardNodeSchema>;
+export type AdrNode = z.infer<typeof AdrNodeSchema>;
 export type TelemetrySourceNode = z.infer<typeof TelemetrySourceNodeSchema>;
 export type AliasNode = z.infer<typeof AliasNodeSchema>;
 export type VpcNode = z.infer<typeof VpcNodeSchema>;
@@ -454,7 +565,7 @@ export const MIGRATIONS: readonly string[] = [
 	// (CREATE ... IF NOT EXISTS no-ops on an existing table, so it cannot add them).
 	"CREATE NODE TABLE IF NOT EXISTS ElasticDeployment(name STRING, ecId STRING, region STRING, PRIMARY KEY(name))",
 	"CREATE NODE TABLE IF NOT EXISTS ConfigChange(id STRING, workflow STRING, filePath STRING, summary STRING, createdAt STRING, outcome STRING, PRIMARY KEY(id))",
-	"CREATE NODE TABLE IF NOT EXISTS MergeRequest(url STRING, PRIMARY KEY(url))",
+	"CREATE NODE TABLE IF NOT EXISTS MergeRequest(url STRING, webUrl STRING, projectId STRING, iid STRING, lastSyncedAt STRING, PRIMARY KEY(url))",
 	"CREATE REL TABLE IF NOT EXISTS CHANGED_BY(FROM ElasticDeployment TO ConfigChange)",
 	"CREATE REL TABLE IF NOT EXISTS PROPOSED_IN(FROM ConfigChange TO MergeRequest)",
 	// SIO-965: three-layer IaC nodes + edges.
@@ -463,7 +574,7 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE NODE TABLE IF NOT EXISTS StackInstance(id STRING, deployment STRING, stack STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS Workflow(name STRING, PRIMARY KEY(name))",
 	"CREATE NODE TABLE IF NOT EXISTS Session(threadId STRING, PRIMARY KEY(threadId))",
-	"CREATE NODE TABLE IF NOT EXISTS Pipeline(id STRING, status STRING, url STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS Pipeline(id STRING, status STRING, url STRING, createdAt STRING, updatedAt STRING, PRIMARY KEY(id))",
 	// SIO-1038: verbatim per-turn user prompt. text holds the RAW, untruncated prompt.
 	"CREATE NODE TABLE IF NOT EXISTS Prompt(id STRING, text STRING, agent STRING, createdAt STRING, PRIMARY KEY(id))",
 	"CREATE REL TABLE IF NOT EXISTS USES_MODULE(FROM Stack TO Module)",
@@ -475,6 +586,24 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE REL TABLE IF NOT EXISTS RAN(FROM MergeRequest TO Pipeline)",
 	// SIO-1038: a turn's Prompt -> the Session (thread) it was asked in.
 	"CREATE REL TABLE IF NOT EXISTS PROMPTED_IN(FROM Prompt TO Session)",
+	// SIO-1867: PVH Landing Zone repository, Terraform, plan, and governance graph.
+	"CREATE NODE TABLE IF NOT EXISTS GitLabGroup(id STRING, path STRING, name STRING, webUrl STRING, lastSyncedAt STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS Repository(id STRING, groupId STRING, path STRING, name STRING, defaultBranch STRING, webUrl STRING, commitSha STRING, lastSyncedAt STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS TerraformRoot(id STRING, repositoryId STRING, path STRING, managesAccounts BOOLEAN, lastSyncedAt STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS TerraformModule(id STRING, repositoryId STRING, path STRING, name STRING, lastSyncedAt STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS SharedModule(id STRING, source STRING, version STRING, lastSyncedAt STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS TerraformPlan(id STRING, status STRING, summary STRING, artifactUrl STRING, createdAt STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS Standard(id STRING, title STRING, status STRING, url STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS ADR(id STRING, title STRING, status STRING, url STRING, PRIMARY KEY(id))",
+	"CREATE REL TABLE IF NOT EXISTS CONTAINS(FROM GitLabGroup TO Repository)",
+	"CREATE REL TABLE IF NOT EXISTS REPOSITORY_CONTAINS_ROOT(FROM Repository TO TerraformRoot)",
+	"CREATE REL TABLE IF NOT EXISTS ROOT_USES_MODULE(FROM TerraformRoot TO TerraformModule)",
+	"CREATE REL TABLE IF NOT EXISTS MODULE_USES_SHARED_MODULE(FROM TerraformModule TO SharedModule)",
+	"CREATE REL TABLE IF NOT EXISTS CHANGE_TARGETS_REPOSITORY(FROM ConfigChange TO Repository)",
+	"CREATE REL TABLE IF NOT EXISTS CHANGE_TARGETS_ROOT(FROM ConfigChange TO TerraformRoot)",
+	"CREATE REL TABLE IF NOT EXISTS PRODUCED(FROM Pipeline TO TerraformPlan)",
+	"CREATE REL TABLE IF NOT EXISTS GOVERNED_BY(FROM Repository TO Standard)",
+	"CREATE REL TABLE IF NOT EXISTS IMPLEMENTS(FROM Standard TO ADR)",
 	// SIO-1100: telemetry-binding substrate (new tables only; existing tables + the
 	// bare-name Service PK are untouched). OBSERVED_IN and RESOLVES_TO are the ONLY
 	// bi-temporal edges in the graph: tInvalid="" means currently valid; staleness
@@ -534,6 +663,12 @@ export const ALTER_MIGRATIONS: readonly string[] = [
 	// incident's report (or when a learn-from match is confirmed). "" = uncurated.
 	"ALTER TABLE Incident ADD ticketKey STRING DEFAULT ''",
 	"ALTER TABLE ConfigChange ADD outcome STRING DEFAULT 'proposed'",
+	"ALTER TABLE MergeRequest ADD webUrl STRING DEFAULT ''",
+	"ALTER TABLE MergeRequest ADD projectId STRING DEFAULT ''",
+	"ALTER TABLE MergeRequest ADD iid STRING DEFAULT ''",
+	"ALTER TABLE MergeRequest ADD lastSyncedAt STRING DEFAULT ''",
+	"ALTER TABLE Pipeline ADD createdAt STRING DEFAULT ''",
+	"ALTER TABLE Pipeline ADD updatedAt STRING DEFAULT ''",
 	"ALTER TABLE ElasticDeployment ADD ecId STRING DEFAULT ''",
 	"ALTER TABLE ElasticDeployment ADD region STRING DEFAULT ''",
 	// SIO-1104 (5a): lifecycle columns for the topology-managed rel tables on graphs

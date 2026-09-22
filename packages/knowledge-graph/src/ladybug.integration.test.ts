@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	accountManagingRoots,
 	appMapForServices,
 	bindingsForServices,
 	changeHistoryForStackInstance,
@@ -24,8 +25,11 @@ import {
 	priorChangesForDeployment,
 	priorRelationshipsForServices,
 	proposedChangesWithMr,
+	repositoryChangeHistory,
 	rootCauseForIncident,
 	stacksUsingModule,
+	standardsForRepository,
+	terraformModuleConsumers,
 	topology,
 } from "./reader.ts";
 import { resolutionFromAnnotations } from "./rebuild.ts";
@@ -38,13 +42,19 @@ import {
 	linkStackModule,
 	purgeUncuratedIncidents,
 	recordAppMapTopologyEdges,
+	recordGovernanceBinding,
 	recordIacChange,
 	recordIncident,
 	recordIpBinding,
+	recordLandingZoneChange,
+	recordLandingZoneRepository,
+	recordModuleUsage,
 	recordNetworkTopology,
 	recordPipeline,
 	recordRootCause,
 	recordServiceBinding,
+	recordTerraformPlan,
+	recordTerraformRoot,
 	recordTopologyEdges,
 	seedDeployments,
 	seedModules,
@@ -82,6 +92,127 @@ afterAll(() => {
 });
 
 describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
+	test("Landing Zone repository model is idempotent and queryable", async () => {
+		const store = new LadybugStore(join(dir, "lz-repository-model"));
+		await store.init();
+		const repositoryPath = "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator";
+		const previousRepositoryPath = "pvhcorp/dhco/aws/aws-landing-zone/account-creator";
+		const groupId = "10";
+		const repositoryId = "101";
+		const rootId = "aws-lz-account-creator:/";
+		const moduleId = "aws-lz-account-creator:modules/account-basic";
+		const mrUrl = `${repositoryPath}/-/merge_requests/42`;
+
+		for (const [path, commitSha] of [
+			[previousRepositoryPath, "abc1234"],
+			[repositoryPath, "def5678"],
+		] as const) {
+			await recordLandingZoneRepository(store, {
+				group: { id: groupId, path: "pvhcorp/dhco/aws/aws-landing-zone" },
+				repository: {
+					id: repositoryId,
+					groupId,
+					path,
+					...(commitSha === "abc1234" ? { name: "aws-lz-account-creator" } : {}),
+					commitSha,
+				},
+			});
+		}
+		await recordTerraformRoot(store, { id: rootId, repositoryId, path: ".", managesAccounts: true });
+		await recordModuleUsage(store, {
+			rootId,
+			module: { id: moduleId, repositoryId, path: "modules/account-basic", name: "account-basic" },
+		});
+		await recordLandingZoneChange(store, {
+			id: "change-42",
+			repositoryId,
+			rootId,
+			summary: "Add account",
+			mergeRequest: {
+				id: `${repositoryId}:42`,
+				projectId: repositoryId,
+				iid: "42",
+				webUrl: `${previousRepositoryPath}/-/merge_requests/42`,
+			},
+			outcome: "proposed",
+			createdAt: "2026-09-22T15:00:00.000Z",
+		});
+		await recordLandingZoneChange(store, {
+			id: "change-42",
+			repositoryId,
+			rootId,
+			mergeRequest: { id: `${repositoryId}:42`, projectId: repositoryId, iid: "42", webUrl: mrUrl },
+			outcome: "applied",
+		});
+		await recordLandingZoneChange(store, {
+			id: "change-42",
+			repositoryId,
+			rootId,
+			mergeRequest: { id: `${repositoryId}:42`, projectId: repositoryId, iid: "42", webUrl: mrUrl },
+		});
+		await recordPipeline(store, {
+			mrId: `${repositoryId}:42`,
+			mrUrl,
+			projectId: repositoryId,
+			iid: "42",
+			pipelineId: "9",
+			status: "failed",
+			createdAt: "2026-09-22T15:05:00.000Z",
+		});
+		await recordPipeline(store, {
+			mrId: `${repositoryId}:42`,
+			mrUrl,
+			projectId: repositoryId,
+			iid: "42",
+			pipelineId: "10",
+			status: "success",
+			createdAt: "2026-09-22T15:10:00.000Z",
+		});
+		await recordTerraformPlan(store, {
+			pipelineId: "10",
+			plan: { id: "plan-10", status: "succeeded", summary: "1 to add, 0 to change, 0 to destroy" },
+		});
+		await recordGovernanceBinding(store, {
+			repositoryId,
+			standard: { id: "pvh-terraform-standards", title: "PVH Terraform Standards", status: "accepted" },
+			adr: { id: "adr-account-vending", title: "Account vending", status: "accepted" },
+		});
+
+		const repositoryCount = await store.run<{ n: number }>("MATCH (r:Repository {id: $id}) RETURN count(r) AS n", {
+			id: repositoryId,
+		});
+		expect(Number(repositoryCount[0]?.n)).toBe(1);
+		const repositoryMetadata = await store.run<{ name: string; commitSha: string }>(
+			"MATCH (r:Repository {id: $id}) RETURN r.name AS name, r.commitSha AS commitSha",
+			{ id: repositoryId },
+		);
+		expect(repositoryMetadata).toEqual([{ name: "aws-lz-account-creator", commitSha: "def5678" }]);
+		const mergeRequestCount = await store.run<{ n: number }>(
+			"MATCH (m:MergeRequest {projectId: $projectId, iid: $iid}) RETURN count(m) AS n",
+			{ projectId: repositoryId, iid: "42" },
+		);
+		expect(Number(mergeRequestCount[0]?.n)).toBe(1);
+		expect(await terraformModuleConsumers(store, moduleId)).toEqual([{ rootId, rootPath: ".", repositoryPath }]);
+		expect(await accountManagingRoots(store, repositoryPath)).toEqual([{ rootId, rootPath: ".", repositoryPath }]);
+		const history = await repositoryChangeHistory(store, repositoryPath);
+		expect(history).toHaveLength(1);
+		expect(history[0]?.outcome).toBe("applied");
+		expect(history[0]?.pipelineId).toBe("10");
+		expect(await standardsForRepository(store, repositoryPath)).toEqual([
+			{
+				standardId: "pvh-terraform-standards",
+				standardTitle: "PVH Terraform Standards",
+				standardStatus: "accepted",
+				standardUrl: "",
+				adrId: "adr-account-vending",
+				adrTitle: "Account vending",
+				adrStatus: "accepted",
+				adrUrl: "",
+			},
+		]);
+		await store.close();
+	});
+
 	test("init -> parameterized write -> read round-trip", async () => {
 		const store = new LadybugStore(join(dir, "db"));
 		await store.init();
@@ -374,8 +505,9 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		// The reconciler advances req-a to its true terminal outcome; it must then drop from the enum.
 		await setChangeOutcome(store, "req-a", "applied");
 		expect(await proposedChangesWithMr(store)).toEqual([]);
+		await setChangeOutcome(store, "req-a", "proposed");
 
-		// And the panel query now reads the terminal outcome (req-a TARGETS this stack instance).
+		// A stale proposal replay cannot regress the terminal outcome.
 		const history = await changeHistoryForStackInstance(store, "eu-b2b/lifecycle-policies");
 		const reconciled = history.find((c) => c.id === "req-a");
 		expect(reconciled?.outcome).toBe("applied");

@@ -1,5 +1,6 @@
 // knowledge-graph/src/knowledge-graph.test.ts
 import { describe, expect, test } from "bun:test";
+import * as knowledgeGraphApi from "./index.ts";
 import {
 	ALTER_MIGRATIONS,
 	appliedChanges,
@@ -22,6 +23,7 @@ import {
 	linkResolution,
 	linkStackModule,
 	MIGRATIONS,
+	NODE_LABELS,
 	priorChangesForDeployment,
 	priorRelationshipsForServices,
 	priorRootCauses,
@@ -54,6 +56,12 @@ import {
 } from "./index.ts";
 import { DEPLOYMENT_INVENTORY, parseModuleSources } from "./seed-iac.ts";
 
+function requiredLandingZoneApi<T>(name: string): T {
+	const value = (knowledgeGraphApi as unknown as Record<string, unknown>)[name];
+	expect(value).toBeDefined();
+	return value as T;
+}
+
 describe("schema", () => {
 	test("MIGRATIONS are idempotent node/rel DDL", () => {
 		expect(MIGRATIONS.length).toBeGreaterThan(0);
@@ -62,6 +70,55 @@ describe("schema", () => {
 		expect(MIGRATIONS.some((m) => m.startsWith("CREATE REL TABLE"))).toBe(true);
 		// embedding column dimension matches the Titan v2 constant
 		expect(MIGRATIONS.some((m) => m.includes(`DOUBLE[${EMBEDDING_DIM}]`))).toBe(true);
+	});
+
+	test("MIGRATIONS model Landing Zone repositories, Terraform structure, plans, and governance", () => {
+		for (const label of [
+			"GitLabGroup",
+			"Repository",
+			"TerraformRoot",
+			"TerraformModule",
+			"SharedModule",
+			"TerraformPlan",
+			"Standard",
+			"ADR",
+		] as const) {
+			expect(NODE_LABELS).toContain(label);
+			expect(MIGRATIONS.some((migration) => migration.includes(`NODE TABLE IF NOT EXISTS ${label}(`))).toBeTrue();
+		}
+
+		const relationships = [
+			["CONTAINS", "FROM GitLabGroup TO Repository"],
+			["REPOSITORY_CONTAINS_ROOT", "FROM Repository TO TerraformRoot"],
+			["ROOT_USES_MODULE", "FROM TerraformRoot TO TerraformModule"],
+			["MODULE_USES_SHARED_MODULE", "FROM TerraformModule TO SharedModule"],
+			["CHANGE_TARGETS_REPOSITORY", "FROM ConfigChange TO Repository"],
+			["CHANGE_TARGETS_ROOT", "FROM ConfigChange TO TerraformRoot"],
+			["PRODUCED", "FROM Pipeline TO TerraformPlan"],
+			["GOVERNED_BY", "FROM Repository TO Standard"],
+			["IMPLEMENTS", "FROM Standard TO ADR"],
+		] as const;
+		for (const [relationship, endpoints] of relationships) {
+			const migration = MIGRATIONS.find((candidate) => candidate.includes(`REL TABLE IF NOT EXISTS ${relationship}(`));
+			expect(migration).toContain(endpoints);
+		}
+	});
+
+	test("Landing Zone node schemas reject blank stable identities", () => {
+		for (const [schemaName, valid, identity] of [
+			["GitLabGroupNodeSchema", { id: "10", path: "pvhcorp/dhco" }, "id"],
+			["RepositoryNodeSchema", { id: "101", groupId: "10", path: "pvhcorp/dhco/repo" }, "id"],
+			["TerraformRootNodeSchema", { id: "101:.", repositoryId: "101", path: "." }, "id"],
+			["TerraformModuleNodeSchema", { id: "101:modules/x", repositoryId: "101", path: "modules/x" }, "id"],
+			["SharedModuleNodeSchema", { id: "source:v1", source: "source" }, "id"],
+			["TerraformPlanNodeSchema", { id: "plan-1" }, "id"],
+			["StandardNodeSchema", { id: "standard-1" }, "id"],
+			["AdrNodeSchema", { id: "adr-1" }, "id"],
+		] as const) {
+			const schema = requiredLandingZoneApi<{ safeParse: (value: unknown) => { success: boolean } }>(schemaName);
+			expect(schema.safeParse(valid).success).toBeTrue();
+			expect(schema.safeParse({ ...valid, [identity]: "" }).success).toBeFalse();
+		}
 	});
 
 	// SIO-965: three-layer node/rel tables + the tolerant outcome column migration.
@@ -128,6 +185,328 @@ describe("schema", () => {
 		}
 		// RUNS_ON is born with its columns; no ALTER needed.
 		expect(ALTER_MIGRATIONS.some((m) => m.includes("RUNS_ON"))).toBe(false);
+	});
+});
+
+describe("Landing Zone graph writers", () => {
+	test("recordLandingZoneRepository re-imports one stable repository identity and refreshes source metadata", async () => {
+		const record =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, input: Record<string, unknown>) => Promise<void>>(
+				"recordLandingZoneRepository",
+			);
+		const store = new InMemoryGraphStore();
+		const input = {
+			group: { id: "10", path: "pvhcorp/dhco/aws/aws-landing-zone" },
+			repository: {
+				id: "101",
+				groupId: "10",
+				path: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+				name: "aws-lz-account-creator",
+				defaultBranch: "main",
+				webUrl: "https://gitlab.com/pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+				commitSha: "abc1234",
+				lastSyncedAt: "2026-09-22T15:00:00.000Z",
+			},
+		};
+
+		await record(store, input);
+		await record(store, {
+			group: input.group,
+			repository: {
+				id: input.repository.id,
+				groupId: input.repository.groupId,
+				path: input.repository.path,
+				commitSha: "def5678",
+			},
+		});
+
+		const repositories = store.calls.filter((call) => call.cypher.includes("MERGE (r:Repository"));
+		expect(repositories).toHaveLength(2);
+		expect(repositories.map((call) => call.params?.id)).toEqual(["101", "101"]);
+		expect(repositories[1]?.params?.commitSha).toBe("def5678");
+		expect(repositories[1]?.params?.name).toBeNull();
+		expect(repositories[1]?.cypher).toContain("r.name = coalesce($name, r.name)");
+		expect(repositories[1]?.cypher).toContain("r.lastSyncedAt = $lastSyncedAt");
+		expect(store.calls.filter((call) => call.cypher.includes("[:CONTAINS]"))).toHaveLength(2);
+	});
+
+	test("recordTerraformRoot and recordModuleUsage preserve typed root, local-module, and shared-module edges", async () => {
+		const recordRoot =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, input: Record<string, unknown>) => Promise<void>>(
+				"recordTerraformRoot",
+			);
+		const recordUsage =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, input: Record<string, unknown>) => Promise<void>>(
+				"recordModuleUsage",
+			);
+		const store = new InMemoryGraphStore();
+
+		await recordRoot(store, {
+			id: "aws-lz-account-creator:/",
+			repositoryId: "101",
+			path: ".",
+			managesAccounts: true,
+			lastSyncedAt: "2026-09-22T15:00:00.000Z",
+		});
+		await recordUsage(store, {
+			rootId: "aws-lz-account-creator:/",
+			module: {
+				id: "aws-lz-account-creator:modules/account-basic",
+				repositoryId: "101",
+				path: "modules/account-basic",
+				name: "account-basic",
+			},
+			sharedModule: {
+				id: "gitlab.com/pvhcorp/terraform/aws-modules/tags:v2.0.0",
+				source: "git::https://gitlab.com/pvhcorp/terraform/aws-modules/tags.git",
+				version: "v2.0.0",
+			},
+		});
+
+		expect(store.calls.some((call) => call.cypher.includes("REPOSITORY_CONTAINS_ROOT"))).toBeTrue();
+		expect(store.calls.some((call) => call.cypher.includes("ROOT_USES_MODULE"))).toBeTrue();
+		expect(store.calls.some((call) => call.cypher.includes("MODULE_USES_SHARED_MODULE"))).toBeTrue();
+		const root = store.calls.find((call) => call.cypher.includes("MERGE (tr:TerraformRoot"));
+		expect(root?.params?.managesAccounts).toBeTrue();
+	});
+
+	test("recordLandingZoneChange reuses change, MR, workflow, and session nodes while targeting repository and root", async () => {
+		const record =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, input: Record<string, unknown>) => Promise<void>>(
+				"recordLandingZoneChange",
+			);
+		const store = new InMemoryGraphStore();
+
+		await record(store, {
+			id: "lz-change-42",
+			repositoryId: "101",
+			rootId: "aws-lz-account-creator:/",
+			workflow: "account-vending",
+			threadId: "thread-42",
+			summary: "Add example account",
+			createdAt: "2026-09-22T15:00:00.000Z",
+			mergeRequest: {
+				id: "101:42",
+				projectId: "101",
+				iid: "42",
+				webUrl: "https://gitlab.com/pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator/-/merge_requests/42",
+			},
+		});
+
+		expect(store.calls.some((call) => call.cypher.includes("CHANGE_TARGETS_REPOSITORY"))).toBeTrue();
+		expect(store.calls.some((call) => call.cypher.includes("CHANGE_TARGETS_ROOT"))).toBeTrue();
+		expect(store.calls.some((call) => call.cypher.includes("PROPOSED_IN"))).toBeTrue();
+		expect(store.calls.some((call) => call.cypher.includes("VIA_WORKFLOW"))).toBeTrue();
+		expect(store.calls.some((call) => call.cypher.includes("IN_SESSION"))).toBeTrue();
+		const changeWrite = store.calls.find((call) => call.cypher.includes("MERGE (c:ConfigChange"));
+		expect(changeWrite?.cypher).toContain("c.createdAt = coalesce(c.createdAt, $createdAt)");
+		expect(changeWrite?.cypher).toContain("c.outcome = CASE");
+		expect(changeWrite?.cypher).toContain("WHEN c.outcome = 'applied' THEN c.outcome");
+		expect(changeWrite?.cypher).toContain("WHEN $outcome = 'proposed'");
+	});
+
+	test("recordTerraformPlan and recordGovernanceBinding attach outcomes and standards with stable identities", async () => {
+		const recordPlan =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, input: Record<string, unknown>) => Promise<void>>(
+				"recordTerraformPlan",
+			);
+		const recordGovernance =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, input: Record<string, unknown>) => Promise<void>>(
+				"recordGovernanceBinding",
+			);
+		const store = new InMemoryGraphStore();
+
+		await recordPlan(store, {
+			pipelineId: "9001",
+			plan: {
+				id: "aws-lz-account-creator:9001:plan",
+				status: "succeeded",
+				summary: "1 to add, 0 to change, 0 to destroy",
+				artifactUrl: "https://gitlab.com/example/-/jobs/9001/artifacts",
+				createdAt: "2026-09-22T15:10:00.000Z",
+			},
+		});
+		await recordGovernance(store, {
+			repositoryId: "101",
+			standard: { id: "pvh-terraform-standards", title: "PVH Terraform Standards", status: "accepted" },
+			adr: { id: "adr-account-vending", title: "Account vending", status: "accepted" },
+		});
+
+		expect(store.calls.some((call) => call.cypher.includes("[:PRODUCED]"))).toBeTrue();
+		expect(store.calls.some((call) => call.cypher.includes("[:GOVERNED_BY]"))).toBeTrue();
+		expect(store.calls.some((call) => call.cypher.includes("[:IMPLEMENTS]"))).toBeTrue();
+	});
+});
+
+describe("Landing Zone graph readers", () => {
+	test("repositoryChangeHistory returns MR, pipeline, and plan outcomes newest first", async () => {
+		const read =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, repositoryPath: string, limit?: number) => Promise<unknown[]>>(
+				"repositoryChangeHistory",
+			);
+		const store = new InMemoryGraphStore();
+		store.stub("CHANGE_TARGETS_REPOSITORY", [
+			{
+				changeId: "change-42",
+				summary: "Add account",
+				outcome: "applied",
+				createdAt: "2026-09-22T15:00:00.000Z",
+			},
+		]);
+		store.stub("PROPOSED_IN", [
+			{
+				mrUrl: "https://gitlab.com/example/-/merge_requests/42",
+				pipelineId: "9001",
+				pipelineStatus: "success",
+				planId: "plan-9001",
+				planStatus: "succeeded",
+				planSummary: "1 to add, 0 to change, 0 to destroy",
+			},
+		]);
+
+		expect(await read(store, "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator", 10)).toEqual([
+			{
+				changeId: "change-42",
+				summary: "Add account",
+				outcome: "applied",
+				createdAt: "2026-09-22T15:00:00.000Z",
+				mrUrl: "https://gitlab.com/example/-/merge_requests/42",
+				pipelineId: "9001",
+				pipelineStatus: "success",
+				planId: "plan-9001",
+				planStatus: "succeeded",
+				planSummary: "1 to add, 0 to change, 0 to destroy",
+			},
+		]);
+		const call = store.calls.find((candidate) => candidate.cypher.includes("CHANGE_TARGETS_REPOSITORY"));
+		expect(call?.params).toEqual({
+			repositoryPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+			limit: 10,
+		});
+		expect(call?.cypher).toContain("ORDER BY c.createdAt DESC LIMIT $limit");
+		expect(store.calls.at(-1)?.cypher).toContain("ORDER BY pipelineCreatedAt DESC, pipelineOrder DESC LIMIT 1");
+		expect(await read(store, "")).toEqual([]);
+	});
+
+	test("terraformModuleConsumers and accountManagingRoots return typed repository paths", async () => {
+		const moduleConsumers =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, moduleId: string) => Promise<unknown[]>>(
+				"terraformModuleConsumers",
+			);
+		const accountRoots =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, repositoryPath?: string) => Promise<unknown[]>>(
+				"accountManagingRoots",
+			);
+		const consumerStore = new InMemoryGraphStore();
+		consumerStore.stub("ROOT_USES_MODULE", [
+			{
+				rootId: "aws-lz-account-creator:/",
+				rootPath: ".",
+				repositoryPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+			},
+		]);
+		const accountStore = new InMemoryGraphStore();
+		accountStore.stub("managesAccounts = true", [
+			{
+				rootId: "aws-lz-account-creator:/",
+				rootPath: ".",
+				repositoryPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+			},
+		]);
+
+		expect(await moduleConsumers(consumerStore, "aws-lz-account-creator:modules/account-basic")).toEqual([
+			{
+				rootId: "aws-lz-account-creator:/",
+				rootPath: ".",
+				repositoryPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+			},
+		]);
+		const sharedConsumerStore = new InMemoryGraphStore();
+		sharedConsumerStore.stub("MODULE_USES_SHARED_MODULE", [
+			{
+				rootId: "aws-lz-account-creator:/",
+				rootPath: ".",
+				repositoryPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+			},
+		]);
+		expect(
+			await moduleConsumers(sharedConsumerStore, "gitlab.com/pvhcorp/terraform/aws-modules/tags:v2.0.0"),
+		).toHaveLength(1);
+		expect(await accountRoots(accountStore)).toEqual([
+			{
+				rootId: "aws-lz-account-creator:/",
+				rootPath: ".",
+				repositoryPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+			},
+		]);
+	});
+
+	test("mergeRequestPipelineOutcome returns the latest verified delivery chain or null", async () => {
+		const read =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, mrUrl: string) => Promise<unknown | null>>(
+				"mergeRequestPipelineOutcome",
+			);
+		const store = new InMemoryGraphStore();
+		store.stub("m.webUrl = $mrUrl", [
+			{
+				changeId: "change-42",
+				outcome: "applied",
+				mrUrl: "https://gitlab.com/example/-/merge_requests/42",
+				pipelineId: "9001",
+				pipelineStatus: "success",
+				planId: "plan-9001",
+				planStatus: "succeeded",
+				planSummary: "1 to add, 0 to change, 0 to destroy",
+			},
+		]);
+
+		expect(await read(store, "https://gitlab.com/example/-/merge_requests/42")).toEqual({
+			changeId: "change-42",
+			outcome: "applied",
+			mrUrl: "https://gitlab.com/example/-/merge_requests/42",
+			pipelineId: "9001",
+			pipelineStatus: "success",
+			planId: "plan-9001",
+			planStatus: "succeeded",
+			planSummary: "1 to add, 0 to change, 0 to destroy",
+		});
+		expect(store.calls.at(-1)?.cypher).toContain("ORDER BY pipelineCreatedAt DESC, pipelineOrder DESC LIMIT 1");
+		expect(await read(new InMemoryGraphStore(), "https://gitlab.com/example/-/merge_requests/404")).toBeNull();
+		expect(await read(store, "")).toBeNull();
+	});
+
+	test("standardsForRepository returns standards and their implementing ADRs", async () => {
+		const read =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, repositoryPath: string) => Promise<unknown[]>>(
+				"standardsForRepository",
+			);
+		const store = new InMemoryGraphStore();
+		store.stub("GOVERNED_BY", [
+			{
+				standardId: "pvh-terraform-standards",
+				standardTitle: "PVH Terraform Standards",
+				standardStatus: "accepted",
+				standardUrl: "https://example/standards",
+				adrId: "adr-account-vending",
+				adrTitle: "Account vending",
+				adrStatus: "accepted",
+				adrUrl: "https://example/adrs/account-vending",
+			},
+		]);
+
+		expect(await read(store, "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator")).toEqual([
+			{
+				standardId: "pvh-terraform-standards",
+				standardTitle: "PVH Terraform Standards",
+				standardStatus: "accepted",
+				standardUrl: "https://example/standards",
+				adrId: "adr-account-vending",
+				adrTitle: "Account vending",
+				adrStatus: "accepted",
+				adrUrl: "https://example/adrs/account-vending",
+			},
+		]);
+		expect(await read(store, "")).toEqual([]);
 	});
 });
 
@@ -381,13 +760,26 @@ describe("writer (parameterized, injection-safe)", () => {
 		await recordPipeline(empty, { mrUrl: "", pipelineId: 1 });
 		await recordPipeline(empty, { mrUrl: "https://gl/mr/1", pipelineId: "" });
 		expect(empty.calls).toEqual([]);
+		await expect(
+			recordPipeline(new InMemoryGraphStore(), {
+				mrId: "101:42",
+				mrUrl: "https://gl/mr/42",
+				projectId: "101",
+				iid: "42",
+				pipelineId: "10",
+			} as never),
+		).rejects.toThrow("Landing Zone pipelines require createdAt");
 	});
 
 	test("setChangeOutcome sets the outcome with bound params; no-op without an id", async () => {
 		const store = new InMemoryGraphStore();
 		await setChangeOutcome(store, "req-1", "applied");
-		expect(store.calls[0]?.cypher).toContain("SET c.outcome = $outcome");
+		expect(store.calls[0]?.cypher).toContain("SET c.outcome = CASE");
+		expect(store.calls[0]?.cypher).toContain("WHEN c.outcome = 'applied' THEN c.outcome");
+		expect(store.calls[0]?.cypher).toContain("WHEN $outcome = 'proposed'");
 		expect(store.calls[0]?.params).toEqual({ id: "req-1", outcome: "applied" });
+		await setChangeOutcome(store, "req-2", "merged-unverified");
+		expect(store.calls[1]?.params).toEqual({ id: "req-2", outcome: "merged-unverified" });
 		const empty = new InMemoryGraphStore();
 		await setChangeOutcome(empty, "", "failed");
 		expect(empty.calls).toEqual([]);

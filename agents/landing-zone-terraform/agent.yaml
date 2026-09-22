@@ -10,9 +10,11 @@ repository:
 
 skills:
   - id: search-memory
+  - id: query-knowledge-graph
 
 tools:
   - id: landing-zone
+  - id: knowledge-graph
 
 knowledge:
   - knowledge/pvh/conventions/
