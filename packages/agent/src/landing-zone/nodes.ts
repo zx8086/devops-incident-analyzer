@@ -23,11 +23,17 @@ const INFORMATIONAL_ARTIFACT_PATTERN =
 const DIRECT_CHANGE_PATTERN =
 	/^(?:please\s+)?(?:change|create|add|modify|update|implement)\b|\b(?:can you|could you|would you|need to|want to|go ahead and|we should|we must|i should|i need to)\s+(?:change|create|add|modify|update|implement)\b/;
 const CONJUNCTIVE_CHANGE_PATTERN = /\band\s+(?:please\s+)?(?:change|create|add|modify|update|implement)\b/;
+const HOW_ACTION_PATTERN = /\b(change|create|add|modify|update|implement|review|validate|check|plan|assess|audit)\b/;
 
 function clauseRequestsChange(clause: string): boolean {
 	if (INFORMATIONAL_ARTIFACT_PATTERN.test(clause)) return false;
 	if (DIRECT_CHANGE_PATTERN.test(clause)) return true;
-	if (!/\bhow\b/.test(clause) && CONJUNCTIVE_CHANGE_PATTERN.test(clause)) return true;
+	const conjunctiveChange = clause.match(CONJUNCTIVE_CHANGE_PATTERN);
+	if (conjunctiveChange?.index !== undefined) {
+		const prefix = clause.slice(0, conjunctiveChange.index);
+		const howIndex = prefix.search(/\bhow\b/);
+		if (howIndex === -1 || !HOW_ACTION_PATTERN.test(prefix.slice(howIndex))) return true;
+	}
 	return CHANGE_PATTERN.test(clause) && !LEARNING_PATTERN.test(clause) && !REVIEW_PATTERN.test(clause);
 }
 

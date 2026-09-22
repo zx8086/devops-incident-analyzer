@@ -158,6 +158,21 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.outcome).toBe("answered");
 	});
 
+	test("fails closed when a how-question appends an infrastructure mutation", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{
+				messages: [new HumanMessage("How does account vending work and update the VPC")],
+				requestId: "request-how-change",
+			},
+			{ configurable: { thread_id: "thread-how-change" } },
+		);
+
+		expect(result.intent).toBe("propose-change");
+		expect(result.risk?.requiresHumanDecision).toBeTrue();
+		expect(result.outcome).toBe("blocked");
+	});
+
 	test("treats a modal request to create a plan as review work", async () => {
 		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
 		const result = await graph.invoke(
