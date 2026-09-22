@@ -1,8 +1,11 @@
 // packages/agent/src/landing-zone/graph.test.ts
 
 import { describe, expect, test } from "bun:test";
+import type { EvidenceItem } from "@devops-agent/shared";
 import { HumanMessage } from "@langchain/core/messages";
 import { buildLandingZoneGraph } from "./graph.ts";
+import { assessLandingZoneRisk } from "./nodes.ts";
+import type { LandingZoneStateType } from "./state.ts";
 import { LandingZoneIntentSchema, LandingZoneStateInputSchema } from "./types.ts";
 
 const EXPECTED_NODES = [
@@ -30,31 +33,114 @@ const EXPECTED_EDGES = [
 	["teardown", "__end__"],
 ];
 
+const BASE_STATE_INPUT = {
+	messages: [new HumanMessage("Explain account vending")],
+	requestId: "request-1",
+	intent: "learn",
+	repositoryScope: ["aws-lz-account-creator"],
+	accountScope: [],
+	selectedKnowledge: ["repos/aws-lz-account-creator.md"],
+	evidenceResults: [],
+	reconciliation: null,
+	risk: null,
+	response: null,
+	responseCitations: [],
+	topologyStates: [],
+	blockedReason: null,
+	outcome: "pending",
+	proposedChangeReview: null,
+} as const;
+
+const observedEvidence = {
+	id: "gitlab:account-creator:abc123",
+	claimKey: "account-authoring-surface",
+	source: "gitlab",
+	retrievedAt: "2026-09-22T10:30:00.000Z",
+	status: "observed",
+	summary: "Account requests are authored in YAML.",
+	provenance: { path: "accounts/example.yml" },
+	freshness: { status: "current" },
+} as const;
+
+function proposedChangeState(evidenceResults: EvidenceItem[]): LandingZoneStateType {
+	return {
+		messages: [],
+		requestId: "risk-request",
+		intent: "propose-change",
+		repositoryScope: ["aws-lz-account-creator"],
+		accountScope: [],
+		selectedKnowledge: [],
+		evidenceResults,
+		reconciliation: {
+			status: "pending",
+			conclusion: "Some evidence was collected.",
+			comparisons: [],
+			conflicts: [],
+			unavailableSources: [],
+		},
+		risk: null,
+		response: null,
+		responseCitations: [],
+		topologyStates: [],
+		blockedReason: null,
+		outcome: "pending",
+		proposedChangeReview: null,
+	};
+}
+
 describe("Landing Zone state contract", () => {
 	test("accepts the four supported intents", () => {
 		expect(LandingZoneIntentSchema.options).toEqual(["learn", "understand", "review", "propose-change"]);
 	});
 
 	test("requires the complete read-only turn shape", () => {
-		const parsed = LandingZoneStateInputSchema.parse({
-			messages: [new HumanMessage("Explain account vending")],
-			requestId: "request-1",
-			intent: "learn",
-			repositoryScope: ["aws-lz-account-creator"],
-			accountScope: [],
-			selectedKnowledge: ["repos/aws-lz-account-creator.md"],
-			evidenceResults: [],
-			reconciliation: null,
-			risk: null,
-			response: null,
-			responseCitations: [],
-			topologyStates: [],
-			blockedReason: null,
-			outcome: "pending",
-			proposedChangeReview: null,
-		});
+		const parsed = LandingZoneStateInputSchema.parse(BASE_STATE_INPUT);
 
 		expect(parsed.requestId).toBe("request-1");
+	});
+
+	test("rejects citations and topology states that reference missing evidence", () => {
+		const parsed = LandingZoneStateInputSchema.safeParse({
+			...BASE_STATE_INPUT,
+			responseCitations: [{ id: "citation-1", claim: "A claim", evidenceIds: ["missing"] }],
+			topologyStates: [
+				{
+					resourceKey: "vpc-1",
+					state: "observed",
+					reconciliationStatus: "aligned",
+					evidenceIds: ["missing"],
+				},
+			],
+		});
+
+		expect(parsed.success).toBeFalse();
+	});
+});
+
+describe("Landing Zone required evidence gate", () => {
+	test("does not let non-GitLab evidence clear a proposed change", async () => {
+		const result = await assessLandingZoneRisk(
+			proposedChangeState([{ ...observedEvidence, id: "memory:1", source: "memory" }]),
+		);
+
+		expect(result.risk?.blocked).toBeTrue();
+		expect(result.blockedReason).toContain("gitlab");
+	});
+
+	test("accepts current observed GitLab evidence for the required source", async () => {
+		const result = await assessLandingZoneRisk(proposedChangeState([observedEvidence]));
+
+		expect(result.risk?.blocked).toBeFalse();
+		expect(result.blockedReason).toBeNull();
+	});
+
+	test("does not treat stale GitLab evidence as usable for a proposed change", async () => {
+		const result = await assessLandingZoneRisk(
+			proposedChangeState([{ ...observedEvidence, freshness: { status: "stale" } }]),
+		);
+
+		expect(result.risk?.blocked).toBeTrue();
+		expect(result.blockedReason).toContain("gitlab");
 	});
 });
 

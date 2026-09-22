@@ -1,5 +1,6 @@
 // packages/agent/src/landing-zone/nodes.ts
 
+import type { EvidenceSource } from "@devops-agent/shared";
 import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import type { LandingZoneStateType } from "./state.ts";
 import type { LandingZoneIntent } from "./types.ts";
@@ -100,16 +101,33 @@ export async function reconcileLandingZoneEvidence(
 }
 
 export async function assessLandingZoneRisk(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
-	const blocked = state.reconciliation?.status === "unknown" && state.intent === "propose-change";
+	const requiredEvidenceSources: EvidenceSource[] = state.intent === "propose-change" ? ["gitlab"] : [];
+	const missingEvidenceSources = requiredEvidenceSources.filter((source) => {
+		if (state.reconciliation?.unavailableSources.includes(source)) return true;
+		return !state.evidenceResults.some(
+			(item) =>
+				item.source === source &&
+				(item.status === "observed" || item.status === "proposed") &&
+				item.freshness.status === "current",
+		);
+	});
+	const blocked =
+		state.intent === "propose-change" &&
+		(state.reconciliation?.status === "unknown" || missingEvidenceSources.length > 0);
+	const blockedReason = blocked
+		? missingEvidenceSources.length > 0
+			? `Required live evidence is unavailable: ${missingEvidenceSources.join(", ")}.`
+			: "A proposed change requires current live evidence."
+		: null;
 	return {
-		blockedReason: blocked ? "A proposed change requires current live evidence." : null,
+		blockedReason,
 		risk: {
 			level: blocked ? "blocked" : state.intent === "propose-change" ? "high" : "low",
-			reasons: blocked ? ["Live repository and work-in-flight evidence is unavailable."] : [],
+			reasons: blocked ? [blockedReason ?? "Required live evidence is unavailable."] : [],
 			requiresHumanDecision: state.intent === "propose-change",
 			blocked,
 			stopConditions: blocked ? ["Required live repository evidence is unavailable."] : [],
-			requiredEvidenceSources: state.intent === "propose-change" ? ["gitlab"] : [],
+			requiredEvidenceSources,
 		},
 	};
 }

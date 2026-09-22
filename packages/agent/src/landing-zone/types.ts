@@ -55,4 +55,27 @@ export const LandingZoneStateInputSchema = z
 		responseCitations: z.array(ResponseCitationSchema),
 		topologyStates: z.array(TopologyEvidenceStateSchema),
 	})
-	.strict();
+	.strict()
+	.superRefine((state, context) => {
+		const evidenceIds = new Set(state.evidenceResults.map((item) => item.id));
+		for (const [citationIndex, citation] of state.responseCitations.entries()) {
+			for (const [evidenceIndex, evidenceId] of citation.evidenceIds.entries()) {
+				if (evidenceIds.has(evidenceId)) continue;
+				context.addIssue({
+					code: "custom",
+					message: `unknown evidence id: ${evidenceId}`,
+					path: ["responseCitations", citationIndex, "evidenceIds", evidenceIndex],
+				});
+			}
+		}
+		for (const [topologyIndex, topologyState] of state.topologyStates.entries()) {
+			for (const [evidenceIndex, evidenceId] of topologyState.evidenceIds.entries()) {
+				if (evidenceIds.has(evidenceId)) continue;
+				context.addIssue({
+					code: "custom",
+					message: `unknown evidence id: ${evidenceId}`,
+					path: ["topologyStates", topologyIndex, "evidenceIds", evidenceIndex],
+				});
+			}
+		}
+	});
