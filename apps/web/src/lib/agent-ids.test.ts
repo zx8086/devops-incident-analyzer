@@ -10,7 +10,7 @@ describe("SIO-1655 agent id vocabulary", () => {
 		// SIO-1655 added the fleet console; it is gated OFF at the registry
 		// (listSelectableAgents), not by omission from the id vocabulary, so an
 		// unknown-agent error stays distinguishable from a disabled one.
-		expect([...AGENT_IDS]).toEqual(["incident-analyzer", "elastic-iac", "pi-fleet-console"]);
+		expect([...AGENT_IDS]).toEqual(["incident-analyzer", "elastic-iac", "landing-zone-terraform", "pi-fleet-console"]);
 	});
 
 	test("the default is the incident analyzer", () => {
@@ -40,6 +40,11 @@ describe("SIO-1655 agent id vocabulary", () => {
 	test("agentChoice returns the matching entry and throws for an unknown id", () => {
 		expect(agentChoice("elastic-iac").title).toBe("Elastic IaC Agent");
 		expect(agentChoice("incident-analyzer").title).toBe("Incident Analyzer");
+		expect(agentChoice("landing-zone-terraform")).toEqual({
+			id: "landing-zone-terraform",
+			title: "PVH Landing Zone Terraform",
+			subtitle: "AWS Landing Zone learning and change assistant",
+		});
 		// @ts-expect-error deliberately probing the runtime guard with an invalid id
 		expect(() => agentChoice("pi-fleet")).toThrow('unknown agent "pi-fleet"');
 	});
@@ -51,7 +56,8 @@ describe("SIO-1655 agent id vocabulary", () => {
 		const ids = AGENT_CHOICES.filter((c) => c.id !== "pi-fleet-console").map((c) => c.id);
 		const next = (current: string) => ids[(ids.indexOf(current as (typeof ids)[number]) + 1) % ids.length];
 		expect(next("incident-analyzer")).toBe("elastic-iac");
-		expect(next("elastic-iac")).toBe("incident-analyzer");
+		expect(next("elastic-iac")).toBe("landing-zone-terraform");
+		expect(next("landing-zone-terraform")).toBe("incident-analyzer");
 	});
 
 	// SIO-1657: the console is CONTEXTUAL, not a mode -- it is reached from the
@@ -63,7 +69,8 @@ describe("SIO-1655 agent id vocabulary", () => {
 		const next = (current: string) => ids[(ids.indexOf(current as (typeof ids)[number]) + 1) % ids.length];
 		expect(ids).not.toContain("pi-fleet-console");
 		expect(next("incident-analyzer")).toBe("elastic-iac");
-		expect(next("elastic-iac")).toBe("incident-analyzer");
+		expect(next("elastic-iac")).toBe("landing-zone-terraform");
+		expect(next("landing-zone-terraform")).toBe("incident-analyzer");
 	});
 
 	// Leaving the rotation must not make it unreachable or unresolvable: the id

@@ -17,7 +17,7 @@ import { isPiComsConfigured, isPiFleetGraphEnabled } from "@devops-agent/agent";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StateSnapshot } from "@langchain/langgraph";
 import { AGENT_IDS, type AgentId, DEFAULT_AGENT_ID, isAgentId } from "$lib/agent-ids";
-import { getGraph, getIacGraph, getPiFleetGraph } from "./agent";
+import { getGraph, getIacGraph, getLandingZoneGraph, getPiFleetGraph } from "./agent";
 
 // What a caller needs to know about an agent without naming it. Each flag
 // replaces a name comparison that was really asking this question:
@@ -117,6 +117,16 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		hasTriageGraph: true,
 		surface: "mode",
 		graph: getIacGraph,
+	},
+	"landing-zone-terraform": {
+		id: "landing-zone-terraform",
+		label: "PVH Landing Zone Terraform",
+		hasConfidence: false,
+		hasDataSources: false,
+		streamsTokens: false,
+		hasTriageGraph: true,
+		surface: "mode",
+		graph: getLandingZoneGraph,
 	},
 };
 

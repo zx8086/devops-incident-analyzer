@@ -190,8 +190,10 @@ describe("selectedBackend / resolveUserId", () => {
 	test("maps each registered agent to its own user id and role", () => {
 		expect(resolveUserId("incident-analyzer")).toBe("incident-analyzer");
 		expect(resolveUserId("elastic-iac")).toBe("elastic-iac");
+		expect(resolveUserId("landing-zone-terraform")).toBe("landing-zone-terraform");
 		expect(resolveRole("incident-analyzer")).toBe("incident-correlator");
 		expect(resolveRole("elastic-iac")).toBe("iac-maker");
+		expect(resolveRole("landing-zone-terraform")).toBe("landing-zone-iac-maker");
 		expect(roleForUserId("elastic-iac")).toBe("iac-maker");
 	});
 

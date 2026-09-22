@@ -94,6 +94,23 @@ export {
 	type TopologySweepSummary,
 	topologyCronEnabled,
 } from "./kg-topology.ts";
+export { type BuildLandingZoneGraphOptions, buildLandingZoneGraph } from "./landing-zone/graph.ts";
+export { LandingZoneState, type LandingZoneStateType } from "./landing-zone/state.ts";
+export {
+	type LandingZoneEvidenceResult,
+	LandingZoneEvidenceResultSchema,
+	type LandingZoneIntent,
+	LandingZoneIntentSchema,
+	type LandingZoneOutcome,
+	LandingZoneOutcomeSchema,
+	type LandingZoneReconciliation,
+	LandingZoneReconciliationSchema,
+	type LandingZoneRisk,
+	LandingZoneRiskSchema,
+	LandingZoneStateInputSchema,
+	type ProposedChangeReview,
+	ProposedChangeReviewSchema,
+} from "./landing-zone/types.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
 // SIO-1135: apps/web writes curation-time mirror facts (ticket creation) through this
 // re-export -- it has no direct knowledge-graph dependency.

@@ -36,11 +36,13 @@ function nextAgent(agents: AgentRow[], current: string): string | undefined {
 const HUB_CONFIGURED: AgentRow[] = [
 	{ id: "incident-analyzer", surface: "mode", hasTriageGraph: true },
 	{ id: "elastic-iac", surface: "mode", hasTriageGraph: true },
+	{ id: "landing-zone-terraform", surface: "mode", hasTriageGraph: true },
 	{ id: "pi-fleet-console", surface: "contextual", hasTriageGraph: false },
 ];
 const NO_HUB: AgentRow[] = [
 	{ id: "incident-analyzer", surface: "mode" },
 	{ id: "elastic-iac", surface: "mode" },
+	{ id: "landing-zone-terraform", surface: "mode" },
 ];
 
 describe("SIO-1657 mode rotation", () => {
@@ -52,7 +54,7 @@ describe("SIO-1657 mode rotation", () => {
 			visited.push(current);
 		}
 		expect(visited).not.toContain("pi-fleet-console");
-		expect(new Set(visited)).toEqual(new Set(["incident-analyzer", "elastic-iac"]));
+		expect(new Set(visited)).toEqual(new Set(["incident-analyzer", "elastic-iac", "landing-zone-terraform"]));
 	});
 
 	// The trap: the console is not in the rotation, so the control has to be a
@@ -64,7 +66,8 @@ describe("SIO-1657 mode rotation", () => {
 
 	test("rotation is unchanged when no hub is configured", () => {
 		expect(nextAgent(NO_HUB, "incident-analyzer")).toBe("elastic-iac");
-		expect(nextAgent(NO_HUB, "elastic-iac")).toBe("incident-analyzer");
+		expect(nextAgent(NO_HUB, "elastic-iac")).toBe("landing-zone-terraform");
+		expect(nextAgent(NO_HUB, "landing-zone-terraform")).toBe("incident-analyzer");
 	});
 });
 
@@ -77,7 +80,7 @@ describe("SIO-1657 console entry point", () => {
 	});
 
 	test("never offered when the deployment has no hub", () => {
-		for (const current of ["incident-analyzer", "elastic-iac"]) {
+		for (const current of ["incident-analyzer", "elastic-iac", "landing-zone-terraform"]) {
 			expect(consoleOffered(NO_HUB, current)).toBe(false);
 		}
 	});
@@ -94,6 +97,7 @@ describe("SIO-1665 live graph triage pane", () => {
 	test("offered on the modes, not on the fleet console", () => {
 		expect(triageOffered(HUB_CONFIGURED, "incident-analyzer")).toBe(true);
 		expect(triageOffered(HUB_CONFIGURED, "elastic-iac")).toBe(true);
+		expect(triageOffered(HUB_CONFIGURED, "landing-zone-terraform")).toBe(true);
 		// The console's two-node graph is redundant next to the fleet pane.
 		expect(triageOffered(HUB_CONFIGURED, "pi-fleet-console")).toBe(false);
 	});
@@ -103,5 +107,6 @@ describe("SIO-1665 live graph triage pane", () => {
 	test("a row without the flag keeps the pane offered", () => {
 		expect(triageOffered(NO_HUB, "incident-analyzer")).toBe(true);
 		expect(triageOffered(NO_HUB, "elastic-iac")).toBe(true);
+		expect(triageOffered(NO_HUB, "landing-zone-terraform")).toBe(true);
 	});
 });

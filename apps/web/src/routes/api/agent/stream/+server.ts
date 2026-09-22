@@ -211,6 +211,22 @@ export const POST: RequestHandler = async ({ request }) => {
 									return;
 								}
 
+								if (body.agentName === "landing-zone-terraform") {
+									const finalText = await getLastAssistantText(threadId, "landing-zone-terraform");
+									if (finalText) send({ type: "message", content: finalText });
+									await pruneThreadState(threadId, body.agentName);
+									await runPostTurn({ agentName: body.agentName, threadId });
+									send({
+										type: "done",
+										threadId,
+										requestId,
+										runId,
+										responseTime: Date.now() - startTime,
+										toolsUsed,
+									});
+									return;
+								}
+
 								// SIO-751: if detectTopicShift paused the graph via interrupt(),
 								// the snapshot still has the interrupt pending and no "done"
 								// event has fired. Surface the prompt to the UI instead of done;
