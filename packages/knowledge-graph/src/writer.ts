@@ -4,6 +4,7 @@
 // parameterized MERGE -- values are bound ($params), never interpolated into the
 // Cypher string, so a service name like "); DROP" cannot alter the query.
 
+import { z } from "zod";
 import { validTopologyEdges } from "./reader.ts";
 import {
 	type AdrNode,
@@ -69,7 +70,7 @@ export interface LandingZoneGitLabImportCheckpoint {
 	inProgress?: LandingZoneGitLabImportProgress;
 	pendingMrIids?: number[];
 	pendingCursor?: number;
-	pendingDeploymentPages?: Record<string, number>;
+	pendingDeploymentScans?: Record<string, { sha: string; nextPage: number; updatedBefore: string }>;
 }
 
 const MAX_PENDING_MERGE_REQUESTS = 1_000;
@@ -102,7 +103,7 @@ export async function readLandingZoneGitLabImportCheckpoint(
 	let inProgress: LandingZoneGitLabImportProgress | undefined;
 	let pendingMrIids: number[] = [];
 	let pendingCursor = 0;
-	const pendingDeploymentPages: Record<string, number> = {};
+	const pendingDeploymentScans: Record<string, { sha: string; nextPage: number; updatedBefore: string }> = {};
 	if (rows[0]?.state) {
 		const parsed = JSON.parse(rows[0].state) as unknown;
 		const legacyProgress = validImportProgress(parsed) ? parsed : undefined;
@@ -112,7 +113,7 @@ export async function readLandingZoneGitLabImportCheckpoint(
 						inProgress?: unknown;
 						pendingMrIids?: unknown;
 						pendingCursor?: unknown;
-						pendingDeploymentPages?: unknown;
+						pendingDeploymentScans?: unknown;
 					})
 				: undefined;
 		if (legacyProgress) {
@@ -139,24 +140,33 @@ export async function readLandingZoneGitLabImportCheckpoint(
 					throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
 				pendingCursor = Number(state.pendingCursor);
 			}
-			if (state.pendingDeploymentPages !== undefined) {
+			if (state.pendingDeploymentScans !== undefined) {
 				if (
-					typeof state.pendingDeploymentPages !== "object" ||
-					state.pendingDeploymentPages === null ||
-					Array.isArray(state.pendingDeploymentPages)
+					typeof state.pendingDeploymentScans !== "object" ||
+					state.pendingDeploymentScans === null ||
+					Array.isArray(state.pendingDeploymentScans)
 				)
 					throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
-				for (const [iid, page] of Object.entries(state.pendingDeploymentPages)) {
+				for (const [iid, scan] of Object.entries(state.pendingDeploymentScans)) {
 					const numericIid = Number(iid);
 					if (
 						!Number.isInteger(numericIid) ||
 						numericIid <= 0 ||
 						!pendingMrIids.includes(numericIid) ||
-						!Number.isInteger(page) ||
-						Number(page) < 1
+						typeof scan !== "object" ||
+						scan === null ||
+						typeof (scan as { sha?: unknown }).sha !== "string" ||
+						(scan as { sha: string }).sha.length < 1 ||
+						(scan as { sha: string }).sha.length > 128 ||
+						!Number.isInteger((scan as { nextPage?: unknown }).nextPage) ||
+						Number((scan as { nextPage: number }).nextPage) < 1 ||
+						!z
+							.string()
+							.datetime()
+							.safeParse((scan as { updatedBefore?: unknown }).updatedBefore).success
 					)
 						throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
-					pendingDeploymentPages[iid] = Number(page);
+					pendingDeploymentScans[iid] = scan as { sha: string; nextPage: number; updatedBefore: string };
 				}
 			}
 		} else {
@@ -169,7 +179,7 @@ export async function readLandingZoneGitLabImportCheckpoint(
 		...(inProgress && { inProgress }),
 		...(pendingMrIids.length > 0 && { pendingMrIids }),
 		...(pendingMrIids.length > 0 && { pendingCursor }),
-		...(Object.keys(pendingDeploymentPages).length > 0 && { pendingDeploymentPages }),
+		...(Object.keys(pendingDeploymentScans).length > 0 && { pendingDeploymentScans }),
 	};
 }
 
@@ -179,21 +189,25 @@ export async function recordLandingZoneGitLabImportCheckpoint(
 	checkpoint: Omit<LandingZoneGitLabImportCheckpoint, "projectId">,
 ): Promise<void> {
 	const pendingIids = checkpoint.pendingMrIids ?? [];
-	const pendingDeploymentPages = checkpoint.pendingDeploymentPages ?? {};
+	const pendingDeploymentScans = checkpoint.pendingDeploymentScans ?? {};
 	if (
 		pendingIids.length > MAX_PENDING_MERGE_REQUESTS ||
 		!pendingIids.every((iid) => Number.isInteger(iid) && iid > 0) ||
 		!Number.isInteger(checkpoint.pendingCursor ?? 0) ||
 		(checkpoint.pendingCursor ?? 0) < 0 ||
 		(checkpoint.pendingCursor ?? 0) >= Math.max(1, pendingIids.length) ||
-		Object.entries(pendingDeploymentPages).some(([iid, page]) => {
+		Object.entries(pendingDeploymentScans).some(([iid, scan]) => {
 			const numericIid = Number(iid);
 			return (
 				!Number.isInteger(numericIid) ||
 				numericIid <= 0 ||
 				!pendingIids.includes(numericIid) ||
-				!Number.isInteger(page) ||
-				page < 1
+				typeof scan.sha !== "string" ||
+				scan.sha.length < 1 ||
+				scan.sha.length > 128 ||
+				!Number.isInteger(scan.nextPage) ||
+				scan.nextPage < 1 ||
+				!z.string().datetime().safeParse(scan.updatedBefore).success
 			);
 		})
 	) {
@@ -217,7 +231,7 @@ export async function recordLandingZoneGitLabImportCheckpoint(
 							...(checkpoint.inProgress && { inProgress: checkpoint.inProgress }),
 							pendingMrIids: pendingIids,
 							pendingCursor: checkpoint.pendingCursor ?? 0,
-							...(Object.keys(pendingDeploymentPages).length > 0 && { pendingDeploymentPages }),
+							...(Object.keys(pendingDeploymentScans).length > 0 && { pendingDeploymentScans }),
 						})
 					: "",
 		},
@@ -364,8 +378,10 @@ export async function recordLandingZoneChange(store: GraphStore, change: Landing
 		change.createdAt ??
 		now;
 	const outcomeRetrievedAt = change.outcomeEvidence?.retrievedAt ?? change.lastSyncedAt ?? outcomeObservedAt;
+	const acceptsOutcome =
+		"(($outcome = 'applied' AND ($outcomeEvidenceSource = 'gitlab-deployment' OR $outcomeEvidenceSource = 'live-state')) OR ($outcome <> 'applied' AND (c.outcome IS NULL OR c.outcome = '' OR c.outcome <> 'applied') AND (c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt)))";
 	await store.run(
-		"MERGE (c:ConfigChange {id: $id}) SET c.workflow = coalesce($workflow, c.workflow), c.summary = coalesce($summary, c.summary), c.createdAt = coalesce(c.createdAt, $createdAt), c.commitSha = CASE WHEN c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt THEN coalesce($commitSha, c.commitSha) ELSE c.commitSha END, c.lastSyncedAt = CASE WHEN c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt THEN coalesce($lastSyncedAt, c.lastSyncedAt) ELSE c.lastSyncedAt END, c.source = CASE WHEN c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt THEN coalesce($source, c.source) ELSE c.source END, c.evidenceTruncated = CASE WHEN c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt THEN coalesce($evidenceTruncated, c.evidenceTruncated) ELSE c.evidenceTruncated END, c.outcome = CASE WHEN c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt THEN coalesce($outcome, c.outcome, 'proposed') ELSE c.outcome END, c.outcomeRetrievedAt = CASE WHEN c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt THEN $outcomeRetrievedAt ELSE c.outcomeRetrievedAt END, c.outcomeEvidenceSource = CASE WHEN c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt THEN coalesce($outcomeEvidenceSource, c.outcomeEvidenceSource) ELSE c.outcomeEvidenceSource END, c.outcomeEvidenceSha = CASE WHEN c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt THEN coalesce($outcomeEvidenceSha, c.outcomeEvidenceSha) ELSE c.outcomeEvidenceSha END, c.outcomeEvidencePipelineId = CASE WHEN c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt THEN coalesce($outcomeEvidencePipelineId, c.outcomeEvidencePipelineId) ELSE c.outcomeEvidencePipelineId END, c.outcomeEvidenceTruncated = CASE WHEN c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt THEN $outcomeEvidenceTruncated ELSE c.outcomeEvidenceTruncated END, c.outcomeObservedAt = CASE WHEN c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt THEN $outcomeObservedAt ELSE c.outcomeObservedAt END",
+		`MERGE (c:ConfigChange {id: $id}) SET c.workflow = coalesce($workflow, c.workflow), c.summary = coalesce($summary, c.summary), c.createdAt = coalesce(c.createdAt, $createdAt), c.commitSha = CASE WHEN ${acceptsOutcome} THEN $commitSha ELSE c.commitSha END, c.lastSyncedAt = CASE WHEN ${acceptsOutcome} THEN $lastSyncedAt ELSE c.lastSyncedAt END, c.source = CASE WHEN ${acceptsOutcome} THEN $source ELSE c.source END, c.evidenceTruncated = CASE WHEN ${acceptsOutcome} THEN $evidenceTruncated ELSE c.evidenceTruncated END, c.outcome = CASE WHEN ${acceptsOutcome} THEN $outcome ELSE c.outcome END, c.outcomeRetrievedAt = CASE WHEN ${acceptsOutcome} THEN $outcomeRetrievedAt ELSE c.outcomeRetrievedAt END, c.outcomeEvidenceSource = CASE WHEN ${acceptsOutcome} THEN $outcomeEvidenceSource ELSE c.outcomeEvidenceSource END, c.outcomeEvidenceSha = CASE WHEN ${acceptsOutcome} THEN $outcomeEvidenceSha ELSE c.outcomeEvidenceSha END, c.outcomeEvidencePipelineId = CASE WHEN ${acceptsOutcome} THEN $outcomeEvidencePipelineId ELSE c.outcomeEvidencePipelineId END, c.outcomeEvidenceTruncated = CASE WHEN ${acceptsOutcome} THEN $outcomeEvidenceTruncated ELSE c.outcomeEvidenceTruncated END, c.outcomeObservedAt = CASE WHEN ${acceptsOutcome} THEN $outcomeObservedAt ELSE c.outcomeObservedAt END`,
 		{
 			id: change.id,
 			workflow: change.workflow ?? null,

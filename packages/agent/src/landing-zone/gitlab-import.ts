@@ -76,7 +76,7 @@ export interface LandingZoneImportCheckpoint {
 	inProgress?: { upperBound: string; expectedTotal?: number; nextPage: number; seenMrIds: string[] };
 	pendingMrIids?: number[];
 	pendingCursor?: number;
-	pendingDeploymentPages?: Record<string, number>;
+	pendingDeploymentScans?: Record<string, { sha: string; nextPage: number; updatedBefore: string }>;
 }
 
 export interface LandingZoneImportDependencies {
@@ -104,7 +104,12 @@ export interface LandingZoneImportDependencies {
 		repository: string;
 		iid: number;
 	}) => Promise<{ pipelines: HistoricalPipeline[]; provenance?: HistoricalProvenance }>;
-	listDeployments?: (input: { repository: string; commitSha: string; page?: number }) => Promise<{
+	listDeployments?: (input: {
+		repository: string;
+		commitSha: string;
+		page?: number;
+		updatedBefore?: string;
+	}) => Promise<{
 		deployments: HistoricalDeployment[];
 		nextPage?: number;
 		provenance?: HistoricalProvenance;
@@ -416,15 +421,24 @@ export async function importLandingZoneGitLabHistory(
 	let nextPage = options.checkpoint?.inProgress?.nextPage ?? 1;
 	let pendingMrIids = [...new Set(options.checkpoint?.pendingMrIids ?? [])];
 	let pendingCursor = options.checkpoint?.pendingCursor ?? 0;
-	const pendingDeploymentPages = { ...(options.checkpoint?.pendingDeploymentPages ?? {}) };
+	const pendingDeploymentScans = { ...(options.checkpoint?.pendingDeploymentScans ?? {}) };
 	if (
 		pendingMrIids.length > MAX_PENDING_MERGE_REQUESTS ||
 		!pendingMrIids.every((iid) => Number.isInteger(iid) && iid > 0) ||
 		!Number.isInteger(pendingCursor) ||
 		pendingCursor < 0 ||
-		Object.entries(pendingDeploymentPages).some(
-			([iid, page]) =>
-				!/^\d+$/.test(iid) || !pendingMrIids.includes(Number(iid)) || !Number.isInteger(page) || page < 1,
+		Object.entries(pendingDeploymentScans).some(
+			([iid, scan]) =>
+				!/^\d+$/.test(iid) ||
+				!pendingMrIids.includes(Number(iid)) ||
+				typeof scan !== "object" ||
+				scan === null ||
+				typeof scan.sha !== "string" ||
+				scan.sha.length < 1 ||
+				scan.sha.length > 128 ||
+				!Number.isInteger(scan.nextPage) ||
+				scan.nextPage < 1 ||
+				!z.string().datetime().safeParse(scan.updatedBefore).success,
 		)
 	) {
 		throw new Error(`Invalid bounded pending merge request queue for ${options.repository}`);
@@ -436,7 +450,7 @@ export async function importLandingZoneGitLabHistory(
 		...base,
 		pendingMrIids,
 		pendingCursor: pendingMrIids.length > 0 ? pendingCursor % pendingMrIids.length : 0,
-		pendingDeploymentPages,
+		pendingDeploymentScans,
 	});
 
 	const recordRepository = async (project: HistoricalProject, provenance?: HistoricalProvenance) => {
@@ -476,13 +490,21 @@ export async function importLandingZoneGitLabHistory(
 		if (!commitSha) throw new Error(`GitLab merge request ${mrId} did not provide a commit SHA`);
 		const pipelinePage = await resolvedDependencies.listPipelines({ repository: options.repository, iid: mr.iid });
 		const pipelines = pipelinePage.pipelines;
-		const deploymentPageNumber = pendingDeploymentPages[String(mr.iid)] ?? 1;
-		const deploymentPage = await resolvedDependencies.listDeployments?.({
-			repository: options.repository,
-			commitSha,
-			page: deploymentPageNumber,
-		});
-		if (deploymentPage?.nextPage !== undefined && deploymentPage.nextPage <= deploymentPageNumber) {
+		const previousDeploymentScan = pendingDeploymentScans[String(mr.iid)];
+		const deploymentScan = resolvedDependencies.listDeployments
+			? previousDeploymentScan?.sha === commitSha
+				? previousDeploymentScan
+				: { sha: commitSha, nextPage: 1, updatedBefore: new Date().toISOString() }
+			: undefined;
+		const deploymentPage = deploymentScan
+			? await resolvedDependencies.listDeployments?.({
+					repository: options.repository,
+					commitSha,
+					page: deploymentScan.nextPage,
+					updatedBefore: deploymentScan.updatedBefore,
+				})
+			: undefined;
+		if (deploymentPage?.nextPage !== undefined && deploymentPage.nextPage <= (deploymentScan?.nextPage ?? 0)) {
 			throw new Error(`GitLab deployment cursor did not advance for ${options.repository} MR !${mr.iid}`);
 		}
 		const deployments = deploymentPage?.deployments ?? [];
@@ -548,11 +570,17 @@ export async function importLandingZoneGitLabHistory(
 		}
 		if (terminal) {
 			pendingMrIids = pendingMrIids.filter((pendingIid) => pendingIid !== mr.iid);
-			delete pendingDeploymentPages[String(mr.iid)];
+			delete pendingDeploymentScans[String(mr.iid)];
 		} else {
 			pendingMrIids = [...new Set([...pendingMrIids, mr.iid])];
-			if (deploymentPage?.nextPage) pendingDeploymentPages[String(mr.iid)] = deploymentPage.nextPage;
-			else delete pendingDeploymentPages[String(mr.iid)];
+			if (deploymentScan && deploymentPage?.nextPage)
+				pendingDeploymentScans[String(mr.iid)] = { ...deploymentScan, nextPage: deploymentPage.nextPage };
+			else if (deploymentScan)
+				pendingDeploymentScans[String(mr.iid)] = {
+					sha: commitSha,
+					nextPage: 1,
+					updatedBefore: new Date().toISOString(),
+				};
 		}
 	};
 

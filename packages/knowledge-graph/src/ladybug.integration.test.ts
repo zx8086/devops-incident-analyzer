@@ -111,7 +111,9 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", nextPage: 1, seenMrIds: ["42:7"] },
 			pendingMrIids: [7, 8],
 			pendingCursor: 1,
-			pendingDeploymentPages: { "7": 4 },
+			pendingDeploymentScans: {
+				"7": { sha: "merge-7", nextPage: 4, updatedBefore: "2026-09-04T00:00:00.000Z" },
+			},
 		});
 		expect(await readLandingZoneGitLabImportCheckpoint(store, "aws-lz-account-creator")).toEqual({
 			projectId: "42",
@@ -119,7 +121,9 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", nextPage: 1, seenMrIds: ["42:7"] },
 			pendingMrIids: [7, 8],
 			pendingCursor: 1,
-			pendingDeploymentPages: { "7": 4 },
+			pendingDeploymentScans: {
+				"7": { sha: "merge-7", nextPage: 4, updatedBefore: "2026-09-04T00:00:00.000Z" },
+			},
 		});
 	});
 
@@ -278,6 +282,88 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 				adrStatus: "accepted",
 				adrUrl: "",
 			},
+		]);
+		await store.close();
+	});
+
+	test("Landing Zone outcome authority preserves verified applies and clears stale source evidence", async () => {
+		const store = new LadybugStore(join(dir, "lz-outcome-authority"));
+		await store.init();
+		await recordLandingZoneRepository(store, {
+			group: { id: "gitlab-group:pvhcorp", path: "pvhcorp" },
+			repository: {
+				id: "gitlab-project:42",
+				groupId: "gitlab-group:pvhcorp",
+				path: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+				name: "aws-lz-account-creator",
+			},
+		});
+		const writeOutcome = async (
+			id: string,
+			outcome: "proposed" | "pipeline-failed" | "applied",
+			source: "gitlab-mr" | "gitlab-pipeline" | "gitlab-deployment",
+			observedAt: string,
+			evidence: { commitSha?: string; pipelineId?: string } = {},
+		) =>
+			recordLandingZoneChange(store, {
+				id,
+				repositoryId: "gitlab-project:42",
+				outcome,
+				outcomeEvidence: { source, observedAt, truncated: false, ...evidence },
+			});
+
+		await writeOutcome("older-deployment", "pipeline-failed", "gitlab-pipeline", "2026-09-22T15:20:00.000Z", {
+			pipelineId: "20",
+		});
+		await writeOutcome("older-deployment", "applied", "gitlab-deployment", "2026-09-22T15:10:00.000Z", {
+			commitSha: "deployed-sha",
+			pipelineId: "10",
+		});
+		await writeOutcome("older-deployment", "proposed", "gitlab-mr", "2026-09-22T15:30:00.000Z");
+
+		await writeOutcome("equal-deployment", "pipeline-failed", "gitlab-pipeline", "2026-09-22T15:20:00.000Z", {
+			pipelineId: "20",
+		});
+		await writeOutcome("equal-deployment", "applied", "gitlab-deployment", "2026-09-22T15:20:00.000Z", {
+			commitSha: "equal-sha",
+		});
+
+		await writeOutcome("reopened", "pipeline-failed", "gitlab-pipeline", "2026-09-22T15:10:00.000Z", {
+			commitSha: "failed-sha",
+			pipelineId: "10",
+		});
+		await writeOutcome("reopened", "proposed", "gitlab-mr", "2026-09-22T15:20:00.000Z");
+		await writeOutcome("reopened", "pipeline-failed", "gitlab-pipeline", "2026-09-22T15:15:00.000Z", {
+			commitSha: "stale-sha",
+			pipelineId: "15",
+		});
+
+		const rows = await store.run<{
+			id: string;
+			outcome: string;
+			source: string;
+			sha: string | null;
+			pipelineId: string | null;
+		}>(
+			"MATCH (c:ConfigChange) WHERE c.id IN $ids RETURN c.id AS id, c.outcome AS outcome, c.outcomeEvidenceSource AS source, c.outcomeEvidenceSha AS sha, c.outcomeEvidencePipelineId AS pipelineId ORDER BY c.id",
+			{ ids: ["older-deployment", "equal-deployment", "reopened"] },
+		);
+		expect(rows).toEqual([
+			{
+				id: "equal-deployment",
+				outcome: "applied",
+				source: "gitlab-deployment",
+				sha: "equal-sha",
+				pipelineId: null,
+			},
+			{
+				id: "older-deployment",
+				outcome: "applied",
+				source: "gitlab-deployment",
+				sha: "deployed-sha",
+				pipelineId: "10",
+			},
+			{ id: "reopened", outcome: "proposed", source: "gitlab-mr", sha: null, pipelineId: null },
 		]);
 		await store.close();
 	});

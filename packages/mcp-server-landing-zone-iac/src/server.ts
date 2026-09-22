@@ -141,6 +141,11 @@ function registerAll(server: McpServer, client: GitLabReadClient): void {
 				repository: RepositoryParam,
 				commitSha: z.string().min(1).max(128).describe("Exact merge commit SHA to correlate"),
 				page: z.number().int().positive().optional().describe("Resumable GitLab deployment page"),
+				updatedBefore: z
+					.string()
+					.datetime()
+					.optional()
+					.describe("Fixed deployment snapshot boundary reused across resumed pages"),
 			},
 			annotations: READ_ONLY_ANNOTATIONS,
 		},

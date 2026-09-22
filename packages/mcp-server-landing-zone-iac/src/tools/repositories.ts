@@ -266,6 +266,7 @@ export interface GitLabReadClient {
 		projectPath: string,
 		page: number,
 		perPage: number,
+		updatedBefore?: string,
 	): Promise<{
 		deployments: GitLabDeployment[];
 		nextPage?: number;
@@ -406,29 +407,73 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 			throw new Error(`GitLab X-Per-Page ${responsePerPage} did not match requested page size ${perPage}`);
 	}
 
+	function linkParts(value: string): string[] {
+		const parts: string[] = [];
+		let start = 0;
+		let quoted = false;
+		let angleDepth = 0;
+		for (let index = 0; index < value.length; index++) {
+			const character = value[index];
+			if (character === '"' && value[index - 1] !== "\\") quoted = !quoted;
+			if (quoted) continue;
+			if (character === "<") angleDepth++;
+			else if (character === ">" && angleDepth > 0) angleDepth--;
+			else if (character === "," && angleDepth === 0) {
+				parts.push(value.slice(start, index).trim());
+				start = index + 1;
+			}
+		}
+		parts.push(value.slice(start).trim());
+		return parts.filter(Boolean);
+	}
+
+	function nextPageFromLink(value: string | null, requestedPage: number): number | undefined {
+		if (!value) return undefined;
+		let advertisedNext: number | undefined;
+		for (const part of linkParts(value)) {
+			const relationParameters = part
+				.split(";")
+				.slice(1)
+				.map((parameter) => parameter.trim());
+			const isNext = relationParameters.some((parameter) => {
+				const match = parameter.match(/^rel\s*=\s*(?:"([^"]*)"|([^\s;]+))$/i);
+				const relations = (match?.[1] ?? match?.[2] ?? "").split(/\s+/);
+				return relations.some((relation) => relation.toLowerCase() === "next");
+			});
+			if (!isNext) continue;
+			const target = part.match(/^<([^>]+)>/)?.[1];
+			if (!target) throw new Error("GitLab response advertised a malformed next-page link");
+			let rawPage: string | null;
+			try {
+				rawPage = new URL(target, apiRoot).searchParams.get("page");
+			} catch {
+				throw new Error("GitLab response advertised a malformed next-page link");
+			}
+			if (rawPage === null || !/^\d+$/.test(rawPage) || !Number.isSafeInteger(Number(rawPage)) || Number(rawPage) < 1)
+				throw new Error("GitLab response omitted a valid next-page link");
+			const nextPage = Number(rawPage);
+			if (nextPage <= requestedPage)
+				throw new Error(`GitLab next-page link ${nextPage} did not advance beyond requested page ${requestedPage}`);
+			if (advertisedNext !== undefined && advertisedNext !== nextPage)
+				throw new Error("GitLab response advertised conflicting next-page links");
+			advertisedNext = nextPage;
+		}
+		return advertisedNext;
+	}
+
 	function nextPageFrom(response: Response, requestedPage: number): number | undefined {
-		if (response.headers.get("X-Next-Page") === "") return undefined;
-		const headerPage = parseDecimalHeader(response.headers, "X-Next-Page", 1);
+		const rawHeaderPage = response.headers.get("X-Next-Page");
+		const headerPage = rawHeaderPage === "" ? undefined : parseDecimalHeader(response.headers, "X-Next-Page", 1);
 		if (headerPage !== undefined) {
 			if (headerPage <= requestedPage)
 				throw new Error(`GitLab X-Next-Page ${headerPage} did not advance beyond requested page ${requestedPage}`);
-			return headerPage;
 		}
-		const link = response.headers.get("link");
-		if (!link) return undefined;
-		const next = link
-			.split(",")
-			.map((part) => part.trim())
-			.find((part) => /;\s*rel="?next"?\s*$/i.test(part));
-		const target = next?.match(/^<([^>]+)>/)?.[1];
-		if (!target) return undefined;
-		const rawPage = new URL(target, apiRoot).searchParams.get("page");
-		if (rawPage === null || !/^\d+$/.test(rawPage) || !Number.isSafeInteger(Number(rawPage)) || Number(rawPage) < 1)
-			throw new Error("GitLab response omitted a valid next-page link");
-		const nextPage = Number(rawPage);
-		if (nextPage <= requestedPage)
-			throw new Error(`GitLab next-page link ${nextPage} did not advance beyond requested page ${requestedPage}`);
-		return nextPage;
+		const linkPage = nextPageFromLink(response.headers.get("link"), requestedPage);
+		if (rawHeaderPage === "" && linkPage !== undefined)
+			throw new Error("GitLab X-Next-Page advertised completion but Link advertised a next page");
+		if (headerPage !== undefined && linkPage !== undefined && headerPage !== linkPage)
+			throw new Error(`GitLab X-Next-Page ${headerPage} disagreed with next-page Link ${linkPage}`);
+		return headerPage ?? linkPage;
 	}
 
 	function shapeMergeRequest(
@@ -579,10 +624,16 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 				...(nextPage && { nextPage }),
 			};
 		},
-		async projectDeployments(projectPath, page, perPage) {
-			const response = await responseFor(
-				`${projectApiPath(projectPath)}/deployments?${new URLSearchParams({ status: "success", order_by: "updated_at", sort: "desc", page: String(page), per_page: String(perPage) }).toString()}`,
-			);
+		async projectDeployments(projectPath, page, perPage, updatedBefore) {
+			const params = new URLSearchParams({
+				status: "success",
+				order_by: "updated_at",
+				sort: "desc",
+				page: String(page),
+				per_page: String(perPage),
+			});
+			if (updatedBefore) params.set("updated_before", updatedBefore);
+			const response = await responseFor(`${projectApiPath(projectPath)}/deployments?${params.toString()}`);
 			validatePageHeaders(response.headers, page, perPage);
 			const deployments = GitLabDeploymentsResponseSchema.parse(await responseJson(response)).map((deployment) => ({
 				sha: deployment.sha,

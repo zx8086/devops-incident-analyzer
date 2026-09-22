@@ -225,7 +225,7 @@ export async function listMergeRequestPipelines(client: GitLabReadClient, input:
 
 export async function listProjectDeployments(
 	client: GitLabReadClient,
-	input: { repository: string; commitSha: string; page?: number },
+	input: { repository: string; commitSha: string; page?: number; updatedBefore?: string },
 ) {
 	const repository = resolveRepository(input.repository);
 	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
@@ -237,7 +237,7 @@ export async function listProjectDeployments(
 	let truncated = false;
 	let nextPage: number | undefined;
 	for (let read = 0; read < 3; read++) {
-		const result = await client.projectDeployments(project.path, page, 20);
+		const result = await client.projectDeployments(project.path, page, 20, input.updatedBefore);
 		deployments.push(...result.deployments.filter((deployment) => deployment.sha === input.commitSha));
 		if (deployments.length > 0 || !result.nextPage) {
 			nextPage = result.nextPage;

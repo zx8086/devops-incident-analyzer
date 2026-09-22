@@ -204,7 +204,7 @@ describe("GitLab deployment pagination", () => {
 			}) as unknown as typeof fetch,
 		});
 
-		await expect(client.projectDeployments?.("group/project", 4, 20)).resolves.toEqual({
+		await expect(client.projectDeployments?.("group/project", 4, 20, "2026-09-22T12:30:00.000Z")).resolves.toEqual({
 			deployments: [
 				{
 					sha: "newest-sha",
@@ -217,6 +217,7 @@ describe("GitLab deployment pagination", () => {
 		});
 		expect(requested[0]).toContain("order_by=updated_at");
 		expect(requested[0]).toContain("sort=desc");
+		expect(requested[0]).toContain("updated_before=2026-09-22T12%3A30%3A00.000Z");
 	});
 
 	test.each([
@@ -236,5 +237,62 @@ describe("GitLab deployment pagination", () => {
 		await expect(client.projectDeployments?.("group/project", 4, 20)).rejects.toThrow(
 			/valid X-Next-Page|advance beyond requested page/,
 		);
+	});
+
+	test("accepts a structural next relation when rel is not the final Link parameter", async () => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: {
+						"x-page": "4",
+						"x-per-page": "20",
+						link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next"; type="application/json"',
+					},
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20)).resolves.toMatchObject({ nextPage: 5 });
+	});
+
+	test.each([
+		[
+			"malformed advertised next relation",
+			{
+				link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=oops>; title="page"; rel="next"',
+			},
+		],
+		[
+			"empty next-page header contradicting a next Link",
+			{
+				"x-next-page": "",
+				link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next"',
+			},
+		],
+		[
+			"next-page header disagreeing with the next Link",
+			{
+				"x-next-page": "5",
+				link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=6>; rel="next"',
+			},
+		],
+		[
+			"self-looping next Link",
+			{ link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=4>; rel="next"' },
+		],
+	] as const)("rejects %s", async (_case, paginationHeaders) => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: { "x-page": "4", "x-per-page": "20", ...paginationHeaders },
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20)).rejects.toThrow(/next/i);
 	});
 });

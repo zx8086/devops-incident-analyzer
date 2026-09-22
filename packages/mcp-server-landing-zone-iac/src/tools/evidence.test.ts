@@ -104,8 +104,10 @@ describe("representative evidence", () => {
 	test("returns a resumable deployment cursor when the bounded exact-SHA search has more pages", async () => {
 		const client = fakeClient();
 		const pages: number[] = [];
-		client.projectDeployments = async (_project, page) => {
+		const boundaries: Array<string | undefined> = [];
+		client.projectDeployments = async (_project, page, _perPage, updatedBefore) => {
 			pages.push(page);
+			boundaries.push(updatedBefore);
 			return {
 				deployments: [{ sha: `other-${page}`, status: "success", updatedAt: `2026-09-2${page}T10:00:00.000Z` }],
 				nextPage: page + 1,
@@ -116,9 +118,11 @@ describe("representative evidence", () => {
 			repository: "aws-lz-account-creator",
 			commitSha: "merge-sha",
 			page: 4,
+			updatedBefore: "2026-09-22T12:00:00.000Z",
 		});
 
 		expect(pages).toEqual([4, 5, 6]);
+		expect(boundaries).toEqual(Array(3).fill("2026-09-22T12:00:00.000Z"));
 		expect(result.deployments).toEqual([]);
 		expect(result.nextPage).toBe(7);
 		expect(result.provenance.truncated).toBe(true);

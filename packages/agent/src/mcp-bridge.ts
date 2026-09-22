@@ -550,9 +550,9 @@ function emitMcpConnected(server: string, transition: McpConnectedEvent["transit
 }
 
 function markServerConnected(server: string, transition: McpConnectedEvent["transition"]): void {
-	if (connectedServers.has(server)) return;
+	const wasConnected = connectedServers.has(server);
 	connectedServers.add(server);
-	emitMcpConnected(server, transition);
+	if (!wasConnected || transition === "reconnect") emitMcpConnected(server, transition);
 }
 
 export interface McpReplacedEvent {
@@ -730,31 +730,37 @@ export async function getGitlabSemanticSearchStatus(): Promise<EmbeddingsNotRead
 }
 
 // SIO-608: Reconnect a single server that was previously down
-async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
-	try {
-		const { MultiServerMCPClient } = await import("@langchain/mcp-adapters");
-		// SIO-649: Keep elastic reconnects on injectElasticHeaders so deployment routing survives.
-		// SIO-1086: beforeToolCall is a TOP-LEVEL config field, not per-server (see createMcpClient).
-		const beforeToolCall = name === "elastic-mcp" ? injectElasticHeaders : injectTraceHeaders;
-		// SIO-893/SIO-1086: mirror createMcpClient and preserve the per-server tool timeout on
-		// reconnect too -- without it, elastic-iac drift tools (which poll CI well past the 60s
-		// adapter default) fall back to that default and start timing out after any reconnect.
-		const toolTimeout = toolTimeoutFor(name);
-		const client = new MultiServerMCPClient({
-			beforeToolCall: () => beforeToolCall(),
-			mcpServers: {
-				[name]: {
-					transport: "http",
-					url: mcpUrl,
-					...(toolTimeout !== undefined && { defaultToolTimeout: toolTimeout }),
-				},
+type ReconnectToolLoader = (name: string, mcpUrl: string) => Promise<StructuredToolInterface[]>;
+
+async function loadReconnectTools(name: string, mcpUrl: string): Promise<StructuredToolInterface[]> {
+	const { MultiServerMCPClient } = await import("@langchain/mcp-adapters");
+	// SIO-649: Keep elastic reconnects on injectElasticHeaders so deployment routing survives.
+	// SIO-1086: beforeToolCall is a TOP-LEVEL config field, not per-server (see createMcpClient).
+	const beforeToolCall = name === "elastic-mcp" ? injectElasticHeaders : injectTraceHeaders;
+	// SIO-893/SIO-1086: mirror createMcpClient and preserve the per-server tool timeout on
+	// reconnect too -- without it, elastic-iac drift tools (which poll CI well past the 60s
+	// adapter default) fall back to that default and start timing out after any reconnect.
+	const toolTimeout = toolTimeoutFor(name);
+	const client = new MultiServerMCPClient({
+		beforeToolCall: () => beforeToolCall(),
+		mcpServers: {
+			[name]: {
+				transport: "http",
+				url: mcpUrl,
+				...(toolTimeout !== undefined && { defaultToolTimeout: toolTimeout }),
 			},
-		});
-		const tools = await withTimeout(
-			client.getTools(),
-			connectTimeoutFor(name),
-			`MCP reconnect to '${name}' (${mcpUrl})`,
-		);
+		},
+	});
+	return withTimeout(client.getTools(), connectTimeoutFor(name), `MCP reconnect to '${name}' (${mcpUrl})`);
+}
+
+async function reconnectServer(
+	name: string,
+	mcpUrl: string,
+	loadTools: ReconnectToolLoader = loadReconnectTools,
+): Promise<boolean> {
+	try {
+		const tools = await loadTools(name, mcpUrl);
 
 		for (const tool of tools) {
 			if (!tool.description) {
@@ -773,8 +779,8 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 		allTools = [...allTools.filter((tool) => !staleTools.has(tool)), ...wrappedTools];
 
 		toolsByServer.set(name, wrappedTools);
-		markServerConnected(name, "reconnect");
 		logger.info({ serverName: name, toolCount: tools.length }, "MCP server reconnected with tools");
+		return true;
 	} catch (error) {
 		// Self-heal: this module graph's runner is gone (see isClosedModuleRunnerError),
 		// so every future reconnect from here is guaranteed to fail identically. Stop the
@@ -787,12 +793,44 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 				"MCP reconnect attempted from a disposed Vite module graph; stopping this poll loop until the live graph re-arms it",
 			);
 			if (getHealthPollTick() === moduleTick) stopHealthPolling();
-			return;
+			return false;
 		}
 		// SIO-705: same serializer as the boot path so reconnect failures expose
 		// AggregateError causes (DNS/socket) instead of an opaque ECONNREFUSED.
 		logger.warn({ serverName: name, ...serializeMcpConnectError(error, mcpUrl) }, "Failed to reconnect MCP server");
+		return false;
 	}
+}
+
+async function replaceServer(
+	name: string,
+	url: string,
+	card: IdentityCard,
+	loadTools: ReconnectToolLoader = loadReconnectTools,
+): Promise<boolean> {
+	const oldCard = expectedIdentity.get(name);
+	const oldToolCount = toolsByServer.get(name)?.length ?? 0;
+	if (!(await reconnectServer(name, url, loadTools))) return false;
+	expectedIdentity.set(name, card);
+	markServerConnected(name, "reconnect");
+	const newToolCount = toolsByServer.get(name)?.length ?? 0;
+	const event: McpReplacedEvent = {
+		type: "mcp_replaced",
+		server: name,
+		oldInstanceId: oldCard?.instanceId ?? null,
+		newInstanceId: card.instanceId,
+		toolCountDelta: newToolCount - oldToolCount,
+	};
+	try {
+		mcpEvents.emit("mcp_replaced", event);
+	} catch (err) {
+		logger.warn(
+			{ serverName: name, error: err instanceof Error ? err.message : String(err) },
+			"mcp_replaced listener threw; continuing health poll",
+		);
+	}
+	logger.info(event, "mcp_replaced event emitted");
+	return true;
 }
 
 // SIO-780: state-aware health poll. Dispatches per ProbeResult.state:
@@ -830,7 +868,7 @@ async function pollServerHealth(): Promise<void> {
 							markServerConnected(name, "health-ready");
 							logger.info({ serverName: name }, "MCP server back online (tools cached)");
 						} else {
-							await reconnectServer(name, url);
+							if (await reconnectServer(name, url)) markServerConnected(name, "reconnect");
 						}
 					}
 					break;
@@ -891,29 +929,7 @@ async function pollServerHealth(): Promise<void> {
 						},
 						"MCP server replaced, reconnecting",
 					);
-					const oldToolCount = toolsByServer.get(name)?.length ?? 0;
-					await reconnectServer(name, url);
-					const newToolCount = toolsByServer.get(name)?.length ?? 0;
-					expectedIdentity.set(name, result.card);
-					const event: McpReplacedEvent = {
-						type: "mcp_replaced",
-						server: name,
-						oldInstanceId: oldCard?.instanceId ?? null,
-						newInstanceId: result.card.instanceId,
-						toolCountDelta: newToolCount - oldToolCount,
-					};
-					// SIO-906: emit() runs listeners synchronously and re-throws; a single
-					// dead SSE controller must not unwind into pollServerHealth() and kill
-					// the whole health-poll cycle for every server.
-					try {
-						mcpEvents.emit("mcp_replaced", event);
-					} catch (err) {
-						logger.warn(
-							{ serverName: name, error: err instanceof Error ? err.message : String(err) },
-							"mcp_replaced listener threw; continuing health poll",
-						);
-					}
-					logger.info(event, "mcp_replaced event emitted");
+					await replaceServer(name, url, result.card);
 					break;
 				}
 				case "misidentified":
@@ -987,6 +1003,26 @@ export function _resetUnreadyStreakForTest(): void {
 }
 export function _markServerConnectedForTest(server: string): void {
 	markServerConnected(server, "health-ready");
+}
+export function _seedServerForReplacementTest(
+	server: string,
+	tools: StructuredToolInterface[],
+	identity: IdentityCard,
+): void {
+	connectedServers.add(server);
+	toolsByServer.set(server, tools);
+	allTools = [...allTools, ...tools];
+	expectedIdentity.set(server, identity);
+}
+export const _replaceServerForTest = replaceServer;
+export function _getExpectedIdentityForTest(server: string): IdentityCard | undefined {
+	return expectedIdentity.get(server);
+}
+export function _resetReplacementStateForTest(): void {
+	allTools = [];
+	connectedServers = new Set();
+	toolsByServer = new Map();
+	expectedIdentity.clear();
 }
 export function _getLoggerForTest(): typeof logger {
 	return logger;

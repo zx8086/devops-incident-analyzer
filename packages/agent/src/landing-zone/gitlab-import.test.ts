@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	importLandingZoneGitLabHistory,
 	LANDING_ZONE_GITLAB_IMPORT_REQUIRED_TOOLS,
+	type LandingZoneImportCheckpoint,
 	type LandingZoneImportDependencies,
 	landingZoneGitLabImportEnabled,
 	MAX_PENDING_MERGE_REQUESTS,
@@ -715,8 +716,8 @@ describe("importLandingZoneGitLabHistory", () => {
 	});
 
 	test("persists a per-MR deployment cursor until an exact SHA beyond sixty newer deployments is found", async () => {
-		const deploymentPages: number[] = [];
-		let checkpoint = {
+		const deploymentCalls: Array<{ page?: number; updatedBefore?: string }> = [];
+		let checkpoint: LandingZoneImportCheckpoint = {
 			projectId: "42",
 			updatedAfter: "2026-09-01T00:00:00.000Z",
 			pendingMrIids: [7],
@@ -734,8 +735,8 @@ describe("importLandingZoneGitLabHistory", () => {
 				{
 					...fixture.dependencies,
 					readMergeRequest: async () => ({ project: PROJECT, mergeRequest: mr() }),
-					listDeployments: async ({ page = 1 }) => {
-						deploymentPages.push(page);
+					listDeployments: async ({ page = 1, updatedBefore }) => {
+						deploymentCalls.push({ page, updatedBefore });
 						if (page === 1) {
 							return {
 								deployments: [],
@@ -760,12 +761,96 @@ describe("importLandingZoneGitLabHistory", () => {
 			);
 			if (run === 0) {
 				expect(result.outcomes).toContain("merged-unverified");
-				expect(result.checkpoint?.pendingDeploymentPages).toEqual({ "7": 4 });
+				expect(result.checkpoint?.pendingDeploymentScans?.["7"]).toMatchObject({
+					sha: "commit-7",
+					nextPage: 4,
+				});
 			}
-			checkpoint = result.checkpoint as typeof checkpoint;
+			checkpoint = result.checkpoint as LandingZoneImportCheckpoint;
 		}
 
-		expect(deploymentPages).toEqual([1, 4]);
+		expect(deploymentCalls.map(({ page }) => page)).toEqual([1, 4]);
+		expect(deploymentCalls[0]?.updatedBefore).toBeString();
+		expect(deploymentCalls[1]?.updatedBefore).toBe(deploymentCalls[0]?.updatedBefore);
+		expect(checkpoint.pendingMrIids).toEqual([]);
+	});
+
+	test("resets a persisted deployment scan when the MR commit SHA changes", async () => {
+		const calls: Array<{ commitSha: string; page?: number; updatedBefore?: string }> = [];
+		const fixture = dependencies([], []);
+		const result = await importLandingZoneGitLabHistory(
+			{
+				repository: "aws-lz-account-creator",
+				checkpoint: {
+					projectId: "42",
+					updatedAfter: "2026-09-01T00:00:00.000Z",
+					pendingMrIids: [7],
+					pendingDeploymentScans: {
+						"7": { sha: "head-7", nextPage: 4, updatedBefore: "2026-09-03T00:00:00.000Z" },
+					},
+				},
+				reconcilePending: true,
+				maxPages: 1,
+			},
+			{
+				...fixture.dependencies,
+				readMergeRequest: async () => ({ project: PROJECT, mergeRequest: mr({ mergeCommitSha: "merge-7" }) }),
+				listDeployments: async (input) => {
+					calls.push(input);
+					return { deployments: [], nextPage: 2 };
+				},
+			},
+		);
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({ commitSha: "merge-7", page: 1 });
+		const updatedBefore = calls[0]?.updatedBefore;
+		expect(updatedBefore).toBeString();
+		if (!updatedBefore) throw new Error("expected a fixed deployment boundary");
+		expect(updatedBefore).not.toBe("2026-09-03T00:00:00.000Z");
+		expect(result.checkpoint?.pendingDeploymentScans?.["7"]).toEqual({
+			sha: "merge-7",
+			nextPage: 2,
+			updatedBefore,
+		});
+	});
+
+	test("refreshes an exhausted deployment snapshot so a later deployment is found", async () => {
+		const boundaries: string[] = [];
+		let checkpoint: LandingZoneImportCheckpoint = {
+			projectId: "42",
+			updatedAfter: "2026-09-01T00:00:00.000Z",
+			pendingMrIids: [7],
+			pendingDeploymentScans: {
+				"7": { sha: "commit-7", nextPage: 4, updatedBefore: "2026-09-03T00:00:00.000Z" },
+			},
+		};
+		for (let run = 0; run < 2; run++) {
+			const fixture = dependencies([], []);
+			const result = await importLandingZoneGitLabHistory(
+				{ repository: "aws-lz-account-creator", checkpoint, reconcilePending: true, maxPages: 1 },
+				{
+					...fixture.dependencies,
+					readMergeRequest: async () => ({ project: PROJECT, mergeRequest: mr() }),
+					listDeployments: async ({ updatedBefore }) => {
+						if (!updatedBefore) throw new Error("missing fixed deployment boundary");
+						boundaries.push(updatedBefore);
+						return run === 0
+							? { deployments: [] }
+							: {
+									deployments: [{ sha: "commit-7", status: "success", updatedAt: "2026-09-04T00:00:00.000Z" }],
+								};
+					},
+				},
+			);
+			checkpoint = result.checkpoint as LandingZoneImportCheckpoint;
+			if (run === 0) {
+				expect(checkpoint.pendingDeploymentScans?.["7"]?.nextPage).toBe(1);
+				expect(checkpoint.pendingDeploymentScans?.["7"]?.updatedBefore).not.toBe(boundaries[0]);
+			}
+		}
+
+		expect(boundaries[1]).not.toBe(boundaries[0]);
 		expect(checkpoint.pendingMrIids).toEqual([]);
 	});
 
