@@ -100,6 +100,8 @@ describe("loadAgent(landing-zone-terraform)", () => {
 		expect(tool).toBeDefined();
 		expect(tool?.annotations?.read_only).toBe(true);
 		expect(tool?.annotations?.requires_confirmation).toBe(false);
+		expect(tool?.tool_mapping?.mcp_server).toBe("landing-zone-iac");
+		expect(tool?.tool_mapping?.mcp_patterns).toEqual(["lz_*"]);
 
 		const actionNames = Object.keys(tool?.tool_mapping?.action_tool_map ?? {});
 		const forbidden = /(apply|destroy|state|branch|commit|merge|approve|pipeline|write|create|update|delete|mutate)/i;

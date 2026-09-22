@@ -183,6 +183,11 @@ export interface GitLabTreeEntry {
 	type: "blob" | "tree";
 }
 
+export interface GitLabTreeResult {
+	entries: GitLabTreeEntry[];
+	truncated: boolean;
+}
+
 export interface GitLabFile {
 	content: string;
 	blobId: string;
@@ -205,7 +210,7 @@ export interface GitLabPipelineJob {
 
 export interface GitLabReadClient {
 	project(projectPath: string): Promise<GitLabProject>;
-	tree(projectPath: string, ref?: string, recursive?: boolean, path?: string): Promise<GitLabTreeEntry[]>;
+	tree(projectPath: string, ref?: string, recursive?: boolean, path?: string): Promise<GitLabTreeResult>;
 	readFile(projectPath: string, path: string, ref?: string): Promise<GitLabFile>;
 	openChanges(projectPath: string): Promise<GitLabOpenChange[]>;
 	changePaths(projectPath: string, iid: number): Promise<string[]>;
@@ -299,6 +304,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 		},
 		async tree(projectPath, ref, recursive = false, path) {
 			const entries: GitLabTreeEntry[] = [];
+			let truncated = false;
 			for (let page = 1; page <= 5; page++) {
 				const params = new URLSearchParams({ page: String(page), per_page: "100", recursive: String(recursive) });
 				if (ref) params.set("ref", ref);
@@ -308,8 +314,9 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 				);
 				entries.push(...batch);
 				if (batch.length < 100) break;
+				if (page === 5) truncated = true;
 			}
-			return entries;
+			return { entries, truncated };
 		},
 		async readFile(projectPath, path, ref) {
 			const suffix = ref ? `?ref=${encodeURIComponent(ref)}` : "";
@@ -365,7 +372,7 @@ export function sanitizeEvidenceText(content: string): string {
 	return content
 		.replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]")
 		.replace(
-			/^(\s*["']?(?:password|secret|token|access_key|secret_key|private_key)["']?\s*[:=]\s*)([^\r\n,}]+)/gim,
+			/^(\s*(?:export\s+)?["']?[a-z0-9_]*(?:password|token|secret|private_key|access_key)[a-z0-9_]*["']?\s*[:=]\s*)([^\r\n,}]+)/gim,
 			"$1[REDACTED]",
 		);
 }

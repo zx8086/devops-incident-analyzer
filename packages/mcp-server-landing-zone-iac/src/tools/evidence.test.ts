@@ -8,12 +8,18 @@ function fakeClient(): GitLabReadClient {
 			return { id: 42, defaultBranch: "main", headSha: "abc123", lastActivityAt: "2026-09-22T08:00:00Z" };
 		},
 		async tree() {
-			return [
-				...Array.from({ length: 6 }, (_, index) => ({ path: `accounts/app-${index + 1}.yml`, type: "blob" as const })),
-				{ path: "schemas/account.schema.json", type: "blob" as const },
-				{ path: "scripts/generate_tf.py", type: "blob" as const },
-				{ path: "tests/account.test.ts", type: "blob" as const },
-			];
+			return {
+				entries: [
+					...Array.from({ length: 6 }, (_, index) => ({
+						path: `accounts/app-${index + 1}.yml`,
+						type: "blob" as const,
+					})),
+					{ path: "schemas/account.schema.json", type: "blob" as const },
+					{ path: "scripts/generate_tf.py", type: "blob" as const },
+					{ path: "tests/account.test.ts", type: "blob" as const },
+				],
+				truncated: false,
+			};
 		},
 		async readFile(_projectPath, path) {
 			return { content: `content:${path}`, blobId: `blob:${path}`, size: path.length };
@@ -59,5 +65,25 @@ describe("representative evidence", () => {
 		expect(result.jobs).toHaveLength(1);
 		expect(result.jobs[0]?.name).toBe("terraform-plan");
 		expect(result.jobs[0]?.trace).toContain("0 to destroy");
+	});
+
+	test("marks capped repository trees as truncated instead of treating them as complete", async () => {
+		const client = fakeClient();
+		client.tree = async () => ({
+			entries: [
+				{ path: "accounts/app-1.yml", type: "blob" },
+				{ path: "accounts/app-2.yml", type: "blob" },
+				{ path: "accounts/app-3.yml", type: "blob" },
+			],
+			truncated: true,
+		});
+
+		const result = await findRepresentativeExamples(client, {
+			repository: "aws-lz-account-creator",
+			path: "accounts",
+		});
+
+		expect(result.provenance.truncated).toBe(true);
+		expect(result.warnings).toContain("Repository tree evidence was truncated at 500 entries");
 	});
 });

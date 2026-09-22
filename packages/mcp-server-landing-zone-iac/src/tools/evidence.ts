@@ -72,7 +72,7 @@ export async function findRepresentativeExamples(client: GitLabReadClient, input
 	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
 	const { provenance } = await repositoryProvenance(client, repository, input.ref);
 	const tree = await client.tree(repository.projectPath, provenance.ref, true);
-	const blobs = tree.filter((entry) => entry.type === "blob").map((entry) => entry.path);
+	const blobs = tree.entries.filter((entry) => entry.type === "blob").map((entry) => entry.path);
 
 	const contractPaths = new Map<ContractKind, string>();
 	for (const path of blobs) {
@@ -103,6 +103,7 @@ export async function findRepresentativeExamples(client: GitLabReadClient, input
 	const warnings = [
 		...(exampleEvidence.length < 3 ? [`Only ${exampleEvidence.length} active examples were available`] : []),
 		...(missingContracts.length > 0 ? [`Contract evidence not found: ${missingContracts.join(", ")}`] : []),
+		...(tree.truncated ? ["Repository tree evidence was truncated at 500 entries"] : []),
 	];
 
 	return {
@@ -111,7 +112,7 @@ export async function findRepresentativeExamples(client: GitLabReadClient, input
 		examples: exampleEvidence,
 		openChanges,
 		warnings,
-		provenance: { ...provenance, truncated },
+		provenance: { ...provenance, truncated: truncated || tree.truncated },
 	};
 }
 

@@ -56,7 +56,8 @@ describe("Landing Zone repository allowlist", () => {
 
 	test("rejects sensitive paths and redacts credential-like literal values", async () => {
 		const readFile = mock(async () => ({
-			content: 'token = "glpat-example"\nname = "safe"',
+			content:
+				'token = "glpat-example"\nexport AWS_SECRET_ACCESS_KEY=aws-secret\nGITLAB_PERSONAL_ACCESS_TOKEN: gitlab-secret\nclient_secret = "oauth-secret"\nname = "safe"',
 			blobId: "blob-1",
 			size: 42,
 		}));
@@ -75,6 +76,12 @@ describe("Landing Zone repository allowlist", () => {
 			paths: ["accounts/example.yml"],
 		});
 		expect(result.files[0]?.content).toContain("token = [REDACTED]");
+		expect(result.files[0]?.content).toContain("export AWS_SECRET_ACCESS_KEY=[REDACTED]");
+		expect(result.files[0]?.content).toContain("GITLAB_PERSONAL_ACCESS_TOKEN: [REDACTED]");
+		expect(result.files[0]?.content).toContain("client_secret = [REDACTED]");
 		expect(result.files[0]?.content).not.toContain("glpat-example");
+		expect(result.files[0]?.content).not.toContain("aws-secret");
+		expect(result.files[0]?.content).not.toContain("gitlab-secret");
+		expect(result.files[0]?.content).not.toContain("oauth-secret");
 	});
 });
