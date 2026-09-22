@@ -197,7 +197,13 @@ export function recordLandingZoneTurn(
 	const currentGitLabEvidence = state.evidenceResults.some(
 		(item) => item.source === "gitlab" && item.status === "observed" && item.freshness.status === "current",
 	);
-	if (state.intent !== "review" || !state.reconciliation || !currentGitLabEvidence) return false;
+	if (
+		state.intent !== "review" ||
+		state.outcome !== "answered" ||
+		state.reconciliation?.status !== "aligned" ||
+		!currentGitLabEvidence
+	)
+		return false;
 	return dependencies.recordOutcome({
 		requestId: state.requestId,
 		summary: `Landing Zone review ended ${state.outcome}: ${state.reconciliation.conclusion}`,

@@ -232,14 +232,13 @@ export async function assessLandingZoneRisk(state: LandingZoneStateType): Promis
 }
 
 export async function answerLandingZoneQuestion(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
-	const priorMemory = renderLandingZonePriorMemory(state.priorMemory);
 	if (state.blockedReason) {
-		const response = `${state.blockedReason}${priorMemory}`;
-		return { messages: [new AIMessage(response)], response, outcome: "blocked" };
+		return { messages: [new AIMessage(state.blockedReason)], response: state.blockedReason, outcome: "blocked" };
 	}
 	const conclusion = state.reconciliation?.conclusion ?? "No evidence conclusion is available.";
 	const limits = state.risk?.reasons ?? [];
 	const answer = limits.length > 0 ? `${conclusion} Limits: ${limits.join(" ")}` : conclusion;
+	const priorMemory = state.reconciliation?.status === "aligned" ? renderLandingZonePriorMemory(state.priorMemory) : "";
 	const response = `${answer}${priorMemory}`;
 	return {
 		messages: [new AIMessage(response)],

@@ -336,4 +336,45 @@ describe("recordLandingZoneTurn", () => {
 		expect(breadcrumbs).toHaveLength(1);
 		expect(outcomes).toEqual([]);
 	});
+
+	test("does not persist blocked or non-aligned reviews as confirmed outcomes", () => {
+		const breadcrumbs: unknown[] = [];
+		const outcomes: unknown[] = [];
+		const recorded = recordLandingZoneTurn(
+			state({
+				intent: "review",
+				outcome: "blocked",
+				evidenceResults: [
+					{
+						id: "gitlab:conflict",
+						claimKey: "backend-locking",
+						source: "gitlab",
+						retrievedAt: "2026-09-22T10:30:00.000Z",
+						status: "observed",
+						summary: "The live backend differs from the documented target.",
+						provenance: { repository: "aws-lz-network-core", path: "_backend.tf" },
+						freshness: { status: "current" },
+					},
+				],
+				reconciliation: {
+					status: "conflicting-evidence",
+					conclusion: "The sources conflict.",
+					comparisons: [],
+					conflicts: ["Backend locking differs."],
+					unavailableSources: [],
+				},
+			}),
+			{
+				appendBreadcrumb: (entry) => breadcrumbs.push(entry),
+				recordOutcome: (input) => {
+					outcomes.push(input);
+					return true;
+				},
+			},
+		);
+
+		expect(recorded).toBeFalse();
+		expect(breadcrumbs).toHaveLength(1);
+		expect(outcomes).toEqual([]);
+	});
 });

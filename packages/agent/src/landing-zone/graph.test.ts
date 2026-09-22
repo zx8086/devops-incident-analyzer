@@ -5,7 +5,7 @@ import type { EvidenceItem, EvidenceSource } from "@devops-agent/shared";
 import { HumanMessage } from "@langchain/core/messages";
 import type { LandingZoneEvidenceCollectors } from "./evidence.ts";
 import { buildLandingZoneGraph } from "./graph.ts";
-import { assessLandingZoneRisk } from "./nodes.ts";
+import { answerLandingZoneQuestion, assessLandingZoneRisk } from "./nodes.ts";
 import type { LandingZoneStateType } from "./state.ts";
 import { LandingZoneIntentSchema, LandingZoneStateInputSchema } from "./types.ts";
 
@@ -194,6 +194,52 @@ describe("Landing Zone required evidence gate", () => {
 
 		expect(result.risk?.blocked).toBeTrue();
 		expect(result.blockedReason).toContain("gitlab");
+	});
+});
+
+describe("Landing Zone memory answer boundary", () => {
+	test("does not expose prior memory in a blocked response", async () => {
+		const result = await answerLandingZoneQuestion({
+			...proposedChangeState([]),
+			blockedReason: "Current GitLab evidence is required.",
+			priorMemory: [
+				{
+					text: "A stale account value.",
+					annotations: { kind: "account-vending" },
+					advisory: true,
+					requiresLiveRevalidation: true,
+				},
+			],
+		});
+
+		expect(result.response).toBe("Current GitLab evidence is required.");
+		expect(result.response).not.toContain("stale account value");
+	});
+
+	test("shows advisory prior experience only after live evidence aligns", async () => {
+		const result = await answerLandingZoneQuestion({
+			...proposedChangeState([observedEvidence]),
+			intent: "review",
+			blockedReason: null,
+			reconciliation: {
+				status: "aligned",
+				conclusion: "Live evidence is aligned.",
+				comparisons: [],
+				conflicts: [],
+				unavailableSources: [],
+			},
+			priorMemory: [
+				{
+					text: "A previous review used account YAML.",
+					annotations: { kind: "account-vending" },
+					advisory: true,
+					requiresLiveRevalidation: true,
+				},
+			],
+		});
+
+		expect(result.response).toContain("Prior experience (advisory; revalidate against current live evidence)");
+		expect(result.response).toContain("A previous review used account YAML.");
 	});
 });
 
