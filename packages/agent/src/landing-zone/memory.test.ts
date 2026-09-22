@@ -92,9 +92,12 @@ describe("memoryEnrichLandingZone", () => {
 
 	test("drops recalled Terraform state values and redacts recalled credentials", async () => {
 		const result = await memoryEnrichLandingZone(state(), {
-			search: async () => [
+			search: async (): Promise<MemorySearchHit[]> => [
 				{ text: "Terraform state value: password=do-not-store", annotations: {} },
-				{ text: "Use the reviewed exception; token=do-not-repeat", annotations: { kind: "platform-exception" } },
+				{
+					text: "Use the reviewed exception; token=do-not-repeat",
+					annotations: { kind: "platform-exception" },
+				},
 			],
 		});
 
