@@ -1,4 +1,6 @@
-import { type AnnotationMap, redactPiiContent } from "@devops-agent/shared";
+// packages/agent/src/landing-zone/memory.ts
+
+import { type AnnotationMap, type EvidenceItem, redactPiiContent } from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
 import { searchAgentMemory } from "../memory-backend.ts";
 import { appendDailyLog, type DailyLogEntry, type KeyDecision, recordKeyDecision } from "../memory-writer.ts";
@@ -28,6 +30,7 @@ export interface LandingZoneMemoryScope {
 	workflow?: string;
 	mrUrl?: string;
 	configChangeId?: string;
+	validatedClaims?: Readonly<Record<string, string>>;
 }
 
 export interface LandingZoneDecisionInput extends LandingZoneMemoryScope {
@@ -86,6 +89,9 @@ export function buildLandingZoneMemoryAnnotations(scope: LandingZoneMemoryScope)
 		...(scope.workflow ? { workflow: safeAnnotationValue(scope.workflow) } : {}),
 		...(scope.mrUrl ? { mr_url: safeAnnotationValue(scope.mrUrl) } : {}),
 		...(scope.configChangeId ? { config_change_id: safeAnnotationValue(scope.configChangeId) } : {}),
+		...(scope.validatedClaims && Object.keys(scope.validatedClaims).length > 0
+			? { validated_claims: safeAnnotationValue(JSON.stringify(scope.validatedClaims)) }
+			: {}),
 	};
 }
 
@@ -173,9 +179,57 @@ export function recordLandingZoneOutcome(
 	return true;
 }
 
-export function renderLandingZonePriorMemory(priorMemory: LandingZonePriorMemory[]): string {
-	if (priorMemory.length === 0) return "";
-	const items = priorMemory
+function normalizeClaimValue(value: string): string {
+	return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function parseValidatedClaims(value: string | undefined): Readonly<Record<string, string>> | null {
+	if (!value) return null;
+	try {
+		const parsed: unknown = JSON.parse(value);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+		const entries = Object.entries(parsed);
+		if (
+			entries.length === 0 ||
+			entries.some(([key, claimValue]) => key.trim().length === 0 || typeof claimValue !== "string")
+		)
+			return null;
+		return Object.fromEntries(entries) as Readonly<Record<string, string>>;
+	} catch {
+		return null;
+	}
+}
+
+export function revalidateLandingZonePriorMemory(
+	priorMemory: LandingZonePriorMemory[],
+	evidenceResults: EvidenceItem[],
+): LandingZonePriorMemory[] {
+	const currentLiveClaims = new Map(
+		evidenceResults.flatMap((item) =>
+			item.status === "observed" &&
+			item.freshness.status === "current" &&
+			(item.source === "gitlab" || item.source === "aws-api") &&
+			item.claimValue !== undefined
+				? [[item.claimKey, normalizeClaimValue(item.claimValue)] as const]
+				: [],
+		),
+	);
+	return priorMemory.filter((item) => {
+		const validatedClaims = parseValidatedClaims(item.annotations.validated_claims);
+		if (!validatedClaims) return false;
+		return Object.entries(validatedClaims).every(
+			([claimKey, claimValue]) => currentLiveClaims.get(claimKey) === normalizeClaimValue(claimValue),
+		);
+	});
+}
+
+export function renderLandingZonePriorMemory(
+	priorMemory: LandingZonePriorMemory[],
+	evidenceResults: EvidenceItem[],
+): string {
+	const revalidatedMemory = revalidateLandingZonePriorMemory(priorMemory, evidenceResults);
+	if (revalidatedMemory.length === 0) return "";
+	const items = revalidatedMemory
 		.slice(0, 3)
 		.map((item) => `- ${item.text.slice(0, 500)}`)
 		.join("\n");
@@ -194,14 +248,21 @@ export function recordLandingZoneTurn(
 		summary: `${state.intent} turn ended ${state.outcome}. ${state.reconciliation?.conclusion ?? "No evidence conclusion."}`,
 	});
 
-	const currentGitLabEvidence = state.evidenceResults.some(
-		(item) => item.source === "gitlab" && item.status === "observed" && item.freshness.status === "current",
+	const validatedClaims = Object.fromEntries(
+		state.evidenceResults.flatMap((item) =>
+			item.source === "gitlab" &&
+			item.status === "observed" &&
+			item.freshness.status === "current" &&
+			item.claimValue !== undefined
+				? [[item.claimKey, item.claimValue] as const]
+				: [],
+		),
 	);
 	if (
 		state.intent !== "review" ||
 		state.outcome !== "answered" ||
 		state.reconciliation?.status !== "aligned" ||
-		!currentGitLabEvidence
+		Object.keys(validatedClaims).length === 0
 	)
 		return false;
 	return dependencies.recordOutcome({
@@ -213,5 +274,6 @@ export function recordLandingZoneTurn(
 		...(oneValue(state.accountScope) ? { account: oneValue(state.accountScope) } : {}),
 		workflow: state.intent,
 		configChangeId: state.requestId,
+		validatedClaims,
 	});
 }

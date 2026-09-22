@@ -238,7 +238,10 @@ export async function answerLandingZoneQuestion(state: LandingZoneStateType): Pr
 	const conclusion = state.reconciliation?.conclusion ?? "No evidence conclusion is available.";
 	const limits = state.risk?.reasons ?? [];
 	const answer = limits.length > 0 ? `${conclusion} Limits: ${limits.join(" ")}` : conclusion;
-	const priorMemory = state.reconciliation?.status === "aligned" ? renderLandingZonePriorMemory(state.priorMemory) : "";
+	const priorMemory =
+		state.reconciliation?.status === "aligned"
+			? renderLandingZonePriorMemory(state.priorMemory, state.evidenceResults)
+			: "";
 	const response = `${answer}${priorMemory}`;
 	return {
 		messages: [new AIMessage(response)],

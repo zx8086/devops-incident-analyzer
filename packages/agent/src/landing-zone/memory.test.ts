@@ -1,3 +1,5 @@
+// packages/agent/src/landing-zone/memory.test.ts
+
 import { describe, expect, test } from "bun:test";
 import type { AnnotationMap } from "@devops-agent/shared";
 import type { MemorySearchHit } from "../memory-backend.ts";
@@ -107,17 +109,65 @@ describe("memoryEnrichLandingZone", () => {
 		expect(result.priorMemory?.[0]?.text).toBe("Use the reviewed exception; token=[REDACTED]");
 	});
 
-	test("renders recalled experience as advisory content requiring live revalidation", () => {
+	test("renders recalled experience only when current live evidence confirms every stored claim", () => {
 		expect(
-			renderLandingZonePriorMemory([
-				{
-					text: "A previous account review used the YAML authoring surface.",
-					annotations: { kind: "account-vending" },
-					advisory: true,
-					requiresLiveRevalidation: true,
-				},
-			]),
+			renderLandingZonePriorMemory(
+				[
+					{
+						text: "A previous account review used the YAML authoring surface.",
+						annotations: {
+							kind: "account-vending",
+							validated_claims: JSON.stringify({ "account-authoring-surface": "accounts/*.yml" }),
+						},
+						advisory: true,
+						requiresLiveRevalidation: true,
+					},
+				],
+				[
+					{
+						id: "gitlab:account",
+						claimKey: "account-authoring-surface",
+						claimValue: "accounts/*.yml",
+						source: "gitlab",
+						retrievedAt: "2026-09-22T10:30:00.000Z",
+						status: "observed",
+						summary: "Account requests use YAML.",
+						provenance: { repository: "aws-lz-account-creator", path: "accounts/example.yml" },
+						freshness: { status: "current" },
+					},
+				],
+			),
 		).toContain("Prior experience (advisory; revalidate against current live evidence)");
+	});
+
+	test("omits recalled experience when the current claim value differs", () => {
+		expect(
+			renderLandingZonePriorMemory(
+				[
+					{
+						text: "A previous account review used JSON.",
+						annotations: {
+							validated_claims: JSON.stringify({ "account-authoring-surface": "accounts/*.json" }),
+						},
+						advisory: true,
+						requiresLiveRevalidation: true,
+					},
+				],
+				[
+					{
+						id: "gitlab:account",
+						claimKey: "account-authoring-surface",
+						claimValue: "accounts/*.yml",
+						source: "gitlab",
+						retrievedAt: "2026-09-22T10:30:00.000Z",
+						status: "observed",
+						summary: "Account requests use YAML.",
+						provenance: { repository: "aws-lz-account-creator", path: "accounts/example.yml" },
+						freshness: { status: "current" },
+					},
+				],
+			),
+		).toBe("");
 	});
 });
 
@@ -284,6 +334,7 @@ describe("recordLandingZoneTurn", () => {
 					{
 						id: "gitlab:account",
 						claimKey: "account-authoring-surface",
+						claimValue: "accounts/*.yml",
 						source: "gitlab",
 						retrievedAt: "2026-09-22T10:30:00.000Z",
 						status: "observed",
@@ -318,6 +369,7 @@ describe("recordLandingZoneTurn", () => {
 			account: "martech-dev",
 			workflow: "review",
 			configChangeId: "change-123",
+			validatedClaims: { "account-authoring-surface": "accounts/*.yml" },
 		});
 	});
 

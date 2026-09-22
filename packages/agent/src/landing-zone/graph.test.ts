@@ -71,6 +71,7 @@ const BASE_STATE_INPUT = {
 const observedEvidence = {
 	id: "gitlab:account-creator:abc123",
 	claimKey: "account-authoring-surface",
+	claimValue: "accounts/*.yml",
 	source: "gitlab",
 	retrievedAt: "2026-09-22T10:30:00.000Z",
 	status: "observed",
@@ -205,7 +206,10 @@ describe("Landing Zone memory answer boundary", () => {
 			priorMemory: [
 				{
 					text: "A stale account value.",
-					annotations: { kind: "account-vending" },
+					annotations: {
+						kind: "account-vending",
+						validated_claims: JSON.stringify({ "account-authoring-surface": "accounts/*.yml" }),
+					},
 					advisory: true,
 					requiresLiveRevalidation: true,
 				},
@@ -231,7 +235,10 @@ describe("Landing Zone memory answer boundary", () => {
 			priorMemory: [
 				{
 					text: "A previous review used account YAML.",
-					annotations: { kind: "account-vending" },
+					annotations: {
+						kind: "account-vending",
+						validated_claims: JSON.stringify({ "account-authoring-surface": "accounts/*.yml" }),
+					},
 					advisory: true,
 					requiresLiveRevalidation: true,
 				},
