@@ -252,9 +252,21 @@ export async function importLandingZoneGitLabHistory(
 			page: nextPage,
 		});
 		if (expectedTotal !== undefined && page.total !== expectedTotal) {
+			const pageProjectId = String(page.project.id);
+			if (options.checkpoint?.projectId !== pageProjectId) {
+				throw new Error(
+					`Checkpoint project ${options.checkpoint?.projectId} does not match GitLab project ${pageProjectId}`,
+				);
+			}
+			const checkpoint = {
+				projectId: pageProjectId,
+				updatedAfter,
+				inProgress: { upperBound, expectedTotal: page.total, nextPage: 1, seenMrIds: [] },
+			};
+			await resolvedDependencies.recordCheckpoint?.(resolvedDependencies.store, checkpoint);
 			return {
 				outcomes,
-				checkpoint: { projectId: String(page.project.id), updatedAfter, inProgress: { upperBound, expectedTotal: page.total, nextPage: 1, seenMrIds: [] } },
+				checkpoint,
 			};
 		}
 		expectedTotal = page.total;
@@ -288,7 +300,8 @@ export async function importLandingZoneGitLabHistory(
 		for (const mr of page.mergeRequests) {
 			const stableMrId = `${projectId}:${mr.iid}`;
 			seenMrIds.add(stableMrId);
-			if (seenMrIds.size > 10_000) throw new Error(`GitLab import stable MR ID safety limit exceeded for ${options.repository}`);
+			if (seenMrIds.size > 10_000)
+				throw new Error(`GitLab import stable MR ID safety limit exceeded for ${options.repository}`);
 			const pipelinePage = await resolvedDependencies.listPipelines({ repository: options.repository, iid: mr.iid });
 			const pipelines = pipelinePage.pipelines;
 			const outcome = outcomeFor(mr, pipelines);
@@ -342,13 +355,22 @@ export async function importLandingZoneGitLabHistory(
 	}
 	if (!projectId) return { outcomes };
 	const lastPage = pages.at(-1);
-	if (!lastPage || expectedTotal === undefined) throw new Error("GitLab historical merge request response omitted a valid total");
-	if (seenMrIds.size > expectedTotal) throw new Error(`GitLab historical merge request total changed for ${options.repository}`);
+	if (!lastPage || expectedTotal === undefined)
+		throw new Error("GitLab historical merge request response omitted a valid total");
+	if (seenMrIds.size > expectedTotal)
+		throw new Error(`GitLab historical merge request total changed for ${options.repository}`);
 	const checkpoint = lastPage.nextPage
 		? { projectId, updatedAfter, inProgress: { upperBound, expectedTotal, nextPage, seenMrIds: [...seenMrIds].sort() } }
 		: seenMrIds.size === expectedTotal
-			? { projectId, updatedAfter: new Date(Math.max(Date.parse(updatedAfter) + 1, Date.parse(upperBound) - 1)).toISOString() }
-			: { projectId, updatedAfter, inProgress: { upperBound, expectedTotal, nextPage: 1, seenMrIds: [...seenMrIds].sort() } };
+			? {
+					projectId,
+					updatedAfter: new Date(Math.max(Date.parse(updatedAfter) + 1, Date.parse(upperBound) - 1)).toISOString(),
+				}
+			: {
+					projectId,
+					updatedAfter,
+					inProgress: { upperBound, expectedTotal, nextPage: 1, seenMrIds: [...seenMrIds].sort() },
+				};
 	await resolvedDependencies.recordCheckpoint?.(resolvedDependencies.store, checkpoint);
 	return { outcomes, checkpoint };
 }

@@ -109,7 +109,7 @@ describe("representative evidence", () => {
 		const calls: unknown[][] = [];
 		client.historicalMergeRequests = async (...args) => {
 			calls.push(args);
-		return {
+			return {
 				mergeRequests: [
 					{
 						iid: 7,
@@ -120,9 +120,9 @@ describe("representative evidence", () => {
 						updatedAt: "2026-09-03T00:00:00.000Z",
 						commitSha: "abc123",
 					},
-			],
-			total: 1,
-			nextPage: 3,
+				],
+				total: 1,
+				nextPage: 3,
 			};
 		};
 

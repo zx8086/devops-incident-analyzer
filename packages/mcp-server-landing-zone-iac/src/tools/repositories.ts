@@ -463,8 +463,13 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 				}),
 			);
 			const nextPage = Number(response.headers.get("x-next-page"));
-			const total = Number(response.headers.get("x-total"));
-			if (!Number.isInteger(total) || total < 0) throw new Error("GitLab historical merge request response omitted a valid X-Total header");
+			const totalHeader = response.headers.get("x-total");
+			if (totalHeader === null || totalHeader.trim() === "") {
+				throw new Error("GitLab historical merge request response omitted a valid X-Total header");
+			}
+			const total = Number(totalHeader);
+			if (!Number.isInteger(total) || total < 0)
+				throw new Error("GitLab historical merge request response omitted a valid X-Total header");
 			return { mergeRequests, total, ...(Number.isInteger(nextPage) && nextPage > 0 && { nextPage }) };
 		},
 		async mergeRequestPipelines(projectPath, iid) {

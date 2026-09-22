@@ -74,7 +74,12 @@ function dependencies(
 		dependencies: {
 			listMergeRequests: async (input: Record<string, unknown>) => {
 				pages.push(input);
-			return { project: options.project ?? PROJECT, mergeRequests, total: mergeRequests.length, nextPage: options.nextPage };
+				return {
+					project: options.project ?? PROJECT,
+					mergeRequests,
+					total: mergeRequests.length,
+					nextPage: options.nextPage,
+				};
 			},
 			listPipelines: async () => ({ pipelines: [...pipelines] }),
 			writers: {
@@ -304,6 +309,39 @@ describe("importLandingZoneGitLabHistory", () => {
 			persisted,
 		);
 		expect(checkpoints).toEqual([expect.objectContaining({ projectId: "42", updatedAfter: expect.any(String) })]);
+	});
+
+	test("persists a reset checkpoint when GitLab's fixed-window total changes", async () => {
+		const fixture = dependencies();
+		const checkpoints: unknown[] = [];
+		const persisted: LandingZoneImportDependencies = {
+			...fixture.dependencies,
+			listMergeRequests: async () => ({ project: PROJECT, mergeRequests: [], total: 3 }),
+			recordCheckpoint: async (_store, checkpoint) => {
+				checkpoints.push(checkpoint);
+			},
+		};
+
+		const result = await importLandingZoneGitLabHistory(
+			{
+				repository: "aws-lz-account-creator",
+				checkpoint: {
+					projectId: "42",
+					updatedAfter: "2026-09-01T00:00:00.000Z",
+					inProgress: {
+						upperBound: "2026-09-04T00:00:00.000Z",
+						expectedTotal: 2,
+						nextPage: 2,
+						seenMrIds: ["42:7", "42:8"],
+					},
+				},
+			},
+			persisted,
+		);
+
+		expect(result.checkpoint?.inProgress).toMatchObject({ expectedTotal: 3, nextPage: 1, seenMrIds: [] });
+		expect(checkpoints).toHaveLength(1);
+		expect(checkpoints[0]).toMatchObject({ inProgress: { expectedTotal: 3, nextPage: 1, seenMrIds: [] } });
 	});
 
 	test("carries bounded GitLab provenance into every imported graph record", async () => {

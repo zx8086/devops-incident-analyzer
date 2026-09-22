@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
+	createGitLabReadClient,
 	type GitLabReadClient,
 	isVerifiedTerraformDeploymentJob,
 	LANDING_ZONE_REPOSITORIES,
@@ -131,5 +132,29 @@ describe("verified Terraform deployment evidence", () => {
 				deploymentTier: "production",
 			}),
 		).toBe(true);
+	});
+});
+
+describe("GitLab historical merge request pagination", () => {
+	test.each([null, ""])("rejects a response without a trustworthy X-Total header: %p", async (totalHeader) => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 1_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: totalHeader === null ? undefined : { "x-total": totalHeader },
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(
+			client.historicalMergeRequests(
+				"pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+				"2026-09-01T00:00:00.000Z",
+				undefined,
+				1,
+				20,
+			),
+		).rejects.toThrow("omitted a valid X-Total header");
 	});
 });
