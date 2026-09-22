@@ -478,10 +478,18 @@ export function formatDigest(d: DigestInput): string {
 	// Uninvestigated findings lead so they always survive the display cap: an
 	// investigated critical already has its diagnosis in an incident report,
 	// an uninvestigated warn has nobody looking at it (SIO-1623).
+	// The family is the last tiebreak, under uninvestigated and severity: one
+	// cause usually produces one family (a Karpenter consolidation is a run of
+	// compliance lines), so grouping them puts the repeated rule name in a block
+	// the eye can skip rather than scattering it through the list. It cannot
+	// disturb the two rules above it, which is why it sorts last.
 	const notables = (d.notables ?? [])
 		.filter((n) => n.severity !== "info")
 		.sort(
-			(a, b) => Number(b.uninvestigated) - Number(a.uninvestigated) || SEV_ORDER[a.severity] - SEV_ORDER[b.severity],
+			(a, b) =>
+				Number(b.uninvestigated) - Number(a.uninvestigated) ||
+				SEV_ORDER[a.severity] - SEV_ORDER[b.severity] ||
+				a.family.localeCompare(b.family),
 		);
 	const uninvestigated = notables.filter((n) => n.uninvestigated).length;
 
@@ -541,7 +549,14 @@ export function formatDigest(d: DigestInput): string {
 		// marker: the tag is what the web pane badges, and a reader scrolling a
 		// long digest should not have to look upwards to identify a line.
 		let lastResource: string | null = null;
-		for (const n of notables.slice(0, NOTABLE_CAP)) {
+		for (const [i, n] of notables.slice(0, NOTABLE_CAP).entries()) {
+			// One blank line between entries so each resource plus its wrapped
+			// summary reads as a block. A run of nine required-tags lines was a wall
+			// of text otherwise. Not a heading: the digest is also parsed by
+			// contracts/report.ts and re-styled by the web pane
+			// (apps/web/src/lib/digest-emphasis.ts), which both key off the existing
+			// line shapes -- a blank line adds no new shape for them to learn.
+			if (i > 0) lines.push("");
 			const marker = n.uninvestigated ? " [uninvestigated]" : "";
 			// A repeat count only when there IS a repeat, so the common
 			// single-occurrence line is unchanged.
@@ -554,9 +569,12 @@ export function formatDigest(d: DigestInput): string {
 			for (const line of wrapSummary(n.summary)) lines.push(`      ${line}`);
 		}
 		if (notables.length > NOTABLE_CAP) {
-			lines.push(`  - +${notables.length - NOTABLE_CAP} more warn+ finding(s) in the journal`);
+			lines.push("", `  - +${notables.length - NOTABLE_CAP} more warn+ finding(s) in the journal`);
 		}
-		if (uninvestigated > 0) lines.push(`- uninvestigated: ${uninvestigated}`);
+		// Blank line first: with entries now separated, a flush `- uninvestigated:`
+		// would read as part of the last entry's block rather than as the summary
+		// line for the whole list.
+		if (uninvestigated > 0) lines.push("", `- uninvestigated: ${uninvestigated}`);
 	}
 
 	lines.push("");

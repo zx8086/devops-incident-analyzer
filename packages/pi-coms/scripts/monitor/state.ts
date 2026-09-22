@@ -3,6 +3,10 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+// `chat` is an operator's `suppress` command, `file` comes from the committed
+// manifest. Reconcile only ever removes `file` rows (see reconcileFileSuppressions).
+export type SuppressionSource = "chat" | "file";
+
 export class MonitorState {
 	private db: Database;
 	constructor(dbPath: string) {
@@ -16,8 +20,20 @@ export class MonitorState {
 			CREATE TABLE IF NOT EXISTS costs (date TEXT PRIMARY KEY, usd REAL NOT NULL);
 			CREATE TABLE IF NOT EXISTS journal (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, ts_ms INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
 			CREATE TABLE IF NOT EXISTS unsent (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT NOT NULL, prompt TEXT NOT NULL, ttl_ms INTEGER NOT NULL, created_at TEXT NOT NULL);
-			CREATE TABLE IF NOT EXISTS suppressions (pattern TEXT PRIMARY KEY, reason TEXT NOT NULL, created_at TEXT NOT NULL);
+			CREATE TABLE IF NOT EXISTS suppressions (pattern TEXT PRIMARY KEY, reason TEXT NOT NULL, created_at TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'chat');
 		`);
+		// Every deployed host already has a suppressions table without `source`,
+		// and CREATE TABLE IF NOT EXISTS silently leaves it alone. Add the column
+		// in place; the DEFAULT backfills existing rows as 'chat', which is what
+		// they are -- every entry predating this was typed by an operator.
+		if (!this.hasColumn("suppressions", "source")) {
+			this.db.exec("ALTER TABLE suppressions ADD COLUMN source TEXT NOT NULL DEFAULT 'chat'");
+		}
+	}
+
+	private hasColumn(table: string, column: string): boolean {
+		const rows = this.db.query(`PRAGMA table_info(${table})`).all() as { name: string }[];
+		return rows.some((r) => r.name === column);
 	}
 	close(): void {
 		try {
@@ -160,22 +176,61 @@ export class MonitorState {
 	// The known-gap ledger: operator-accepted imperfections stop re-raising as
 	// fresh findings. Patterns are SQL LIKE against dedup_key ("%" wildcards),
 	// so one entry can cover a family (e.g. "alarm:%-Utilization-Low-20%").
-	addSuppression(pattern: string, reason: string): void {
+	addSuppression(pattern: string, reason: string, source: SuppressionSource = "chat"): void {
 		this.db
 			.query(
-				"INSERT INTO suppressions (pattern, reason, created_at) VALUES (?, ?, ?) ON CONFLICT(pattern) DO UPDATE SET reason = excluded.reason",
+				"INSERT INTO suppressions (pattern, reason, created_at, source) VALUES (?, ?, ?, ?) ON CONFLICT(pattern) DO UPDATE SET reason = excluded.reason, source = excluded.source",
 			)
-			.run(pattern, reason, new Date().toISOString());
+			.run(pattern, reason, new Date().toISOString(), source);
 	}
 	removeSuppression(pattern: string): boolean {
 		return this.db.query("DELETE FROM suppressions WHERE pattern = ?").run(pattern).changes > 0;
 	}
-	listSuppressions(): { pattern: string; reason: string; created_at: string }[] {
-		return this.db.query("SELECT pattern, reason, created_at FROM suppressions ORDER BY created_at ASC").all() as {
+	listSuppressions(): { pattern: string; reason: string; created_at: string; source: SuppressionSource }[] {
+		return this.db
+			.query("SELECT pattern, reason, created_at, source FROM suppressions ORDER BY created_at ASC")
+			.all() as {
 			pattern: string;
 			reason: string;
 			created_at: string;
+			source: SuppressionSource;
 		}[];
+	}
+
+	// SIO-1868: the file-sourced half of the ledger, reconciled at startup from a
+	// committed manifest so a fleet-wide suppression is a reviewed diff rather
+	// than N chat commands that die with the instance.
+	//
+	// Only `file` rows are removed. An operator's `suppress` during an incident
+	// is a `chat` row and must survive reconcile -- a blanket delete-and-reinsert
+	// would drop it silently, which is the one failure mode that would make an
+	// operator stop trusting the ledger. A pattern that appears in both wins as
+	// `file`: the manifest is the reviewed source, and the chat row was the
+	// stop-gap it replaces.
+	reconcileFileSuppressions(entries: { pattern: string; reason: string }[]): {
+		added: string[];
+		updated: string[];
+		removed: string[];
+	} {
+		const wanted = new Map(entries.map((e) => [e.pattern, e.reason]));
+		const existing = this.listSuppressions();
+		const byPattern = new Map(existing.map((r) => [r.pattern, r]));
+		const added: string[] = [];
+		const updated: string[] = [];
+		const removed: string[] = [];
+		for (const [pattern, reason] of wanted) {
+			const row = byPattern.get(pattern);
+			if (!row) added.push(pattern);
+			else if (row.reason !== reason || row.source !== "file") updated.push(pattern);
+			else continue;
+			this.addSuppression(pattern, reason, "file");
+		}
+		for (const row of existing) {
+			if (row.source !== "file" || wanted.has(row.pattern)) continue;
+			this.removeSuppression(row.pattern);
+			removed.push(row.pattern);
+		}
+		return { added, updated, removed };
 	}
 	matchSuppression(dedupKey: string): { pattern: string; reason: string } | null {
 		const r = this.db.query("SELECT pattern, reason FROM suppressions WHERE ? LIKE pattern LIMIT 1").get(dedupKey) as {

@@ -324,6 +324,77 @@ describe("digest notables", () => {
 		expect(text).toBe(formatDigest(quietDigest));
 	});
 
+	test("separates entries with a blank line so each reads as a block", () => {
+		const text = formatDigest({
+			...quietDigest,
+			findingCounts: { drift: 2 },
+			notables: [notable({ resource: "i-first" }), notable({ resource: "i-second" })],
+		});
+		const lines = text.split("\n");
+		const second = lines.findIndex((l) => l.includes("i-second"));
+		expect(second).toBeGreaterThan(0);
+		// The line before the second entry is blank, and the summary of the first
+		// entry sits above that -- proving the gap separates ENTRIES rather than
+		// being the pre-existing gap above the notables header.
+		expect(lines[second - 1]).toBe("");
+		expect(lines[second - 2]).toContain("instance changed state");
+		// The first entry is flush against the header, not preceded by a gap.
+		const first = lines.findIndex((l) => l.includes("i-first"));
+		expect(lines[first - 1]).toContain("notable warn+ findings");
+	});
+
+	test("the uninvestigated total is separated from the last entry", () => {
+		// Flush against the final summary line it would read as part of that
+		// entry's block rather than as the total for the whole list.
+		const text = formatDigest({
+			...quietDigest,
+			findingCounts: { drift: 1 },
+			notables: [notable({ uninvestigated: true })],
+		});
+		const lines = text.split("\n");
+		const total = lines.findIndex((l) => l.startsWith("- uninvestigated:"));
+		expect(total).toBeGreaterThan(0);
+		expect(lines[total - 1]).toBe("");
+	});
+
+	test("blank lines do not consume the display cap", () => {
+		// The cap counts ENTRIES; a regression that counted printed lines would
+		// cut the list at five entries and report the wrong overflow.
+		const notables = Array.from({ length: 13 }, (_, i) => notable({ resource: `i-${i}` }));
+		const text = formatDigest({ ...quietDigest, findingCounts: { drift: 13 }, notables });
+		expect(text).toContain("i-9");
+		expect(text).not.toContain("i-10\n");
+		expect(text).toContain("+3 more warn+ finding(s)");
+	});
+
+	test("groups by family under uninvestigated and severity", () => {
+		// A Karpenter consolidation is a run of compliance lines; grouping keeps
+		// the repeated rule name in one skippable block. Family must not outrank
+		// uninvestigated or severity.
+		const text = formatDigest({
+			...quietDigest,
+			findingCounts: { compliance: 2, drift: 2 },
+			notables: [
+				notable({ family: "compliance", resource: "eni-a" }),
+				notable({ family: "drift", resource: "vol-a" }),
+				notable({ family: "compliance", resource: "eni-b" }),
+			],
+		});
+		expect(text.indexOf("eni-b")).toBeLessThan(text.indexOf("vol-a"));
+	});
+
+	test("family grouping never outranks uninvestigated", () => {
+		const text = formatDigest({
+			...quietDigest,
+			findingCounts: { compliance: 2, drift: 1 },
+			notables: [
+				notable({ family: "compliance", resource: "eni-closed" }),
+				notable({ family: "drift", resource: "vol-open", uninvestigated: true }),
+			],
+		});
+		expect(text.indexOf("vol-open")).toBeLessThan(text.indexOf("eni-closed"));
+	});
+
 	test("info findings are never listed even if passed", () => {
 		const text = formatDigest({
 			...quietDigest,

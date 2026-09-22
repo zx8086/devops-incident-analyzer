@@ -1,0 +1,33 @@
+# Fleet suppression ledger (SIO-1868)
+#
+# Committed, reviewed, applied to every spoke on rollout. The monitor reconciles
+# this into its local ledger at startup: entries here are `file`-sourced, and an
+# operator's own `suppress` command stays `chat`-sourced and is never removed by
+# a reconcile.
+#
+# pattern   SQL LIKE matched against a finding's dedup_key ("%" is the wildcard).
+#           Check the dedup key shape in the check that emits it before adding.
+# reason    Mandatory. The weekly suppression review prints it back, and an
+#           entry nobody can justify is one that should be removed.
+# accounts  Optional. Matched against PI_MONITOR_ACCOUNT_NAME. Omit to apply
+#           fleet-wide; name accounts when the noise is specific to them.
+#
+# The weekly review flags any entry matching nothing, so a suppression that has
+# outlived its cause shows up as a candidate for removal rather than sitting
+# here forever. Remove entries when the underlying cause is fixed.
+
+# Karpenter/VPC-CNI churn in eu-mendix-platform-prd is NOT handled here. An
+# earlier revision suppressed it with `...:eni-%` and `...:i-%` patterns, but a
+# dedup_key carries only the rule and the resource id, so those also hid 14
+# STABLE AWS-managed NAT / transit-gateway / ELB / EKS-control-plane interfaces
+# that are genuine (if unfixable) violations worth seeing.
+#
+# The compliance check now classifies by OWNERSHIP TAG instead
+# (scripts/monitor/checks/churn-tags.ts, PI_MONITOR_CHURN_TAGS): a resource is
+# dropped only when GetResources returns it carrying an autoscaler key, so an
+# untagged or deleted resource is still reported. Measured live on 2026-09-22
+# it classified 62 of 195 ARN-mappable pairs as churn and kept the EKS
+# control-plane ENIs visible. Every drop is journalled, so the weekly
+# suppression review still accounts for it.
+
+suppressions: []
