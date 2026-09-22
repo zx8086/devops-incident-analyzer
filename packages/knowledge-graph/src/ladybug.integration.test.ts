@@ -108,6 +108,8 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		});
 		await recordLandingZoneGitLabImportCheckpoint(store, "42", {
 			updatedAfter: "2026-09-03T00:00:00.000Z",
+			backfillStartAt: "2026-09-01T00:00:00.000Z",
+			repositoryPath: "pvhcorp/dhco/aws/aws-lz-account-creator",
 			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", nextPage: 1, seenMrIds: ["42:7"] },
 			pendingMrIids: [7, 8],
 			pendingCursor: 1,
@@ -118,6 +120,8 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		expect(await readLandingZoneGitLabImportCheckpoint(store, "aws-lz-account-creator")).toEqual({
 			projectId: "42",
 			updatedAfter: "2026-09-03T00:00:00.000Z",
+			backfillStartAt: "2026-09-01T00:00:00.000Z",
+			repositoryPath: "pvhcorp/dhco/aws/aws-lz-account-creator",
 			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", nextPage: 1, seenMrIds: ["42:7"] },
 			pendingMrIids: [7, 8],
 			pendingCursor: 1,

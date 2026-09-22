@@ -67,6 +67,8 @@ export interface LandingZoneGitLabImportProgress {
 export interface LandingZoneGitLabImportCheckpoint {
 	projectId: string;
 	updatedAfter: string;
+	backfillStartAt?: string;
+	repositoryPath?: string;
 	inProgress?: LandingZoneGitLabImportProgress;
 	pendingMrIids?: number[];
 	pendingCursor?: number;
@@ -103,6 +105,8 @@ export async function readLandingZoneGitLabImportCheckpoint(
 	let inProgress: LandingZoneGitLabImportProgress | undefined;
 	let pendingMrIids: number[] = [];
 	let pendingCursor = 0;
+	let backfillStartAt: string | undefined;
+	let repositoryPath: string | undefined;
 	const pendingDeploymentScans: Record<string, { sha: string; nextPage: number; updatedBefore: string }> = {};
 	if (rows[0]?.state) {
 		const parsed = JSON.parse(rows[0].state) as unknown;
@@ -114,6 +118,8 @@ export async function readLandingZoneGitLabImportCheckpoint(
 						pendingMrIids?: unknown;
 						pendingCursor?: unknown;
 						pendingDeploymentScans?: unknown;
+						backfillStartAt?: unknown;
+						repositoryPath?: unknown;
 					})
 				: undefined;
 		if (legacyProgress) {
@@ -121,6 +127,12 @@ export async function readLandingZoneGitLabImportCheckpoint(
 		} else if (state) {
 			if (state.inProgress !== undefined && !validImportProgress(state.inProgress))
 				throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+			if (state.backfillStartAt !== undefined && !z.string().datetime().safeParse(state.backfillStartAt).success)
+				throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+			if (state.repositoryPath !== undefined && (typeof state.repositoryPath !== "string" || !state.repositoryPath))
+				throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+			backfillStartAt = state.backfillStartAt as string | undefined;
+			repositoryPath = state.repositoryPath as string | undefined;
 			inProgress = state.inProgress as LandingZoneGitLabImportProgress | undefined;
 			if (state.pendingMrIids !== undefined) {
 				if (
@@ -176,6 +188,8 @@ export async function readLandingZoneGitLabImportCheckpoint(
 	return {
 		projectId,
 		updatedAfter,
+		...(backfillStartAt && { backfillStartAt }),
+		...(repositoryPath && { repositoryPath }),
 		...(inProgress && { inProgress }),
 		...(pendingMrIids.length > 0 && { pendingMrIids }),
 		...(pendingMrIids.length > 0 && { pendingCursor }),
@@ -191,6 +205,9 @@ export async function recordLandingZoneGitLabImportCheckpoint(
 	const pendingIids = checkpoint.pendingMrIids ?? [];
 	const pendingDeploymentScans = checkpoint.pendingDeploymentScans ?? {};
 	if (
+		(checkpoint.backfillStartAt !== undefined &&
+			!z.string().datetime().safeParse(checkpoint.backfillStartAt).success) ||
+		(checkpoint.repositoryPath !== undefined && !checkpoint.repositoryPath) ||
 		pendingIids.length > MAX_PENDING_MERGE_REQUESTS ||
 		!pendingIids.every((iid) => Number.isInteger(iid) && iid > 0) ||
 		!Number.isInteger(checkpoint.pendingCursor ?? 0) ||
@@ -226,8 +243,10 @@ export async function recordLandingZoneGitLabImportCheckpoint(
 			updatedAfter: checkpoint.updatedAfter,
 			checkpointedAt: new Date().toISOString(),
 			state:
-				checkpoint.inProgress || pendingIids.length > 0
+				checkpoint.inProgress || pendingIids.length > 0 || checkpoint.backfillStartAt || checkpoint.repositoryPath
 					? JSON.stringify({
+							...(checkpoint.backfillStartAt && { backfillStartAt: checkpoint.backfillStartAt }),
+							...(checkpoint.repositoryPath && { repositoryPath: checkpoint.repositoryPath }),
 							...(checkpoint.inProgress && { inProgress: checkpoint.inProgress }),
 							pendingMrIids: pendingIids,
 							pendingCursor: checkpoint.pendingCursor ?? 0,

@@ -212,7 +212,7 @@ export interface GitLabPipelineJob {
 export interface GitLabHistoricalMergeRequest {
 	iid: number;
 	title: string;
-	state: "opened" | "closed" | "merged";
+	state: "opened" | "closed" | "locked" | "merged";
 	webUrl: string;
 	createdAt: string;
 	updatedAt: string;
@@ -315,7 +315,7 @@ const GitLabHistoricalMergeRequestsResponseSchema = z.array(
 	z.object({
 		iid: z.number().int(),
 		title: z.string(),
-		state: z.enum(["opened", "closed", "merged"]),
+		state: z.enum(["opened", "closed", "locked", "merged"]),
 		web_url: z.string(),
 		created_at: z.string(),
 		updated_at: z.string(),

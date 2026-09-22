@@ -4,6 +4,7 @@ import {
 	bindingFromAnnotations,
 	incidentFromAnnotations,
 	invalidatedBindingFromAnnotations,
+	landingZoneImportStartFromAnnotations,
 	parseArgs,
 	resolutionFromAnnotations,
 	rootCauseFromAnnotations,
@@ -115,6 +116,36 @@ describe("SIO-1103 rebuild: incidentFromAnnotations", () => {
 			services: [],
 		});
 		expect(incidentFromAnnotations({ services: "orders" })).toBeNull();
+	});
+});
+
+describe("SIO-1867 rebuild: Landing Zone GitLab import anchor", () => {
+	test("maps the durable start anchor used to replay history after a graph rebuild", () => {
+		expect(
+			landingZoneImportStartFromAnnotations({
+				kind: "kg-lz-gitlab-import-start",
+				repository: "aws-lz-account-creator",
+				project_id: "42",
+				project_path: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+				backfill_start_at: "2026-09-01T00:00:00.000Z",
+			}),
+		).toEqual({
+			repository: "aws-lz-account-creator",
+			projectId: "42",
+			projectPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+			backfillStartAt: "2026-09-01T00:00:00.000Z",
+		});
+	});
+
+	test("rejects malformed recovery anchors instead of creating a partial repository", () => {
+		const base = {
+			repository: "aws-lz-account-creator",
+			project_id: "42",
+			project_path: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+			backfill_start_at: "2026-09-01T00:00:00.000Z",
+		};
+		expect(landingZoneImportStartFromAnnotations({ ...base, project_id: "" })).toBeNull();
+		expect(landingZoneImportStartFromAnnotations({ ...base, backfill_start_at: "not-a-date" })).toBeNull();
 	});
 });
 

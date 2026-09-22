@@ -1,5 +1,6 @@
 // packages/agent/src/landing-zone/gitlab-import.ts
 
+import { createHash } from "node:crypto";
 import {
 	type GraphStore,
 	getGraphStore,
@@ -17,6 +18,7 @@ import {
 } from "@devops-agent/knowledge-graph";
 import { z } from "zod";
 import { getToolsForDataSource } from "../mcp-bridge.ts";
+import { recordAgentFactNow, searchAgentMemory } from "../memory-backend.ts";
 
 export type LandingZoneImportOutcome = "proposed" | "declined" | "pipeline-failed" | "merged-unverified" | "applied";
 
@@ -30,7 +32,7 @@ export interface HistoricalProject {
 export interface HistoricalMergeRequest {
 	iid: number;
 	title: string;
-	state: "opened" | "closed" | "merged";
+	state: "opened" | "closed" | "locked" | "merged";
 	webUrl: string;
 	createdAt: string;
 	updatedAt: string;
@@ -73,6 +75,8 @@ export interface LandingZoneImportOptions {
 export interface LandingZoneImportCheckpoint {
 	projectId: string;
 	updatedAfter: string;
+	backfillStartAt?: string;
+	repositoryPath?: string;
 	inProgress?: { upperBound: string; expectedTotal?: number; nextPage: number; seenMrIds: string[] };
 	pendingMrIids?: number[];
 	pendingCursor?: number;
@@ -83,6 +87,7 @@ export interface LandingZoneImportDependencies {
 	listRepositories?: () => Promise<Array<{ name: string; availability: "active" | "no-git-refs" }>>;
 	readCheckpoint?: (store: GraphStore, repository: string) => Promise<LandingZoneImportCheckpoint | undefined>;
 	recordCheckpoint?: (store: GraphStore, checkpoint: LandingZoneImportCheckpoint) => Promise<void>;
+	recordRecoveryStart?: (repository: string, checkpoint: LandingZoneImportCheckpoint) => Promise<void>;
 	listMergeRequests: (input: {
 		repository: string;
 		updatedAfter: string;
@@ -130,6 +135,7 @@ export interface LandingZoneImportResult {
 
 export interface LandingZoneGitLabImportSweepResult extends LandingZoneImportResult {
 	requiresCheckpoint?: true;
+	authBackoff?: true;
 	projectErrors?: Array<{ repository: string; message: string }>;
 	unavailable?: string;
 }
@@ -152,7 +158,7 @@ const HistoricalMergeRequestSchema = z
 	.object({
 		iid: z.number().int().positive(),
 		title: z.string(),
-		state: z.enum(["opened", "closed", "merged"]),
+		state: z.enum(["opened", "closed", "locked", "merged"]),
 		webUrl: z.string().url(),
 		createdAt: z.string().datetime(),
 		updatedAt: z.string().datetime(),
@@ -237,6 +243,28 @@ function defaultDependencies(): LandingZoneImportDependencies {
 		readCheckpoint: readLandingZoneGitLabImportCheckpoint,
 		recordCheckpoint: async (store, checkpoint) =>
 			recordLandingZoneGitLabImportCheckpoint(store, checkpoint.projectId, checkpoint),
+		recordRecoveryStart: async (repository, checkpoint) => {
+			if (!checkpoint.backfillStartAt || !checkpoint.repositoryPath) return;
+			const annotations = {
+				kind: "kg-lz-gitlab-import-start",
+				repository,
+				project_id: checkpoint.projectId,
+			};
+			const existing = await searchAgentMemory("landing-zone-terraform", "", annotations, 1, {
+				allSessions: true,
+				deterministic: true,
+			});
+			if (existing.length > 0) return;
+			await recordAgentFactNow(
+				"landing-zone-terraform",
+				`Landing Zone GitLab import recovery anchor for ${repository}`,
+				{
+					...annotations,
+					project_path: checkpoint.repositoryPath,
+					backfill_start_at: checkpoint.backfillStartAt,
+				},
+			);
+		},
 		listMergeRequests: async (input) =>
 			HistoricalMergeRequestPageSchema.parse(
 				await invokeReadTool("lz_list_historical_merge_requests", {
@@ -325,7 +353,7 @@ function outcomeFor(
 	const successfulDeployment = deployments.find(
 		(deployment) => deployment.sha === commitSha && deployment.status === "success",
 	);
-	if (mr.state === "opened") {
+	if (mr.state === "opened" || mr.state === "locked") {
 		return {
 			outcome: "proposed",
 			evidence: {
@@ -415,6 +443,8 @@ export async function importLandingZoneGitLabHistory(
 		throw new Error("maxPendingReconciliations must be a positive integer");
 	const outcomes: LandingZoneImportOutcome[] = [];
 	let projectId = options.checkpoint?.projectId;
+	const backfillStartAt = options.checkpoint?.backfillStartAt ?? options.startAt ?? updatedAfter;
+	let repositoryPath = options.checkpoint?.repositoryPath;
 	let expectedProjectId = options.checkpoint?.projectId;
 	const upperBound = options.checkpoint?.inProgress?.upperBound ?? new Date().toISOString();
 	let expectedTotal = options.checkpoint?.inProgress?.expectedTotal;
@@ -448,6 +478,8 @@ export async function importLandingZoneGitLabHistory(
 		base: Omit<LandingZoneImportCheckpoint, "pendingMrIids" | "pendingCursor">,
 	): LandingZoneImportCheckpoint => ({
 		...base,
+		backfillStartAt,
+		...(repositoryPath && { repositoryPath }),
 		pendingMrIids,
 		pendingCursor: pendingMrIids.length > 0 ? pendingCursor % pendingMrIids.length : 0,
 		pendingDeploymentScans,
@@ -462,6 +494,7 @@ export async function importLandingZoneGitLabHistory(
 		}
 		expectedProjectId ??= currentProjectId;
 		projectId ??= currentProjectId;
+		repositoryPath = project.path;
 		await resolvedDependencies.writers.recordRepository(resolvedDependencies.store, {
 			group: { id: "gitlab-group:pvhcorp", path: "pvhcorp", lastSyncedAt: provenance?.retrievedAt },
 			repository: {
@@ -476,6 +509,11 @@ export async function importLandingZoneGitLabHistory(
 			},
 			provenance,
 		});
+	};
+
+	const persistCheckpoint = async (checkpoint: LandingZoneImportCheckpoint): Promise<void> => {
+		await resolvedDependencies.recordCheckpoint?.(resolvedDependencies.store, checkpoint);
+		await resolvedDependencies.recordRecoveryStart?.(options.repository, checkpoint);
 	};
 
 	const processMergeRequest = async (
@@ -603,7 +641,7 @@ export async function importLandingZoneGitLabHistory(
 			...(options.checkpoint?.inProgress && { inProgress: options.checkpoint.inProgress }),
 		});
 		if (!reconciledCheckpoint.projectId) throw new Error("Pending reconciliation did not provide a GitLab project ID");
-		await resolvedDependencies.recordCheckpoint?.(resolvedDependencies.store, reconciledCheckpoint);
+		await persistCheckpoint(reconciledCheckpoint);
 	}
 
 	const pages: Array<{
@@ -643,7 +681,7 @@ export async function importLandingZoneGitLabHistory(
 				updatedAfter,
 				inProgress: { upperBound: new Date(midpoint).toISOString(), nextPage: 1, seenMrIds: [] },
 			});
-			await resolvedDependencies.recordCheckpoint?.(resolvedDependencies.store, checkpoint);
+			await persistCheckpoint(checkpoint);
 			return { outcomes, checkpoint };
 		}
 		if (expectedTotal !== undefined && page.total !== expectedTotal) {
@@ -652,7 +690,7 @@ export async function importLandingZoneGitLabHistory(
 				updatedAfter,
 				inProgress: { upperBound, expectedTotal: page.total, nextPage: 1, seenMrIds: [] },
 			});
-			await resolvedDependencies.recordCheckpoint?.(resolvedDependencies.store, checkpoint);
+			await persistCheckpoint(checkpoint);
 			return { outcomes, checkpoint };
 		}
 		expectedTotal = page.total;
@@ -704,7 +742,7 @@ export async function importLandingZoneGitLabHistory(
 					updatedAfter,
 					inProgress: { upperBound, expectedTotal, nextPage: 1, seenMrIds: [...seenMrIds].sort() },
 				});
-	await resolvedDependencies.recordCheckpoint?.(resolvedDependencies.store, checkpoint);
+	await persistCheckpoint(checkpoint);
 	return { outcomes, checkpoint };
 }
 
@@ -716,6 +754,7 @@ export async function runLandingZoneGitLabImportSweep(
 		return { outcomes: [], unavailable: "Landing Zone graph or required GitLab read tools are unavailable" };
 	}
 	if (options?.startAt || options?.checkpoint) return importLandingZoneGitLabHistory(options, providedDependencies);
+	if (landingZoneGitLabAuthBackoffActive()) return { outcomes: [], authBackoff: true };
 	const dependencies = providedDependencies ?? defaultDependencies();
 	if (!providedDependencies) dependencies.store = await getGraphStore();
 	const repositories = (await dependencies.listRepositories?.()) ?? [];
@@ -736,6 +775,14 @@ export async function runLandingZoneGitLabImportSweep(
 			);
 			outcomes.push(...result.outcomes);
 		} catch (error) {
+			if (isLandingZoneGitLabAuthRejection(error)) {
+				armLandingZoneGitLabAuthBackoff();
+				projectErrors.push({
+					repository: repository.name,
+					message: error instanceof Error ? error.message : "Landing Zone GitLab authentication failed",
+				});
+				return { outcomes, authBackoff: true, projectErrors };
+			}
 			projectErrors.push({
 				repository: repository.name,
 				message: error instanceof Error ? error.message : "Landing Zone GitLab import failed",
@@ -747,4 +794,37 @@ export async function runLandingZoneGitLabImportSweep(
 		...(requiresCheckpoint && { requiresCheckpoint: true }),
 		...(projectErrors.length > 0 && { projectErrors }),
 	};
+}
+
+const LANDING_ZONE_GITLAB_AUTH_BACKOFF_MS = 15 * 60 * 1000;
+let landingZoneGitLabAuthBackoff: { until: number; tokenFingerprint: string } | undefined;
+
+function landingZoneGitLabTokenFingerprint(): string {
+	return createHash("sha256")
+		.update(process.env.GITLAB_PERSONAL_ACCESS_TOKEN ?? "")
+		.digest("hex")
+		.slice(0, 16);
+}
+
+export function isLandingZoneGitLabAuthRejection(error: unknown): boolean {
+	return error instanceof Error && /GitLab read failed with HTTP (?:401|403)\b/.test(error.message);
+}
+
+function landingZoneGitLabAuthBackoffActive(now = Date.now()): boolean {
+	return (
+		landingZoneGitLabAuthBackoff !== undefined &&
+		now < landingZoneGitLabAuthBackoff.until &&
+		landingZoneGitLabAuthBackoff.tokenFingerprint === landingZoneGitLabTokenFingerprint()
+	);
+}
+
+function armLandingZoneGitLabAuthBackoff(now = Date.now()): void {
+	landingZoneGitLabAuthBackoff = {
+		until: now + LANDING_ZONE_GITLAB_AUTH_BACKOFF_MS,
+		tokenFingerprint: landingZoneGitLabTokenFingerprint(),
+	};
+}
+
+export function resetLandingZoneGitLabImportStateForTests(): void {
+	landingZoneGitLabAuthBackoff = undefined;
 }

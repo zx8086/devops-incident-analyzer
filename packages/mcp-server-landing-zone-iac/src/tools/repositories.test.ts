@@ -88,6 +88,34 @@ describe("Landing Zone repository allowlist", () => {
 });
 
 describe("GitLab historical merge request pagination", () => {
+	test("accepts GitLab's transitional locked merge-request state", async () => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response(
+					JSON.stringify([
+						{
+							iid: 7,
+							title: "Temporarily locked",
+							state: "locked",
+							web_url: "https://gitlab.example/project/-/merge_requests/7",
+							created_at: "2026-09-02T00:00:00.000Z",
+							updated_at: "2026-09-03T00:00:00.000Z",
+							merge_commit_sha: null,
+							sha: "head-7",
+						},
+					]),
+					{ headers: { "x-total": "1", "x-page": "1", "x-per-page": "20" } },
+				)) as unknown as typeof fetch,
+		});
+
+		await expect(
+			client.historicalMergeRequests("project", "2026-09-01T00:00:00.000Z", undefined, 1, 20),
+		).resolves.toMatchObject({ mergeRequests: [{ state: "locked" }] });
+	});
+
 	test("reports an unavailable exact total without inventing one", async () => {
 		const client = createGitLabReadClient({
 			baseUrl: "https://gitlab.example",

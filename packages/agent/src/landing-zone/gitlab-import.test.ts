@@ -1,6 +1,6 @@
 // packages/agent/src/landing-zone/gitlab-import.test.ts
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
 	importLandingZoneGitLabHistory,
 	LANDING_ZONE_GITLAB_IMPORT_REQUIRED_TOOLS,
@@ -8,8 +8,11 @@ import {
 	type LandingZoneImportDependencies,
 	landingZoneGitLabImportEnabled,
 	MAX_PENDING_MERGE_REQUESTS,
+	resetLandingZoneGitLabImportStateForTests,
 	runLandingZoneGitLabImportSweep,
 } from "./gitlab-import.ts";
+
+afterEach(() => resetLandingZoneGitLabImportStateForTests());
 
 const PROJECT = {
 	id: 42,
@@ -22,7 +25,7 @@ function mr(
 	overrides: Partial<{
 		iid: number;
 		title: string;
-		state: "opened" | "closed" | "merged";
+		state: "opened" | "closed" | "locked" | "merged";
 		webUrl: string;
 		createdAt: string;
 		updatedAt: string;
@@ -231,6 +234,7 @@ describe("importLandingZoneGitLabHistory", () => {
 
 	test.each([
 		["open MR", mr({ state: "opened" }), [pipeline()], "proposed"],
+		["temporarily locked MR", mr({ state: "locked" }), [pipeline()], "proposed"],
 		["closed unmerged MR", mr({ state: "closed" }), [pipeline()], "declined"],
 		["failed pipeline", mr(), [pipeline({ status: "failed" })], "pipeline-failed"],
 		["successful CI pipeline", mr(), [pipeline()], "merged-unverified"],
@@ -376,15 +380,36 @@ describe("importLandingZoneGitLabHistory", () => {
 	test("persists the completed project checkpoint for scheduled reconciliation", async () => {
 		const fixture = dependencies([mr({ updatedAt: "2026-09-04T00:00:00.000Z" })]);
 		const checkpoints: unknown[] = [];
+		const recoveryStarts: unknown[] = [];
 		const persisted = fixture.dependencies as LandingZoneImportDependencies;
 		persisted.recordCheckpoint = async (_store, checkpoint) => {
 			checkpoints.push(checkpoint);
+		};
+		persisted.recordRecoveryStart = async (repository, checkpoint) => {
+			recoveryStarts.push({ repository, checkpoint });
 		};
 		await importLandingZoneGitLabHistory(
 			{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
 			persisted,
 		);
-		expect(checkpoints).toEqual([expect.objectContaining({ projectId: "42", updatedAfter: expect.any(String) })]);
+		expect(checkpoints).toEqual([
+			expect.objectContaining({
+				projectId: "42",
+				updatedAfter: expect.any(String),
+				backfillStartAt: "2026-09-01T00:00:00.000Z",
+				repositoryPath: PROJECT.path,
+			}),
+		]);
+		expect(recoveryStarts).toEqual([
+			{
+				repository: "aws-lz-account-creator",
+				checkpoint: expect.objectContaining({
+					projectId: "42",
+					backfillStartAt: "2026-09-01T00:00:00.000Z",
+					repositoryPath: PROJECT.path,
+				}),
+			},
+		]);
 	});
 
 	test("persists a reset checkpoint when GitLab's fixed-window total changes", async () => {
@@ -600,6 +625,45 @@ describe("importLandingZoneGitLabHistory", () => {
 		const result = await runLandingZoneGitLabImportSweep(undefined, scheduled);
 		expect(result.outcomes).toEqual(["merged-unverified"]);
 		expect(result.projectErrors).toEqual([{ repository: "aws-lz-ami", message: "GitLab unavailable" }]);
+	});
+
+	test("halts the catalog sweep after an authentication rejection", async () => {
+		const previousToken = process.env.GITLAB_PERSONAL_ACCESS_TOKEN;
+		process.env.GITLAB_PERSONAL_ACCESS_TOKEN = "rejected-token";
+		const fixture = dependencies([mr()]);
+		const visited: string[] = [];
+		const scheduled: LandingZoneImportDependencies = {
+			...fixture.dependencies,
+			listRepositories: async () => [
+				{ name: "aws-lz-ami", availability: "active" },
+				{ name: "aws-lz-account-creator", availability: "active" },
+			],
+			readCheckpoint: async () => ({ projectId: "42", updatedAfter: "2026-09-01T00:00:00.000Z" }),
+			listMergeRequests: async ({ repository }) => {
+				visited.push(repository);
+				throw new Error("GitLab read failed with HTTP 401");
+			},
+		};
+
+		try {
+			const result = await runLandingZoneGitLabImportSweep(undefined, scheduled);
+			expect(visited).toEqual(["aws-lz-ami"]);
+			expect(result.projectErrors).toEqual([{ repository: "aws-lz-ami", message: "GitLab read failed with HTTP 401" }]);
+			expect(result.authBackoff).toBe(true);
+
+			await expect(runLandingZoneGitLabImportSweep(undefined, scheduled)).resolves.toEqual({
+				outcomes: [],
+				authBackoff: true,
+			});
+			expect(visited).toEqual(["aws-lz-ami"]);
+
+			process.env.GITLAB_PERSONAL_ACCESS_TOKEN = "rotated-token";
+			await runLandingZoneGitLabImportSweep(undefined, scheduled);
+			expect(visited).toEqual(["aws-lz-ami", "aws-lz-ami"]);
+		} finally {
+			if (previousToken === undefined) delete process.env.GITLAB_PERSONAL_ACCESS_TOKEN;
+			else process.env.GITLAB_PERSONAL_ACCESS_TOKEN = previousToken;
+		}
 	});
 
 	test("isolates a checkpoint read failure and continues with later repositories", async () => {

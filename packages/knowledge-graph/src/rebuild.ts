@@ -20,6 +20,7 @@ import {
 	createFetchAgentMemoryClient,
 	resolveAgentMemoryConfig,
 } from "@devops-agent/shared";
+import { z } from "zod";
 import { BindingKindSchema, MIGRATIONS, VECTOR_INDEX_SETUP } from "./schema.ts";
 import { type GraphStore, graphPath, isKnowledgeGraphEnabled, LadybugStore } from "./store.ts";
 import {
@@ -29,6 +30,8 @@ import {
 	linkResolution,
 	type RootCauseRecord,
 	recordIncident,
+	recordLandingZoneGitLabImportCheckpoint,
+	recordLandingZoneRepository,
 	recordRootCause,
 	recordServiceBinding,
 	type ServiceBindingRecord,
@@ -36,6 +39,7 @@ import {
 
 // One Agent Memory user per agent (SIO-938). Bindings are the incident agent's.
 const INCIDENT_USER = "incident-analyzer";
+const LANDING_ZONE_USER = "landing-zone-terraform";
 // A recall session id is required by the ref. SIO-1360: the service validates that the
 // session EXISTS (even for all-session filter-only searches), so recallClient() creates
 // it on first use; the id itself is otherwise arbitrary but must stay stable.
@@ -173,36 +177,74 @@ export function rootCauseFromAnnotations(a: AnnotationMap): RootCauseRecord | nu
 	};
 }
 
+export interface LandingZoneImportStartRecord {
+	repository: string;
+	projectId: string;
+	projectPath: string;
+	backfillStartAt: string;
+}
+
+export function landingZoneImportStartFromAnnotations(a: AnnotationMap): LandingZoneImportStartRecord | null {
+	if (!a.repository || !a.project_id || !a.project_path) return null;
+	if (!z.string().datetime().safeParse(a.backfill_start_at).success) return null;
+	return {
+		repository: a.repository,
+		projectId: a.project_id,
+		projectPath: a.project_path,
+		backfillStartAt: a.backfill_start_at as string,
+	};
+}
+
+async function applyLandingZoneImportStart(store: GraphStore, rec: LandingZoneImportStartRecord): Promise<void> {
+	await recordLandingZoneRepository(store, {
+		group: { id: "gitlab-group:pvhcorp", path: "pvhcorp" },
+		repository: {
+			id: `gitlab-project:${rec.projectId}`,
+			groupId: "gitlab-group:pvhcorp",
+			path: rec.projectPath,
+			name: rec.repository,
+			webUrl: `https://gitlab.com/${rec.projectPath}`,
+		},
+	});
+	await recordLandingZoneGitLabImportCheckpoint(store, rec.projectId, {
+		updatedAfter: rec.backfillStartAt,
+		backfillStartAt: rec.backfillStartAt,
+		repositoryPath: rec.projectPath,
+	});
+}
+
 // SIO-1360: the service validates the recall session's existence even for filter-only
 // all-session searches (404 SESSION_NOT_FOUND otherwise), so the kg-rebuild session must
 // be created before the first search. Memoized: user+session ensure once per run.
-let recallClientPromise: Promise<ReturnType<typeof createFetchAgentMemoryClient>> | null = null;
+const recallClientPromises = new Map<string, Promise<ReturnType<typeof createFetchAgentMemoryClient>>>();
 
-function recallClient(config: ReturnType<typeof resolveAgentMemoryConfig>) {
-	if (!recallClientPromise) {
-		recallClientPromise = (async () => {
+function recallClient(config: ReturnType<typeof resolveAgentMemoryConfig>, userId: string) {
+	let promise = recallClientPromises.get(userId);
+	if (!promise) {
+		promise = (async () => {
 			const client = createFetchAgentMemoryClient(config);
-			await client.ensureUser(INCIDENT_USER, INCIDENT_USER);
-			await client.ensureSession(INCIDENT_USER, REBUILD_SESSION, {
+			await client.ensureUser(userId, userId);
+			await client.ensureSession(userId, REBUILD_SESSION, {
 				metadata: { purpose: "knowledge-graph rebuild recall session (SIO-1100/1103)" },
 			});
 			return client;
 		})();
+		recallClientPromises.set(userId, promise);
 	}
-	return recallClientPromise;
+	return promise;
 }
 
 // Fetch every fact of one kind (deterministic filter-only recall, SIO-998 -- empty
 // query so the annotation filter is authoritative; SIO-1359 sends the exhaustive
 // relevant_k ceiling). Returns [] when the agent-memory backend is unselected/disabled.
-async function fetchFactsByKind(kind: string): Promise<AnnotationMap[]> {
+async function fetchFactsByKind(kind: string, userId = INCIDENT_USER): Promise<AnnotationMap[]> {
 	// resolveAgentMemoryConfig throws if AGENT_MEMORY_BASE_URL is unset; only call it
 	// when the agent-memory backend is actually selected.
 	if (process.env.LIVE_MEMORY_BACKEND !== "agent-memory") return [];
 	const config = resolveAgentMemoryConfig();
 	if (!config.enabled) return [];
-	const client = await recallClient(config);
-	const ref: AgentMemoryUserRef = { userId: INCIDENT_USER, sessionId: REBUILD_SESSION };
+	const client = await recallClient(config, userId);
+	const ref: AgentMemoryUserRef = { userId, sessionId: REBUILD_SESSION };
 	const hits = await client.searchMemory(ref, "", { allSessions: true, annotations: { kind } });
 	return hits.map((h) => h.annotations ?? {});
 }
@@ -215,8 +257,9 @@ async function replayKind<T>(
 	map: (a: AnnotationMap) => T | null,
 	write: (store: GraphStore, rec: T) => Promise<void>,
 	dryRun: boolean,
+	userId = INCIDENT_USER,
 ): Promise<{ replayed: number; skipped: number }> {
-	const facts = await fetchFactsByKind(kind);
+	const facts = await fetchFactsByKind(kind, userId);
 	const records: T[] = [];
 	let skipped = 0;
 	for (const a of facts) {
@@ -258,6 +301,14 @@ async function rebuild(opts: RebuildOptions): Promise<void> {
 		applyInvalidatedBinding,
 		opts.dryRun,
 	);
+	await replayKind(
+		store,
+		"kg-lz-gitlab-import-start",
+		landingZoneImportStartFromAnnotations,
+		applyLandingZoneImportStart,
+		opts.dryRun,
+		LANDING_ZONE_USER,
+	);
 
 	if (opts.dryRun) {
 		process.stdout.write("knowledge-graph rebuild: --dry-run, no writes.\n");
@@ -275,7 +326,9 @@ function printGaps(): void {
 		`${[
 			"knowledge-graph rebuild: rebuilt from Couchbase mirror facts (SIO-1103): Incident +",
 			"  AFFECTED_BY (kg-incident), RootCause + HAS_ROOT_CAUSE (kg-root-cause), RESOLVED_BY (kg-resolution), telemetry",
-			"  bindings (kg-binding). NOT rebuilt (no system-of-record fact):",
+			"  bindings (kg-binding) and Landing Zone GitLab replay anchors (kg-lz-gitlab-import-start).",
+			"  Landing Zone history is then replayed from GitLab from its original controlled backfill timestamp.",
+			"  NOT rebuilt (no system-of-record fact):",
 			"  - Incident EMBEDDINGS (facts carry no vector; re-embed is a Bedrock cost, not default)",
 			"  - Finding / CORRELATES_WITH (graph-only)",
 			"  - Network topology + IP bindings (SIO-1207: machine-rediscoverable from AWS, so",
