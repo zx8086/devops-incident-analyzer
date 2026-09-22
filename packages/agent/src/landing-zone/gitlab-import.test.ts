@@ -93,14 +93,33 @@ function dependencies(
 }
 
 describe("importLandingZoneGitLabHistory", () => {
-	test("rejects multiple mutable-offset pages in one import", async () => {
-		const fixture = dependencies();
-		await expect(
-			importLandingZoneGitLabHistory(
-				{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 2 },
-				fixture.dependencies,
-			),
-		).rejects.toThrow("maxPages must be 1 when importing GitLab history with an overlap checkpoint");
+	test("rescans a fixed timestamp window until reordered equal-time pages contain no new stable MRs", async () => {
+		const sameTimestamp = "2026-09-03T00:00:00.000Z";
+		const changes = Array.from({ length: 25 }, (_, index) => mr({ iid: index + 1, updatedAt: sameTimestamp, mergeCommitSha: `commit-${index + 1}` }));
+		const recorded: string[] = [];
+		let pass = 0;
+		const testDependencies = {
+			listMergeRequests: async ({ page }: { page: number }) => {
+				const ordered = pass === 0 ? changes : [...changes.slice(5), ...changes.slice(0, 5)];
+				return { project: PROJECT, mergeRequests: ordered.slice((page - 1) * 20, page * 20), ...(page === 1 && { nextPage: 2 }) };
+			},
+			listPipelines: async () => ({ pipelines: [] }),
+			writers: {
+				recordRepository: async () => {},
+				recordChange: async (_store: unknown, change: { mergeRequest?: { id: string } }) => { if (change.mergeRequest) recorded.push(change.mergeRequest.id); },
+				recordPipeline: async () => {},
+				recordPlan: async () => {},
+			},
+			store: {} as never,
+		};
+		const first = await importLandingZoneGitLabHistory({ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 2 }, testDependencies);
+		expect(first.checkpoint?.inProgress?.seenMrIds).toHaveLength(25);
+		const upperBound = first.checkpoint?.inProgress?.upperBound;
+		expect(upperBound).toBeString();
+		pass = 1;
+		const second = await importLandingZoneGitLabHistory({ repository: "aws-lz-account-creator", checkpoint: first.checkpoint, maxPages: 2 }, testDependencies);
+		expect(second.checkpoint).toEqual({ projectId: "42", updatedAfter: upperBound! });
+		expect(new Set(recorded)).toEqual(new Set(changes.map((change) => `42:${change.iid}`)));
 	});
 
 	test("records a merged MR with a successful plan as merged-unverified", async () => {
@@ -222,21 +241,19 @@ describe("importLandingZoneGitLabHistory", () => {
 	});
 
 	test("returns a project checkpoint after a bounded page and resumes from it", async () => {
-		const first = dependencies([mr()], [pipeline()], { nextPage: 2 });
+		const first = dependencies([mr()], [pipeline()]);
 		const firstResult = await importLandingZoneGitLabHistory(
 			{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
 			first.dependencies,
 		);
-		expect(firstResult.checkpoint).toEqual({ projectId: "42", updatedAfter: "2026-09-02T23:59:59.000Z" });
+		expect(firstResult.checkpoint).toMatchObject({ projectId: "42", updatedAfter: "2026-09-01T00:00:00.000Z", inProgress: { completedScan: true } });
 
 		const resumed = dependencies([mr({ iid: 8, updatedAt: "2026-09-04T00:00:00.000Z" })]);
 		await importLandingZoneGitLabHistory(
 			{ repository: "aws-lz-account-creator", checkpoint: firstResult.checkpoint, maxPages: 1 },
 			resumed.dependencies,
 		);
-		expect(resumed.pages).toEqual([
-			{ repository: "aws-lz-account-creator", updatedAfter: "2026-09-02T23:59:59.000Z", page: 1 },
-		]);
+		expect(resumed.pages[0]).toMatchObject({ repository: "aws-lz-account-creator", updatedAfter: "2026-09-01T00:00:00.000Z", page: 1 });
 	});
 
 	test("advances the completed project watermark to the latest observed update", async () => {
@@ -245,7 +262,7 @@ describe("importLandingZoneGitLabHistory", () => {
 			{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
 			fixture.dependencies,
 		);
-		expect(result.checkpoint).toEqual({ projectId: "42", updatedAfter: "2026-09-04T00:00:00.000Z" });
+		expect(result.checkpoint).toMatchObject({ projectId: "42", updatedAfter: "2026-09-01T00:00:00.000Z", inProgress: { completedScan: true } });
 	});
 
 	test("persists the completed project checkpoint for scheduled reconciliation", async () => {
@@ -259,7 +276,7 @@ describe("importLandingZoneGitLabHistory", () => {
 			{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
 			persisted,
 		);
-		expect(checkpoints).toEqual([{ projectId: "42", updatedAfter: "2026-09-04T00:00:00.000Z" }]);
+		expect(checkpoints).toEqual([expect.objectContaining({ projectId: "42", updatedAfter: "2026-09-01T00:00:00.000Z", inProgress: expect.any(Object) })]);
 	});
 
 	test("carries bounded GitLab provenance into every imported graph record", async () => {

@@ -598,7 +598,7 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE REL TABLE IF NOT EXISTS PROMPTED_IN(FROM Prompt TO Session)",
 	// SIO-1867: PVH Landing Zone repository, Terraform, plan, and governance graph.
 	"CREATE NODE TABLE IF NOT EXISTS GitLabGroup(id STRING, path STRING, name STRING, webUrl STRING, lastSyncedAt STRING, source STRING, evidenceTruncated BOOLEAN, PRIMARY KEY(id))",
-	"CREATE NODE TABLE IF NOT EXISTS Repository(id STRING, groupId STRING, path STRING, name STRING, defaultBranch STRING, webUrl STRING, commitSha STRING, lastSyncedAt STRING, source STRING, evidenceTruncated BOOLEAN, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS Repository(id STRING, groupId STRING, path STRING, name STRING, defaultBranch STRING, webUrl STRING, commitSha STRING, lastSyncedAt STRING, source STRING, evidenceTruncated BOOLEAN, gitlabImportUpdatedAfter STRING, gitlabImportCheckpointedAt STRING, gitlabImportState STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS TerraformRoot(id STRING, repositoryId STRING, path STRING, managesAccounts BOOLEAN, lastSyncedAt STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS TerraformModule(id STRING, repositoryId STRING, path STRING, name STRING, lastSyncedAt STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS SharedModule(id STRING, source STRING, version STRING, lastSyncedAt STRING, PRIMARY KEY(id))",
@@ -689,6 +689,9 @@ export const ALTER_MIGRATIONS: readonly string[] = [
 	"ALTER TABLE GitLabGroup ADD evidenceTruncated BOOLEAN DEFAULT false",
 	"ALTER TABLE Repository ADD source STRING DEFAULT ''",
 	"ALTER TABLE Repository ADD evidenceTruncated BOOLEAN DEFAULT false",
+	"ALTER TABLE Repository ADD gitlabImportUpdatedAfter STRING DEFAULT ''",
+	"ALTER TABLE Repository ADD gitlabImportCheckpointedAt STRING DEFAULT ''",
+	"ALTER TABLE Repository ADD gitlabImportState STRING DEFAULT ''",
 	"ALTER TABLE TerraformPlan ADD lastSyncedAt STRING DEFAULT ''",
 	"ALTER TABLE TerraformPlan ADD source STRING DEFAULT ''",
 	"ALTER TABLE TerraformPlan ADD evidenceTruncated BOOLEAN DEFAULT false",

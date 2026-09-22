@@ -4,6 +4,8 @@ import {
 	getGraphStore,
 	isKnowledgeGraphEnabled,
 	recordLandingZoneChange,
+	readLandingZoneGitLabImportCheckpoint,
+	recordLandingZoneGitLabImportCheckpoint,
 	recordLandingZoneRepository,
 	recordPipeline,
 	recordTerraformPlan,
@@ -63,13 +65,14 @@ export interface LandingZoneImportOptions {
 export interface LandingZoneImportCheckpoint {
 	projectId: string;
 	updatedAfter: string;
+	inProgress?: { upperBound: string; seenMrIds: string[]; completedScan: boolean };
 }
 
 export interface LandingZoneImportDependencies {
 	listRepositories?: () => Promise<Array<{ name: string; availability: "active" | "no-git-refs" }>>;
 	readCheckpoint?: (store: GraphStore, repository: string) => Promise<LandingZoneImportCheckpoint | undefined>;
 	recordCheckpoint?: (store: GraphStore, checkpoint: LandingZoneImportCheckpoint) => Promise<void>;
-	listMergeRequests: (input: { repository: string; updatedAfter: string; page: number }) => Promise<{
+	listMergeRequests: (input: { repository: string; updatedAfter: string; updatedBefore?: string; page: number }) => Promise<{
 		project: HistoricalProject;
 		mergeRequests: HistoricalMergeRequest[];
 		nextPage?: number;
@@ -160,26 +163,14 @@ async function invokeReadTool(name: string, input: Record<string, unknown>): Pro
 function defaultDependencies(): LandingZoneImportDependencies {
 	return {
 		listRepositories: async () => RepositoryCatalogSchema.parse(await invokeReadTool("lz_list_repositories", {})).repositories,
-		readCheckpoint: async (store, repository) => {
-			const rows = await store.run<{ id?: string; updatedAfter?: string }>(
-				"MATCH (r:Repository {name: $repository}) RETURN r.id AS id, r.gitlabImportUpdatedAfter AS updatedAfter",
-				{ repository },
-			);
-			const updatedAfter = rows[0]?.updatedAfter;
-			const projectId = rows[0]?.id?.replace("gitlab-project:", "");
-			return updatedAfter && projectId ? { projectId, updatedAfter } : undefined;
-		},
-		recordCheckpoint: async (store, checkpoint) => {
-			await store.run(
-				"MATCH (r:Repository {id: $repositoryId}) SET r.gitlabImportUpdatedAfter = $updatedAfter, r.gitlabImportCheckpointedAt = $checkpointedAt",
-				{ repositoryId: `gitlab-project:${checkpoint.projectId}`, updatedAfter: checkpoint.updatedAfter, checkpointedAt: new Date().toISOString() },
-			);
-		},
+		readCheckpoint: readLandingZoneGitLabImportCheckpoint,
+		recordCheckpoint: async (store, checkpoint) => recordLandingZoneGitLabImportCheckpoint(store, checkpoint.projectId, checkpoint),
 		listMergeRequests: async (input) =>
 			HistoricalMergeRequestPageSchema.parse(
 				await invokeReadTool("lz_list_historical_merge_requests", {
 					repository: input.repository,
 					updatedAfter: input.updatedAfter,
+					...(input.updatedBefore && { updatedBefore: input.updatedBefore }),
 					page: input.page,
 					perPage: 20,
 				}),
@@ -222,46 +213,59 @@ export async function importLandingZoneGitLabHistory(
 	if (!dependencies) resolvedDependencies.store = await getGraphStore();
 	const updatedAfter = options.checkpoint?.updatedAfter ?? options.startAt;
 	if (!updatedAfter) throw new Error("A startAt timestamp or checkpoint is required for Landing Zone history import");
-	if (options.maxPages !== undefined && options.maxPages !== 1) {
-		throw new Error("maxPages must be 1 when importing GitLab history with an overlap checkpoint");
-	}
+	const maxPages = options.maxPages ?? 5;
+	if (!Number.isInteger(maxPages) || maxPages < 1) throw new Error("maxPages must be a positive integer");
 	const outcomes: LandingZoneImportOutcome[] = [];
 	let projectId = options.checkpoint?.projectId;
-	let latestUpdatedAt = updatedAfter;
-	const page = await resolvedDependencies.listMergeRequests({
-		repository: options.repository,
-		updatedAfter,
-		page: 1,
-	});
-	projectId = String(page.project.id);
+	const upperBound = options.checkpoint?.inProgress?.upperBound ?? new Date().toISOString();
+	const pages = [];
+	for (let pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
+		const page = await resolvedDependencies.listMergeRequests({
+			repository: options.repository,
+			updatedAfter,
+			updatedBefore: upperBound,
+			page: pageNumber,
+		});
+		pages.push(page);
+		if (!page.nextPage) break;
+		if (pageNumber === maxPages) throw new Error(`GitLab history safety cap of ${maxPages} pages exceeded for ${options.repository}`);
+	}
+	const firstPage = pages[0];
+	if (!firstPage) return { outcomes };
+	projectId = String(firstPage.project.id);
 	if (options.checkpoint && options.checkpoint.projectId !== projectId) {
 		throw new Error(`Checkpoint project ${options.checkpoint.projectId} does not match GitLab project ${projectId}`);
 	}
 	const repositoryId = `gitlab-project:${projectId}`;
 	await resolvedDependencies.writers.recordRepository(resolvedDependencies.store, {
-		group: { id: "gitlab-group:pvhcorp", path: "pvhcorp", lastSyncedAt: page.provenance?.retrievedAt },
+		group: { id: "gitlab-group:pvhcorp", path: "pvhcorp", lastSyncedAt: firstPage.provenance?.retrievedAt },
 		repository: {
 			id: repositoryId,
 			groupId: "gitlab-group:pvhcorp",
-			path: page.project.path,
+			path: firstPage.project.path,
 			name: options.repository,
-			defaultBranch: page.project.defaultBranch,
-			webUrl: `https://gitlab.com/${page.project.path}`,
-			commitSha: page.project.headSha,
-			lastSyncedAt: page.provenance?.retrievedAt,
+			defaultBranch: firstPage.project.defaultBranch,
+			webUrl: `https://gitlab.com/${firstPage.project.path}`,
+			commitSha: firstPage.project.headSha,
+			lastSyncedAt: firstPage.provenance?.retrievedAt,
 		},
-		provenance: page.provenance,
+		provenance: firstPage.provenance,
 	});
-	for (const mr of page.mergeRequests) {
-		if (mr.updatedAt > latestUpdatedAt) latestUpdatedAt = mr.updatedAt;
-		const pipelinePage = await resolvedDependencies.listPipelines({ repository: options.repository, iid: mr.iid });
-		const pipelines = pipelinePage.pipelines;
-		const outcome = outcomeFor(mr, pipelines);
-		outcomes.push(outcome);
-		const mrId = `${projectId}:${mr.iid}`;
-		const commitSha = mr.mergeCommitSha ?? mr.commitSha;
-		if (!commitSha) throw new Error(`GitLab merge request ${mrId} did not provide a commit SHA`);
-		await resolvedDependencies.writers.recordChange(resolvedDependencies.store, {
+	const seenMrIds = new Set(options.checkpoint?.inProgress?.seenMrIds ?? []);
+	let observedNewMr = false;
+	for (const page of pages) {
+		for (const mr of page.mergeRequests) {
+			const stableMrId = `${projectId}:${mr.iid}`;
+			if (!seenMrIds.has(stableMrId)) observedNewMr = true;
+			seenMrIds.add(stableMrId);
+			const pipelinePage = await resolvedDependencies.listPipelines({ repository: options.repository, iid: mr.iid });
+			const pipelines = pipelinePage.pipelines;
+			const outcome = outcomeFor(mr, pipelines);
+			outcomes.push(outcome);
+			const mrId = `${projectId}:${mr.iid}`;
+			const commitSha = mr.mergeCommitSha ?? mr.commitSha;
+			if (!commitSha) throw new Error(`GitLab merge request ${mrId} did not provide a commit SHA`);
+			await resolvedDependencies.writers.recordChange(resolvedDependencies.store, {
 			id: `gitlab:${mrId}:${commitSha}`,
 			repositoryId,
 			summary: mr.title,
@@ -277,8 +281,8 @@ export async function importLandingZoneGitLabHistory(
 				webUrl: mr.webUrl,
 				lastSyncedAt: mr.updatedAt,
 			},
-		});
-		for (const pipeline of pipelines) {
+			});
+			for (const pipeline of pipelines) {
 			await resolvedDependencies.writers.recordPipeline(resolvedDependencies.store, {
 				mrUrl: mr.webUrl,
 				mrId,
@@ -302,15 +306,13 @@ export async function importLandingZoneGitLabHistory(
 					truncated: pipelinePage.provenance?.truncated,
 				});
 			}
+			}
 		}
 	}
-	const bounded = page.nextPage !== undefined;
 	if (!projectId) return { outcomes };
-	const overlap =
-		bounded && latestUpdatedAt !== updatedAfter
-			? new Date(Date.parse(latestUpdatedAt) - 1_000).toISOString()
-			: latestUpdatedAt;
-	const checkpoint = { projectId, updatedAfter: overlap };
+	const checkpoint = options.checkpoint?.inProgress?.completedScan && !observedNewMr
+		? { projectId, updatedAfter: upperBound }
+		: { projectId, updatedAfter, inProgress: { upperBound, seenMrIds: [...seenMrIds].sort(), completedScan: true } };
 	await resolvedDependencies.recordCheckpoint?.(resolvedDependencies.store, checkpoint);
 	return { outcomes, checkpoint };
 }

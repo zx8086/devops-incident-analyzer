@@ -47,6 +47,8 @@ import {
 	recordIncident,
 	recordIpBinding,
 	recordLandingZoneChange,
+	readLandingZoneGitLabImportCheckpoint,
+	recordLandingZoneGitLabImportCheckpoint,
 	recordLandingZoneRepository,
 	recordModuleUsage,
 	recordNetworkTopology,
@@ -92,6 +94,29 @@ afterAll(() => {
 });
 
 describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
+	test("Landing Zone GitLab import checkpoints round-trip through the migrated Repository schema", async () => {
+		const store = new LadybugStore(join(dir, "lz-gitlab-import-checkpoint"));
+		await store.init();
+		await recordLandingZoneRepository(store, {
+			group: { id: "gitlab-group:pvhcorp", path: "pvhcorp" },
+			repository: {
+				id: "gitlab-project:42",
+				groupId: "gitlab-group:pvhcorp",
+				path: "pvhcorp/dhco/aws/aws-lz-account-creator",
+				name: "aws-lz-account-creator",
+			},
+		});
+		await recordLandingZoneGitLabImportCheckpoint(store, "42", {
+			updatedAfter: "2026-09-03T00:00:00.000Z",
+			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", seenMrIds: ["42:7"], completedScan: false },
+		});
+		expect(await readLandingZoneGitLabImportCheckpoint(store, "aws-lz-account-creator")).toEqual({
+			projectId: "42",
+			updatedAfter: "2026-09-03T00:00:00.000Z",
+			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", seenMrIds: ["42:7"], completedScan: false },
+		});
+	});
+
 	test("Landing Zone repository model is idempotent and queryable", async () => {
 		const store = new LadybugStore(join(dir, "lz-repository-model"));
 		await store.init();

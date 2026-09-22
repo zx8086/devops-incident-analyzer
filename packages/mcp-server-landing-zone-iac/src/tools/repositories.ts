@@ -250,6 +250,7 @@ export interface GitLabReadClient {
 	historicalMergeRequests(
 		projectPath: string,
 		updatedAfter: string,
+		updatedBefore: string | undefined,
 		page: number,
 		perPage: number,
 	): Promise<{ mergeRequests: GitLabHistoricalMergeRequest[]; nextPage?: number }>;
@@ -433,7 +434,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 		jobTrace(projectPath, jobId) {
 			return request(`${projectApiPath(projectPath)}/jobs/${jobId}/trace`);
 		},
-		async historicalMergeRequests(projectPath, updatedAfter, page, perPage) {
+		async historicalMergeRequests(projectPath, updatedAfter, updatedBefore, page, perPage) {
 			const params = new URLSearchParams({
 				scope: "all",
 				state: "all",
@@ -443,6 +444,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 				page: String(page),
 				per_page: String(perPage),
 			});
+			if (updatedBefore) params.set("updated_before", updatedBefore);
 			const response = await responseFor(`${projectApiPath(projectPath)}/merge_requests?${params.toString()}`);
 			const text = await response.text();
 			if (Buffer.byteLength(text, "utf8") > options.maxResponseBytes) {

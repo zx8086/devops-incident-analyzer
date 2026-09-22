@@ -94,6 +94,7 @@ function registerAll(server: McpServer, client: GitLabReadClient): void {
 			inputSchema: {
 				repository: RepositoryParam,
 				updatedAfter: z.string().datetime().describe("Explicit UTC checkpoint or backfill start timestamp"),
+				updatedBefore: z.string().datetime().optional().describe("Fixed UTC upper bound for a resumable import window"),
 				page: z.number().int().positive().optional().describe("GitLab page number; defaults to 1"),
 				perPage: z.number().int().min(1).max(100).optional().describe("Bounded page size; defaults to 20"),
 			},

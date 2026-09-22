@@ -56,6 +56,61 @@ export interface LandingZoneRepositoryRecord {
 	provenance?: { source: string; retrievedAt: string; truncated: boolean };
 }
 
+export interface LandingZoneGitLabImportProgress {
+	upperBound: string;
+	seenMrIds: string[];
+	completedScan: boolean;
+}
+
+export interface LandingZoneGitLabImportCheckpoint {
+	projectId: string;
+	updatedAfter: string;
+	inProgress?: LandingZoneGitLabImportProgress;
+}
+
+export async function readLandingZoneGitLabImportCheckpoint(
+	store: GraphStore,
+	repository: string,
+): Promise<LandingZoneGitLabImportCheckpoint | undefined> {
+	const rows = await store.run<{ id?: string; updatedAfter?: string; state?: string }>(
+		"MATCH (r:Repository {name: $repository}) RETURN r.id AS id, r.gitlabImportUpdatedAfter AS updatedAfter, r.gitlabImportState AS state",
+		{ repository },
+	);
+	const updatedAfter = rows[0]?.updatedAfter;
+	const projectId = rows[0]?.id?.replace("gitlab-project:", "");
+	if (!updatedAfter || !projectId) return undefined;
+	let inProgress: LandingZoneGitLabImportProgress | undefined;
+	if (rows[0]?.state) {
+		const parsed = JSON.parse(rows[0].state) as LandingZoneGitLabImportProgress;
+		if (
+			typeof parsed.upperBound !== "string" ||
+			!Array.isArray(parsed.seenMrIds) ||
+			!parsed.seenMrIds.every((id) => typeof id === "string") ||
+			typeof parsed.completedScan !== "boolean"
+		) {
+			throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+		}
+		inProgress = parsed;
+	}
+	return { projectId, updatedAfter, ...(inProgress && { inProgress }) };
+}
+
+export async function recordLandingZoneGitLabImportCheckpoint(
+	store: GraphStore,
+	projectId: string,
+	checkpoint: Omit<LandingZoneGitLabImportCheckpoint, "projectId">,
+): Promise<void> {
+	await store.run(
+		"MATCH (r:Repository {id: $repositoryId}) SET r.gitlabImportUpdatedAfter = $updatedAfter, r.gitlabImportCheckpointedAt = $checkpointedAt, r.gitlabImportState = $state",
+		{
+			repositoryId: `gitlab-project:${projectId}`,
+			updatedAfter: checkpoint.updatedAfter,
+			checkpointedAt: new Date().toISOString(),
+			state: checkpoint.inProgress ? JSON.stringify(checkpoint.inProgress) : "",
+		},
+	);
+}
+
 export async function recordLandingZoneRepository(
 	store: GraphStore,
 	record: LandingZoneRepositoryRecord,

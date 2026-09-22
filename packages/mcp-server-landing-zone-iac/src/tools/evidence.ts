@@ -128,7 +128,7 @@ export async function listOpenChanges(client: GitLabReadClient, input: { reposit
 
 export async function listHistoricalMergeRequests(
 	client: GitLabReadClient,
-	input: { repository: string; updatedAfter: string; page?: number; perPage?: number },
+	input: { repository: string; updatedAfter: string; updatedBefore?: string; page?: number; perPage?: number },
 ) {
 	const repository = resolveRepository(input.repository);
 	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
@@ -137,7 +137,7 @@ export async function listHistoricalMergeRequests(
 	const perPage = input.perPage ?? 20;
 	if (!Number.isInteger(page) || page < 1) throw new Error("page must be a positive integer");
 	if (!Number.isInteger(perPage) || perPage < 1 || perPage > 100) throw new Error("perPage must be between 1 and 100");
-	const result = await client.historicalMergeRequests(repository.projectPath, input.updatedAfter, page, perPage);
+	const result = await client.historicalMergeRequests(repository.projectPath, input.updatedAfter, input.updatedBefore, page, perPage);
 	return {
 		repository,
 		project: { id: project.id, path: project.path, defaultBranch: project.defaultBranch, headSha: project.headSha },
