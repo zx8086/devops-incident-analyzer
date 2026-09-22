@@ -34,6 +34,13 @@ division code (THE1) -- NOT a Jira label equal to the service. So:
   `getIncidentHistory`, and `getRunbookForAlert` (e.g. `["AFS season code", "FMS", "THE1",
   "Prana"]`) for time-bucketed / MTTR detail. These text-match the content; the bare service token
   usually will not.
+- SIO-1844: `getRunbookForAlert` searches a space that holds PROCEDURAL documentation --
+  environment setup, access, release procedure, feature flags, log levels -- and no incident
+  runbooks. It was measured: an incident question tops out at 1.17 relevance there while a
+  procedural one reaches 2.09. Call it for "how is this deployed / how do I get access", and
+  report nothing rather than citing its best wrong page when the question is "how do I fix this
+  failure". The incident runbooks live in the agent's own knowledge tree and are selected by the
+  orchestrator before you are dispatched, so their absence here is not a gap to report.
 - The FORM of `errorKeywords` is not the form of the `atlassian_search` string (SIO-1803). That
   string is one free-text query, so a run of loose words is right for it. `errorKeywords` is a
   LIST, and EACH entry becomes its own search clause: any single entry can pull a ticket in by

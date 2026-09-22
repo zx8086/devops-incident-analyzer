@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadAgent } from "./index.ts";
-import { getAllActionToolNames, getAvailableActions } from "./tool-mapping.ts";
+import { getAllActionToolNames, getAvailableActions, matchActionsByKeywords } from "./tool-mapping.ts";
 
 const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
 
@@ -279,5 +279,50 @@ describe("aws-introspect.yaml SIO-1161 coverage", () => {
 		expect(keywords).toContain("noisiest");
 		expect(keywords).toContain("top 10");
 		expect(keywords).toContain("metrics insights");
+	});
+});
+
+// SIO-1844: runbook_lookup searches a Confluence space that was MEASURED to hold no
+// incident runbooks -- an incident question tops out at 1.17 relevance there while a
+// procedural one reaches 2.09. Its keywords were retargeted onto the procedural
+// vocabulary the space actually contains, and "remediation steps" was removed because
+// it routed the exact question the corpus cannot answer.
+describe("atlassian-api.yaml runbook_lookup is scoped to procedural docs (SIO-1844)", () => {
+	const atlassianTool = () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const tool = agent.tools.find((t) => t.name === "atlassian-api");
+		expect(tool).toBeDefined();
+		return tool;
+	};
+
+	test("incident-shaped questions do NOT route to runbook_lookup", () => {
+		const tool = atlassianTool();
+		if (!tool) return;
+		for (const q of [
+			"what are the remediation steps for this couchbase timeout",
+			"how do I fix this kafka consumer failure",
+			"what should I do about the gateway 504s",
+		]) {
+			expect({ q, matched: matchActionsByKeywords(q, tool).includes("runbook_lookup") }).toEqual({
+				q,
+				matched: false,
+			});
+		}
+	});
+
+	test("procedural questions DO route to runbook_lookup", () => {
+		const tool = atlassianTool();
+		if (!tool) return;
+		for (const q of [
+			"what is the release procedure for styles-v3",
+			"how do I get access to the prd account",
+			"how to deploy the order service",
+			"change the log level on prana",
+		]) {
+			expect({ q, matched: matchActionsByKeywords(q, tool).includes("runbook_lookup") }).toEqual({
+				q,
+				matched: true,
+			});
+		}
 	});
 });
