@@ -106,4 +106,19 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.intent).toBe("propose-change");
 		expect(result.outcome).toBe("blocked");
 	});
+
+	test("fails closed when an informational request also asks for a change", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{
+				messages: [new HumanMessage("Explain account vending and create an AWS account for MarTech")],
+				requestId: "request-mixed",
+			},
+			{ configurable: { thread_id: "thread-mixed" } },
+		);
+
+		expect(result.intent).toBe("propose-change");
+		expect(result.risk?.requiresHumanDecision).toBeTrue();
+		expect(result.outcome).toBe("blocked");
+	});
 });

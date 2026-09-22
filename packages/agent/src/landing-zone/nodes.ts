@@ -20,10 +20,19 @@ export async function bootstrapLandingZone(state: LandingZoneStateType): Promise
 
 export async function classifyLandingZoneRequest(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
 	const text = latestText(state.messages);
+	const reviewRequested = /\b(review|validate|check|plan)\b/.test(text);
+	const learningRequested = /\b(learn|teach|example|show me|how does|how do|what is|explain)\b/.test(text);
+	const changeRequested = /\b(change|create|add|modify|update|implement)\b/.test(text);
+	const explicitChangeRequested =
+		/^(?:please\s+)?(?:change|create|add|modify|update|implement)\b/.test(text) ||
+		/\b(?:and|then|also)\s+(?:please\s+)?(?:change|create|add|modify|update|implement)\b/.test(text) ||
+		/\b(?:can you|could you|would you|need to|want to|go ahead and)\s+(?:change|create|add|modify|update|implement)\b/.test(
+			text,
+		);
 	let intent: LandingZoneIntent = "understand";
-	if (/\b(review|validate|check|plan)\b/.test(text)) intent = "review";
-	else if (/\b(learn|teach|example|show me|how does|how do|what is|explain)\b/.test(text)) intent = "learn";
-	else if (/\b(change|create|add|modify|update|implement)\b/.test(text)) intent = "propose-change";
+	if (explicitChangeRequested || (changeRequested && !learningRequested && !reviewRequested)) intent = "propose-change";
+	else if (reviewRequested) intent = "review";
+	else if (learningRequested) intent = "learn";
 	return { intent };
 }
 
