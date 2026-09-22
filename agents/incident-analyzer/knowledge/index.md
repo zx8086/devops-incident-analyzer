@@ -15,25 +15,26 @@ category's `path`.
 
 | Directory | `type:` values | Files |
 |---|---|---|
-| `general/runbooks/` | Runbook | 2 |
+| `general/runbooks/` | Runbook | 6 |
 | `general/systems-map/` | Reference | 1 |
 | `general/slo-policies/` | Reference | 1 |
-| `aws/runbooks/` | Runbook | 5 |
-| `kafka/runbooks/` | Runbook | 1 |
-| `couchbase/runbooks/` | Runbook | 1 |
-| `elastic/runbooks/` | Runbook | 1 |
+| `aws/runbooks/` | Runbook | 10 |
+| `kafka/runbooks/` | Runbook | 2 |
+| `couchbase/runbooks/` | Runbook | 3 |
+| `elastic/runbooks/` | Runbook | 2 |
+| `konnect/runbooks/` | Runbook | 1 |
 
 ## Producer extensions
 
 Two non-OKF keys, both permitted (OKF allows extra keys and requires consumers to preserve
 them):
 
-- **`triggers:`** — the SIO-640 lazy runbook selection contract. 8 of the 10 runbooks declare
+- **`triggers:`** — the SIO-640 lazy runbook selection contract. 21 of the 24 runbooks declare
   it; a runbook without it opts out of trigger filtering, not out of the catalog. Configured
   by `runbook_selection` in `index.yaml`.
 - **`tools:`** — the read-only tool list a runbook is permitted to cite (SIO-1288). When
   present it is the source of truth for the tool-citation validator; when absent the
-  validator falls back to parsing the `## All Tools Used Are Read-Only` prose tail. All 10
+  validator falls back to parsing the `## All Tools Used Are Read-Only` prose tail. All 24
   runbooks here declare it; elastic-iac's 6 still use the tail section.
 
   Frontmatter is preferred because the tail contract is "first non-empty line is a
