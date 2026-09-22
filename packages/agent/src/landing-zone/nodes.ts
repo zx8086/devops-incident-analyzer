@@ -38,6 +38,8 @@ const CONJUNCTIVE_CHANGE_PATTERN =
 const HOW_ACTION_PATTERN =
 	/\b(change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate|review|validate|check|plan|assess|audit)\b/;
 const INFORMATIONAL_QUESTION_PATTERN = /^(?:what|which|who|where|when|why|how|does|do|did|is|are|was|were)\b/;
+const PROSPECTIVE_QUESTION_CHANGE_PATTERN =
+	/^(?:what|which|who|where|when|why)\b.*(?:\b(?:should|can|could|would|will|may|might)\s+(?:we|i|you|be)\s+|\bto\s+)(?:change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b/;
 
 function clauseRequestsChange(clause: string): boolean {
 	if (INFORMATIONAL_ARTIFACT_PATTERN.test(clause)) return false;
@@ -48,6 +50,7 @@ function clauseRequestsChange(clause: string): boolean {
 		const howIndex = prefix.search(/\bhow\b/);
 		if (howIndex === -1 || !HOW_ACTION_PATTERN.test(prefix.slice(howIndex))) return true;
 	}
+	if (PROSPECTIVE_QUESTION_CHANGE_PATTERN.test(clause)) return true;
 	return (
 		CHANGE_PATTERN.test(clause) &&
 		!LEARNING_PATTERN.test(clause) &&

@@ -410,4 +410,19 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.intent).toBe("propose-change");
 		expect(result.risk?.stopConditions.join(" ")).toContain("destructive plan");
 	});
+
+	test.each([
+		"Which subnet should we remove?",
+		"What IAM permissions could we grant?",
+		"Which workload VPC to delete?",
+	] as const)("routes prospective change questions through mutation stop gates: %s", async (request) => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage(request)], requestId: `request-prospective-${request}` },
+			{ configurable: { thread_id: `thread-prospective-${request}` } },
+		);
+
+		expect(result.intent).toBe("propose-change");
+		expect(result.risk?.blocked).toBeTrue();
+	});
 });
