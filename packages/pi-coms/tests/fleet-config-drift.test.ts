@@ -60,6 +60,7 @@ describe("bootstrapWrittenKeys (SIO-1747)", () => {
 		const src = [
 			"{",
 			"  echo \"export PI_MONITOR_TZ='$MONITOR_TZ'\"",
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-1865 - shell parameter expansion in a bash fixture, not a JS template
 			'  if [ -n "${X:-}" ]; then echo "export BUNDLE_S3_URI=\'$X\'"; fi',
 			"  export NOT_THIS=1", // a plain shell export, not a written key
 			"  # echo comment",

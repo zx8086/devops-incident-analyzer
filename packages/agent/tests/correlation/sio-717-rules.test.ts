@@ -79,6 +79,7 @@ describe("ksqldb-unresponsive-task", () => {
 		const state = withKafkaProseResult(baseState(), prose);
 		const match = rule.trigger(state);
 		expect(match).not.toBeNull();
+		// biome-ignore lint/style/noNonNullAssertion: SIO-1865 - guarded by the expect().not.toBeNull() above
 		expect((match!.context as { signal: string }).signal).toBe("ksqldb-unresponsive");
 	});
 

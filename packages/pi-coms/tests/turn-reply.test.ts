@@ -513,6 +513,7 @@ test("SIO-1833: a short non-JSON reply keeps printing its whole text, with a cau
 // Greptile P1 on #861: the 450 budget is on the COMPOSED error. Two failing fences
 // plus two 160-char excerpts reached 492 before the cap was measured rather than guessed.
 test("SIO-1833: a long reply with MULTIPLE bad fences still fits the SIO-1804 budget", () => {
+	// biome-ignore lint/style/useTemplate: SIO-1865 - the fixture contains ``` fences; a template literal would nest backticks
 	const text = '```json\n{"a":1,}\n```\n```json\n{"b":2,}\n```\n' + "z".repeat(400);
 	const error = notJsonError({ text, stopReason: "stop" });
 	expect(error).toContain("parse error:");

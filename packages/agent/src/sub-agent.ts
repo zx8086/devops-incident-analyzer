@@ -93,6 +93,7 @@ export function lastTextualResponse(
 ): { text: string; index: number } | null {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const m = messages[i];
+		// biome-ignore lint/complexity/useOptionalChain: SIO-1865 - biome itself marks this fix unsafe; the two conditions read clearer apart on this hot path
 		if (!m || m._getType() !== "ai") continue;
 		// Trim only to DECIDE emptiness; return the text verbatim. The pre-SIO-1227 code did not
 		// trim, so trimming the returned value would be an unrelated behaviour change (and would
