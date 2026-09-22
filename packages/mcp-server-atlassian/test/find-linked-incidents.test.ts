@@ -335,9 +335,7 @@ describe("findLinkedIncidents searches service and keywords separately (SIO-1802
 					? [row("SVC-1", "Incident Report: styles-service kv timeout"), row("SVC-2", "styles-service 404")]
 					: Array.from({ length: 10 }, (_, i) => row(`JUNK-${i}`, `Article Master routing ${i}`));
 				return {
-					content: [
-						{ type: "text", text: JSON.stringify({ issues, isLast: !jql.includes("labels =") ? false : true }) },
-					],
+					content: [{ type: "text", text: JSON.stringify({ issues, isLast: jql.includes("labels =") }) }],
 				};
 			},
 		}) as unknown as Parameters<typeof findLinkedIncidents>[0];

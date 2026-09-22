@@ -212,6 +212,7 @@ describe("KsqlService", () => {
 			const service = new KsqlService(mockConfig);
 			await service.runQuery("SELECT 1 FROM T LIMIT 1;");
 			const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+			// biome-ignore lint/style/noNonNullAssertion: SIO-1865 - the call must exist or the assertion is meaningless
 			expect((call![1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
 			expect(KsqlService.RUN_QUERY_TIMEOUT_MS).toBeLessThan(30_000);
 		});

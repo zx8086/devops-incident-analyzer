@@ -159,6 +159,7 @@ describe("SIO-1228: skill prose cannot promise tools the datasource does not exp
 		const ds = dataSourceTools.get("gitlab");
 		expect(agent).toBeDefined();
 		expect(ds).toBeDefined();
+		// biome-ignore lint/style/noNonNullAssertion: SIO-1865 - guarded by the expect().toBeDefined() above
 		const toolLike = extractSkillToolNames(agent!).filter((n) => ds?.prefixes.some((p) => n.startsWith(p)));
 		expect(toolLike.length).toBeGreaterThanOrEqual(10);
 		expect(toolLike).toContain("gitlab_get_file_content");
@@ -170,6 +171,7 @@ describe("SIO-1228: skill prose cannot promise tools the datasource does not exp
 	test("shared skills are merged into the sub-agent view", () => {
 		const agent = rootAgent.subAgents.get("kafka-agent");
 		expect(agent).toBeDefined();
+		// biome-ignore lint/style/noNonNullAssertion: SIO-1865 - guarded by the expect().toBeDefined() above
 		expect(agent!.sharedSkills.size).toBeGreaterThan(0);
 	});
 

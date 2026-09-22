@@ -3,14 +3,7 @@ import { expect } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-	AgentCard,
-	ErrorResponse,
-	MailStore,
-	MessageStatus,
-	RegisterResponse,
-	SendResponse,
-} from "../scripts/coms-net-server.ts";
+import type { ErrorResponse, MessageStatus, RegisterResponse, SendResponse } from "../scripts/coms-net-server.ts";
 
 // Response bodies as the hub builds them (scripts/coms-net-server.ts).
 export type { AgentListing, InboxListing, InboxMessage, MessageLookup } from "../contracts/wire.ts";

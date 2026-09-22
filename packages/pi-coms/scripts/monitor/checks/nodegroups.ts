@@ -28,7 +28,7 @@ const MAX_FINDINGS = 10;
 export type CheckNodegroupsOpts = { now?: number };
 
 export function severityForNodegroup(status: string, issueCount: number): Severity | null {
-	if (status === "DEGRADED" || status === "CREATE_FAILED" || status === "DELETE_FAILED") return "critical";
+	if (FAILED_STATUS.has(status)) return "critical";
 	// Issues without a failed status: the group still serves, but EKS has
 	// diagnosed something that will bite later (an unreachable AMI, a missing
 	// IAM permission, insufficient subnet addresses).

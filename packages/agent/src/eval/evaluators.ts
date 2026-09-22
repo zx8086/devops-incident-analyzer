@@ -607,6 +607,10 @@ function summarizeOffenders(names: string[], cap = 5): string {
 	return unique.length > cap ? `${shown} (+${unique.length - cap} more)` : shown;
 }
 
+// SIO-1865: LangSmith's evaluator contract is (run, example?). Every sibling evaluator
+// here takes both and they are passed by reference to evaluate() in
+// run-mcp-tool-eval.ts, so dropping the parameter breaks the shape.
+// biome-ignore lint/correctness/noUnusedFunctionParameters: SIO-1865 - evaluator signature contract
 export function toolArgValidity(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
 	const trajectory = readTrajectory(run);
 	if (!trajectory || trajectory.totalCalls === 0) return [];
@@ -624,6 +628,10 @@ export function toolArgValidity(run: Run, example?: Example): { key: string; sco
 	];
 }
 
+// SIO-1865: LangSmith's evaluator contract is (run, example?). Every sibling evaluator
+// here takes both and they are passed by reference to evaluate() in
+// run-mcp-tool-eval.ts, so dropping the parameter breaks the shape.
+// biome-ignore lint/correctness/noUnusedFunctionParameters: SIO-1865 - evaluator signature contract
 export function toolNameValidity(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
 	const trajectory = readTrajectory(run);
 	if (!trajectory || trajectory.totalCalls === 0) return [];
@@ -704,6 +712,10 @@ export function expectedToolsFired(run: Run, example?: Example): { key: string; 
 
 // "Did the right data come back." Reads the response-health findings the trajectory projection
 // derived in-process from rawJson (the payload itself never reaches LangSmith).
+// SIO-1865: LangSmith's evaluator contract is (run, example?). Every sibling evaluator
+// here takes both and they are passed by reference to evaluate() in
+// run-mcp-tool-eval.ts, so dropping the parameter breaks the shape.
+// biome-ignore lint/correctness/noUnusedFunctionParameters: SIO-1865 - evaluator signature contract
 export function toolResponseHealth(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
 	const trajectory = readTrajectory(run);
 	if (!trajectory || trajectory.totalCalls === 0) return [];
@@ -730,6 +742,10 @@ export function toolResponseHealth(run: Run, example?: Example): { key: string; 
 // deliberately not projected; see the ToolCallRecord privacy invariant), so this cannot tell a
 // paginated sweep with an advancing cursor from a genuinely redundant repeat. Useful for "did
 // this run call the same tool more times than that one", not as a correctness threshold.
+// SIO-1865: LangSmith's evaluator contract is (run, example?). Every sibling evaluator
+// here takes both and they are passed by reference to evaluate() in
+// run-mcp-tool-eval.ts, so dropping the parameter breaks the shape.
+// biome-ignore lint/correctness/noUnusedFunctionParameters: SIO-1865 - evaluator signature contract
 export function toolEfficiency(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
 	const trajectory = readTrajectory(run);
 	if (!trajectory || trajectory.totalCalls === 0) return [];

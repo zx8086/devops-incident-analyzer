@@ -145,6 +145,7 @@ describe("SchemaRegistryService", () => {
 		const service = new SchemaRegistryService(configWithSlash);
 		service.listSubjects();
 		const fetchCall = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+		// biome-ignore lint/style/noNonNullAssertion: SIO-1865 - the call must exist or the assertion is meaningless
 		expect((fetchCall![0] as string).includes("//subjects")).toBe(false);
 	});
 
