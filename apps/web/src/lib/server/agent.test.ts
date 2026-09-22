@@ -80,6 +80,14 @@ mock.module("@devops-agent/agent", () => ({
 			updateState: mockUpdateState,
 		}),
 	),
+	buildLandingZoneGraph: mock(() =>
+		Promise.resolve({
+			streamEvents: mockStreamEvents,
+			getState: mockGetState,
+			updateState: mockUpdateState,
+			getGraphAsync: mock(() => Promise.resolve({ nodes: {}, edges: [] })),
+		}),
+	),
 	createMcpClient: mock(() => Promise.resolve()),
 	// SIO-1655: graph-registry imports both from the barrel to gate the console:
 	// the capability flag AND whether a hub exists to serve it.
@@ -350,6 +358,21 @@ describe("invokeAgent", () => {
 		expect(metadata.compliance_risk_tier).toBe("medium");
 		expect(metadata.compliance_hitl).toBe("conditional");
 	});
+
+	test("routes the Landing Zone mode through its independent state shape", async () => {
+		mockStreamEvents.mockClear();
+
+		await invokeAgent([{ role: "user", content: "Explain account vending" }], {
+			threadId: "thread-landing-zone",
+			agentName: "landing-zone-terraform",
+			metadata: { request_id: "request-landing-zone" },
+		});
+
+		const call = mockStreamEvents.mock.calls[0] as unknown as [Record<string, unknown>, Record<string, unknown>];
+		expect(call[0].requestId).toBe("request-landing-zone");
+		expect(call[0].messages).toBeDefined();
+		expect(call[0].targetDataSources).toBeUndefined();
+	});
 });
 
 describe("pruneThreadState", () => {
@@ -377,6 +400,15 @@ describe("pruneThreadState", () => {
 		mockGetState.mockClear();
 		await pruneThreadState("thread-toc", "incident-analyzer");
 		expect(mockSetEvidenceToc).toHaveBeenCalledWith("thread-toc", "TOC:1");
+	});
+
+	test("does not write incident-only datasource state when pruning Landing Zone messages", async () => {
+		mockUpdateState.mockClear();
+		mockGetState.mockClear();
+		await pruneThreadState("thread-landing-zone-prune", "landing-zone-terraform");
+		const call = mockUpdateState.mock.calls[0] as unknown as [unknown, Record<string, unknown>];
+		expect(call[1].messages).toBeDefined();
+		expect(call[1].dataSourceResults).toBeUndefined();
 	});
 
 	test("pruneThreadState is a no-op when under threshold", async () => {

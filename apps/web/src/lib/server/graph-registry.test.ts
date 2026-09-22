@@ -23,6 +23,7 @@ mock.module("@devops-agent/agent", () => ({
 mock.module("./agent.ts", () => ({
 	getGraph: () => Promise.resolve({}),
 	getIacGraph: () => Promise.resolve({}),
+	getLandingZoneGraph: () => Promise.resolve({}),
 	getPiFleetGraph: () => Promise.resolve({}),
 }));
 
@@ -34,7 +35,7 @@ describe("SIO-1657 listModeAgents", () => {
 		hubConfigured.value = true;
 		const { listModeAgents, listSelectableAgents } = await load();
 
-		expect(listModeAgents().map((a) => a.id)).toEqual(["incident-analyzer", "elastic-iac"]);
+		expect(listModeAgents().map((a) => a.id)).toEqual(["incident-analyzer", "elastic-iac", "landing-zone-terraform"]);
 		// Selectable is the wider set: the console is still switchable to.
 		expect(listSelectableAgents().map((a) => a.id)).toContain("pi-fleet-console");
 	});
@@ -83,6 +84,7 @@ describe("SIO-1657 listModeAgents", () => {
 		for (const a of listAgents()) expect(typeof a.hasTriageGraph).toBe("boolean");
 		for (const a of listModeAgents()) expect(a.hasTriageGraph).toBe(true);
 		expect(describeAgent("pi-fleet-console").hasTriageGraph).toBe(false);
+		expect(describeAgent("landing-zone-terraform")).toMatchObject({ surface: "mode", hasTriageGraph: true });
 	});
 
 	// Leaving the rotation must not break resolution: graphFor still has to

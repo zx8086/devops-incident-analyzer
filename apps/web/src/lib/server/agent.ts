@@ -5,6 +5,7 @@ import {
 	buildEvidenceToc,
 	buildGraph,
 	buildIacGraph,
+	buildLandingZoneGraph,
 	buildPiFleetGraph,
 	createMcpClient,
 	estatesFromState,
@@ -107,6 +108,7 @@ let mcpReady: Promise<void> | null = null;
 // incident-analyzer graph for backward compatibility.
 let graphPromise: ReturnType<typeof buildGraph> | null = null;
 let iacGraphPromise: ReturnType<typeof buildIacGraph> | null = null;
+let landingZoneGraphPromise: ReturnType<typeof buildLandingZoneGraph> | null = null;
 
 function resolveCheckpointerType(): "memory" | "sqlite" {
 	return (process.env.AGENT_CHECKPOINTER_TYPE as "memory" | "sqlite") ?? "memory";
@@ -254,6 +256,15 @@ export async function getIacGraph() {
 	return iacGraphPromise;
 }
 
+export async function getLandingZoneGraph() {
+	await ensureMcpConnected();
+
+	if (!landingZoneGraphPromise) {
+		landingZoneGraphPromise = buildLandingZoneGraph({ checkpointerType: resolveCheckpointerType() });
+	}
+	return landingZoneGraphPromise;
+}
+
 // SIO-1655: the in-process fleet console graph (Phase 2c). Its own compiled
 // graph and checkpointer, like the IaC graph. Built lazily so a deployment with
 // no pi-coms hub configured never pays for it (buildPiFleetGraph throws when the
@@ -364,6 +375,30 @@ export async function invokeAgent(
 		);
 	}
 
+	if (agentName === "landing-zone-terraform") {
+		const landingZoneGraph = await getLandingZoneGraph();
+		const landingZoneTimeoutMs = getGraphTimeoutMs(agentName);
+		return landingZoneGraph.streamEvents(
+			{ messages: langchainMessages, requestId },
+			{
+				configurable: {
+					thread_id: options.threadId,
+					...(options.runId && { run_id: options.runId }),
+					[GRAPH_DEADLINE_KEY]: Date.now() + landingZoneTimeoutMs,
+				},
+				version: "v2",
+				recursionLimit: getGraphRecursionLimit(agentName),
+				signal: AbortSignal.timeout(landingZoneTimeoutMs),
+				...(options.runName && { runName: options.runName }),
+				...(options.tags && { tags: options.tags }),
+				metadata: {
+					...complianceToMetadata(getAgentByName(agentName).manifest.compliance),
+					...options.metadata,
+				},
+			},
+		);
+	}
+
 	const graph = await getGraph();
 	const graphTimeoutMs = getGraphTimeoutMs();
 	return graph.streamEvents(
@@ -441,6 +476,13 @@ export async function resumeAgent(options: {
 		>[0];
 		return graph.streamEvents(resumeInput, config);
 	}
+	if (agentName === "landing-zone-terraform") {
+		const graph = await getLandingZoneGraph();
+		const resumeInput = new Command({ resume: options.resumeValue }) as unknown as Parameters<
+			typeof graph.streamEvents
+		>[0];
+		return graph.streamEvents(resumeInput, config);
+	}
 
 	const graph = await getGraph();
 	const resumeInput = new Command({ resume: options.resumeValue }) as unknown as Parameters<
@@ -492,7 +534,7 @@ export async function pruneThreadState(threadId: string, agentName: string = DEF
 		const { RemoveMessage } = await import("@langchain/core/messages");
 		await graph.updateState(config, {
 			messages: liveIds.map((id) => new RemoveMessage({ id })),
-			dataSourceResults: [],
+			...(describeAgent(agentName).hasDataSources && { dataSourceResults: [] }),
 		});
 		pruneLog.info({ threadId, removed: liveIds.length }, "pruned thread state");
 	} catch (error) {

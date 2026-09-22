@@ -1,0 +1,70 @@
+spec_version: "0.1.0"
+name: pvh-landing-zone-terraform-agent
+version: 0.1.0
+description: >
+  Read-only PVH AWS Landing Zone Terraform learning, evidence, and review assistant.
+
+repository:
+  url: https://gitlab.com/pvhcorp/dhco/aws/aws-landing-zone
+  default_branch: main
+
+tools:
+  - id: landing-zone
+
+knowledge:
+  - knowledge/pvh/conventions/
+  - knowledge/pvh/repos/
+  - knowledge/pvh/modules/
+  - knowledge/pvh/shared/
+  - knowledge/okr/current-objectives/
+  - knowledge/okr/unresolved-gaps/
+  - knowledge/standards/aws/
+  - knowledge/standards/terraform/
+  - knowledge/runbooks/
+
+compliance:
+  risk_tier: medium
+  supervision:
+    human_in_the_loop: always
+    kill_switch: true
+  recordkeeping:
+    audit_logging: true
+    log_format: structured_json
+    retention_period: 1y
+    log_contents:
+      - prompts_and_responses
+      - tool_calls
+      - decision_pathways
+      - model_version
+      - timestamps
+    immutable: true
+  data_governance:
+    pii_handling: redact
+    data_classification: Internal
+  segregation_of_duties:
+    roles:
+      - id: planner
+        description: Collects evidence and proposes a dependency-ordered change plan
+        permissions: [read, plan]
+      - id: maker
+        description: Creates a reviewed branch and merge request in a later write-enabled phase
+        permissions: [write_branch, open_mr]
+      - id: checker
+        description: Reviews plans and merge requests independently
+        permissions: [review, approve, reject]
+      - id: executor
+        description: Triggers approved delivery pipelines and applies
+        permissions: [trigger_pipeline, apply]
+    conflicts:
+      - [maker, checker]
+      - [maker, executor]
+    assignments:
+      pvh-landing-zone-terraform-agent: [planner]
+      human-reviewer: [checker, executor]
+    enforcement: strict
+
+tags:
+  - pvh
+  - aws-landing-zone
+  - terraform
+  - read-only

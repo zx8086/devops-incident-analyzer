@@ -1,0 +1,44 @@
+name: pvh-landing-zone-terraform-knowledge
+description: Curated PVH Landing Zone Terraform concepts, standards catalogs, and read-only workflow runbooks
+version: 0.1.0
+
+categories:
+  conventions:
+    path: pvh/conventions/
+    description: Evidence validation, OKF authoring, and local validation conventions
+  repos:
+    path: pvh/repos/
+    description: One routed concept for each of the 23 Landing Zone and platform repositories
+  modules:
+    path: pvh/modules/
+    description: Child-module ownership, interfaces, traps, plan shapes, and stop conditions
+  shared:
+    path: pvh/shared/
+    description: Shared module contracts and estate-wide consumption guidance
+  okr-objectives:
+    path: okr/current-objectives/
+    description: Current governance and domain objectives retained as planning evidence
+  okr-gaps:
+    path: okr/unresolved-gaps/
+    description: Explicitly unresolved Landing Zone coverage and decision gaps
+  aws-standards:
+    path: standards/aws/
+    description: Primary AWS documentation sources and the rules for reconciling them with PVH contracts
+  terraform-standards:
+    path: standards/terraform/
+    description: Primary Terraform and AWS provider sources used for contract validation
+  runbooks:
+    path: runbooks/
+    description: Read-only evidence workflows for common Landing Zone questions and reviews
+
+knowledge_selection:
+  by_intent:
+    learn: [repos, conventions, shared, aws-standards, terraform-standards]
+    account: [repos, conventions, modules, shared, runbooks, okr-objectives]
+    network: [repos, conventions, modules, shared, runbooks, aws-standards]
+    dns: [repos, conventions, modules, shared, runbooks, aws-standards]
+    gitlab-project: [repos, conventions, modules, shared, runbooks]
+    runner: [repos, conventions, modules, shared, runbooks]
+    plan-review: [repos, conventions, modules, shared, runbooks, terraform-standards]
+    unresolved: [repos, conventions, shared, okr-gaps]
+  floor: [conventions, repos, shared]
