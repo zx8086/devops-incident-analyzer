@@ -2,7 +2,14 @@
 
 import { describe, expect, test } from "bun:test";
 import type { EvidenceItem, EvidenceSource } from "@devops-agent/shared";
-import { collectEvidenceInParallel, type LandingZoneEvidenceCollectors } from "./evidence.ts";
+import {
+	collectEvidenceInParallel,
+	collectEvidenceSource,
+	collectGitLabEvidence,
+	collectKnowledgeGraphEvidence,
+	type EvidenceCollectionContext,
+	type LandingZoneEvidenceCollectors,
+} from "./evidence.ts";
 
 function item(source: EvidenceSource): EvidenceItem {
 	return {
@@ -33,19 +40,18 @@ function collectors(calls: EvidenceSource[]): LandingZoneEvidenceCollectors {
 }
 
 describe("parallel Landing Zone evidence collection", () => {
+	const context: EvidenceCollectionContext = {
+		intent: "review",
+		query: "review account vending",
+		repositories: ["aws-lz-account-creator"],
+		selectedKnowledge: ["repos/aws-lz-account-creator.md"],
+		awsLiveStateRelevant: false,
+		awsLiveStateAuthorized: false,
+	};
+
 	test("keeps successful sources when an optional collector fails", async () => {
 		const calls: EvidenceSource[] = [];
-		const results = await collectEvidenceInParallel(
-			{
-				intent: "review",
-				query: "review account vending",
-				repositories: ["aws-lz-account-creator"],
-				selectedKnowledge: ["repos/aws-lz-account-creator.md"],
-				awsLiveStateRelevant: false,
-				awsLiveStateAuthorized: false,
-			},
-			collectors(calls),
-		);
+		const results = await collectEvidenceInParallel(context, collectors(calls));
 
 		expect(calls).toContainAllValues(["pvh-okf", "gitlab", "terraform-docs", "aws-docs", "memory", "knowledge-graph"]);
 		expect(calls).not.toContain("aws-api");
@@ -67,5 +73,43 @@ describe("parallel Landing Zone evidence collection", () => {
 			collectors(calls),
 		);
 		expect(calls).toContain("aws-api");
+	});
+
+	test("times out a stuck optional collector into an unavailable result", async () => {
+		const stuck = collectors([]);
+		stuck.memory = () => new Promise<EvidenceItem[]>(() => {});
+		const result = await collectEvidenceSource("memory", context, stuck, 5);
+		expect(result.status).toBe("unavailable");
+		expect(result.reason).toContain("timed out");
+	});
+
+	test("preserves successful GitLab repositories when a sibling read fails", async () => {
+		const result = await collectGitLabEvidence(
+			{ ...context, repositories: ["aws-lz-account-creator", "aws-lz-network-workloads"] },
+			async (_name, input) => {
+				if (input.repository === "aws-lz-network-workloads") throw new Error("not found");
+				return { examples: ["accounts/example.yml"] };
+			},
+		);
+		expect(result.find((entry) => entry.id === "gitlab:aws-lz-account-creator")?.status).toBe("observed");
+		expect(result.find((entry) => entry.id === "gitlab:aws-lz-network-workloads:unavailable")?.status).toBe(
+			"unverified",
+		);
+	});
+
+	test("queries the knowledge graph before producing observed evidence", async () => {
+		const calls: Record<string, unknown>[] = [];
+		const result = await collectKnowledgeGraphEvidence(context, [
+			{
+				name: "kg_run_cypher",
+				invoke: async (input) => {
+					calls.push(input);
+					return { rows: [] };
+				},
+			},
+		]);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.cypher).toContain("MATCH (n)");
+		expect(result[0]?.status).toBe("observed");
 	});
 });

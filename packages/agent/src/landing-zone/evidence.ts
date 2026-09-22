@@ -28,6 +28,13 @@ export interface EvidenceCollectionContext {
 export type EvidenceCollector = (context: EvidenceCollectionContext) => Promise<EvidenceItem[]>;
 export type LandingZoneEvidenceCollectors = Record<EvidenceSource, EvidenceCollector>;
 
+const COLLECTOR_TIMEOUT_MS = 5_000;
+
+interface EvidenceTool {
+	name: string;
+	invoke(input: Record<string, unknown>): Promise<unknown>;
+}
+
 function textFromMessages(messages: BaseMessage[]): string {
 	const content = messages.at(-1)?.content;
 	if (typeof content === "string") return content;
@@ -61,17 +68,71 @@ async function invokeTool(name: string, input: Record<string, unknown>): Promise
 	return tool.invoke(input);
 }
 
+function unavailableGitLabEvidence(repository: string, reason: string): EvidenceItem {
+	return {
+		...evidence("gitlab", `gitlab:${repository}:unavailable`, `Repository evidence unavailable: ${reason}`, {
+			repository,
+			path: ".",
+		}),
+		status: "unverified",
+		freshness: { status: "unknown" },
+	};
+}
+
+export async function collectGitLabEvidence(
+	context: EvidenceCollectionContext,
+	invoke: (name: string, input: Record<string, unknown>) => Promise<unknown> = invokeTool,
+): Promise<EvidenceItem[]> {
+	if (context.repositories.length === 0) throw new Error("no repository scope was resolved");
+	const results = await Promise.allSettled(
+		context.repositories.map(async (repository) => {
+			const result = await invoke("lz_find_representative_examples", { repository, limit: 5 });
+			return evidence("gitlab", `gitlab:${repository}`, JSON.stringify(result), { repository, path: "." });
+		}),
+	);
+	const items = results.flatMap((result, index) => {
+		if (result.status === "fulfilled") return [result.value];
+		const repository = context.repositories[index];
+		if (!repository) return [];
+		return [
+			unavailableGitLabEvidence(repository, result.reason instanceof Error ? result.reason.message : "read failed"),
+		];
+	});
+	if (!items.some((item) => item.status === "observed")) throw new Error("all repository evidence reads failed");
+	return items;
+}
+
+export async function collectKnowledgeGraphEvidence(
+	context: EvidenceCollectionContext,
+	tools: EvidenceTool[] = getToolsForDataSource("knowledge-graph"),
+): Promise<EvidenceItem[]> {
+	const tool = tools.find((candidate) => candidate.name === "kg_run_cypher");
+	if (!tool) throw new Error("knowledge graph query tool is not connected");
+	const result = await tool.invoke({
+		cypher:
+			"MATCH (n) WHERE n:Vpc OR n:Subnet OR n:DnsRecord OR n:ConfigChange RETURN labels(n) AS labels, coalesce(n.id, n.name, n.accountId, '') AS identifier LIMIT 25",
+		params: {},
+	});
+	return [
+		evidence("knowledge-graph", "knowledge-graph:landing-zone", JSON.stringify(result), {
+			graphEntityId: (context.repositories.join(",") || "landing-zone").slice(0, 512),
+		}),
+	];
+}
+
+function withCollectorTimeout<T>(promise: Promise<T>, source: EvidenceSource, timeoutMs: number): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<T>((_resolve, reject) => {
+		timer = setTimeout(() => reject(new Error(`${source} collector timed out after ${timeoutMs}ms`)), timeoutMs);
+		timer.unref?.();
+	});
+	return Promise.race([promise, timeout]).finally(() => {
+		if (timer) clearTimeout(timer);
+	});
+}
+
 export const DEFAULT_LANDING_ZONE_COLLECTORS: LandingZoneEvidenceCollectors = {
-	gitlab: async (context) => {
-		const items = await Promise.all(
-			context.repositories.map(async (repository) => {
-				const result = await invokeTool("lz_find_representative_examples", { repository, limit: 5 });
-				return evidence("gitlab", `gitlab:${repository}`, JSON.stringify(result), { repository, path: "." });
-			}),
-		);
-		if (items.length === 0) throw new Error("no repository scope was resolved");
-		return items;
-	},
+	gitlab: collectGitLabEvidence,
 	"pvh-okf": async (context) => {
 		const selected = new Set(context.selectedKnowledge);
 		const entries = getAgentByName("landing-zone-terraform").knowledge.filter((entry) =>
@@ -100,15 +161,7 @@ export const DEFAULT_LANDING_ZONE_COLLECTORS: LandingZoneEvidenceCollectors = {
 			}),
 		);
 	},
-	"knowledge-graph": async () => {
-		const tool = getToolsForDataSource("knowledge-graph").find((candidate) => candidate.name.startsWith("kg_"));
-		if (!tool) throw new Error("knowledge graph query tools are not connected");
-		return [
-			evidence("knowledge-graph", "knowledge-graph:available", "Knowledge graph query surface is available.", {
-				graphEntityId: "landing-zone",
-			}),
-		];
-	},
+	"knowledge-graph": collectKnowledgeGraphEvidence,
 };
 
 export function evidenceContext(
@@ -135,12 +188,17 @@ export async function collectEvidenceSource(
 	source: EvidenceSource,
 	context: EvidenceCollectionContext,
 	collectors: LandingZoneEvidenceCollectors = DEFAULT_LANDING_ZONE_COLLECTORS,
+	timeoutMs = COLLECTOR_TIMEOUT_MS,
 ): Promise<EvidenceCollectionOutcome> {
 	if (source === "aws-api" && (!context.awsLiveStateRelevant || !context.awsLiveStateAuthorized)) {
 		return { source, status: "skipped", evidence: [], reason: "AWS live state was not both relevant and authorised." };
 	}
 	try {
-		return { source, status: "collected", evidence: await collectors[source](context) };
+		return {
+			source,
+			status: "collected",
+			evidence: await withCollectorTimeout(collectors[source](context), source, timeoutMs),
+		};
 	} catch (error) {
 		return {
 			source,

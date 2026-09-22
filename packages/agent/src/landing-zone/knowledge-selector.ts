@@ -65,12 +65,12 @@ export function selectLandingZoneKnowledge(
 	const entries = new Set(BASE_KNOWLEDGE);
 	for (const name of repositories) {
 		if (KNOWN_REPOSITORIES.has(name)) entries.add(`repos/${name}.md`);
-		else entries.add("unresolved-gaps/08-uncovered-domains.md");
+		else entries.add("okr-gaps/08-uncovered-domains.md");
 	}
 	if (/\b(module|modules|provider|terraform contract)\b/.test(topicText)) entries.add("shared/unpinned-refs.md");
-	if (/\b(aws|iam|vpc|subnet|route|dns|kms|s3)\b/.test(topicText)) entries.add("aws/source-catalog.md");
+	if (/\b(aws|iam|vpc|subnet|route|dns|kms|s3)\b/.test(topicText)) entries.add("aws-standards/source-catalog.md");
 	if (/\b(terraform|module|provider|backend|state|plan|lock|locking|workspace)\b/.test(topicText)) {
-		entries.add("terraform/source-catalog.md");
+		entries.add("terraform-standards/source-catalog.md");
 	}
 
 	return { repositories: [...repositories], entries: [...entries] };
