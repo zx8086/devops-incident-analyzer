@@ -5,19 +5,22 @@ version: 0.1.0
 categories:
   runbooks-general:
     path: general/runbooks/
-    description: Cross-datasource and datasource-agnostic runbooks (code-change correlation, MCP tool audit)
+    description: Cross-datasource and datasource-agnostic runbooks (code-change correlation, MCP tool audit, reference-data gaps, document processing, entity not-found, external integrations)
   runbooks-aws:
     path: aws/runbooks/
-    description: AWS operational runbooks (CloudWatch, ECS, IAM, MSK)
+    description: AWS operational runbooks (CloudWatch, ECS, IAM, MSK, infrastructure degradation)
   runbooks-kafka:
     path: kafka/runbooks/
-    description: Kafka operational runbooks (consumer lag)
+    description: Kafka operational runbooks (consumer lag, consumer exceptions and DLQ backlog)
   runbooks-couchbase:
     path: couchbase/runbooks/
-    description: Couchbase operational runbooks (slow queries)
+    description: Couchbase operational runbooks (slow queries, connectivity timeouts, index degradation)
   runbooks-elastic:
     path: elastic/runbooks/
-    description: Elastic operational runbooks (high error rate)
+    description: Elastic operational runbooks (high error rate, throughput and log-volume surges)
+  runbooks-konnect:
+    path: konnect/runbooks/
+    description: Kong Konnect operational runbooks (gateway 5xx and upstream timeouts)
   systems-map:
     path: general/systems-map/
     description: Service dependency maps and topology
