@@ -1,0 +1,7 @@
+# Historical Landing Zone GitLab import needs an owner-approved initial checkpoint.
+# Keep the recurring reconciliation disabled until that controlled backfill is complete.
+id: lz-gitlab-import-sweep
+mode: repeat
+cron: "20 * * * *"
+enabled: false
+workflow: gitlab-import-sweep

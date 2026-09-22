@@ -4,7 +4,15 @@ import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/
 import { z } from "zod";
 import pkg from "../package.json" with { type: "json" };
 import type { Config } from "./config.ts";
-import { findRepresentativeExamples, listOpenChanges, readPipelinePlan } from "./tools/evidence.ts";
+import {
+	findRepresentativeExamples,
+	listHistoricalMergeRequests,
+	listMergeRequestPipelines,
+	listOpenChanges,
+	listProjectDeployments,
+	readMergeRequest,
+	readPipelinePlan,
+} from "./tools/evidence.ts";
 import {
 	createGitLabReadClient,
 	type GitLabReadClient,
@@ -79,6 +87,69 @@ function registerAll(server: McpServer, client: GitLabReadClient): void {
 			annotations: READ_ONLY_ANNOTATIONS,
 		},
 		async (args) => listOpenChanges(client, args).then(textResult).catch(errorResult),
+	);
+
+	server.registerTool(
+		"lz_list_historical_merge_requests",
+		{
+			description:
+				"List one bounded, resumable page of historical Landing Zone review records after an explicit timestamp.",
+			inputSchema: {
+				repository: RepositoryParam,
+				updatedAfter: z.string().datetime().describe("Explicit UTC checkpoint or backfill start timestamp"),
+				updatedBefore: z.string().datetime().optional().describe("Fixed UTC upper bound for a resumable import window"),
+				page: z.number().int().positive().optional().describe("GitLab page number; defaults to 1"),
+				perPage: z.number().int().min(1).max(100).optional().describe("Bounded page size; defaults to 20"),
+			},
+			annotations: READ_ONLY_ANNOTATIONS,
+		},
+		async (args) => listHistoricalMergeRequests(client, args).then(textResult).catch(errorResult),
+	);
+
+	server.registerTool(
+		"lz_read_merge_request",
+		{
+			description: "Read bounded current metadata for one approved Landing Zone review record.",
+			inputSchema: {
+				repository: RepositoryParam,
+				iid: z.number().int().positive().describe("GitLab merge request IID"),
+			},
+			annotations: READ_ONLY_ANNOTATIONS,
+		},
+		async (args) => readMergeRequest(client, args).then(textResult).catch(errorResult),
+	);
+
+	server.registerTool(
+		"lz_list_merge_request_pipelines",
+		{
+			description:
+				"List bounded CI pipeline and Terraform plan-job metadata for one review record without plan content.",
+			inputSchema: {
+				repository: RepositoryParam,
+				iid: z.number().int().positive().describe("GitLab merge request IID"),
+			},
+			annotations: READ_ONLY_ANNOTATIONS,
+		},
+		async (args) => listMergeRequestPipelines(client, args).then(textResult).catch(errorResult),
+	);
+
+	server.registerTool(
+		"lz_list_project_deployments",
+		{
+			description: "List bounded successful deployment metadata for one exact SHA without environment payloads.",
+			inputSchema: {
+				repository: RepositoryParam,
+				commitSha: z.string().min(1).max(128).describe("Exact merge commit SHA to correlate"),
+				page: z.number().int().positive().optional().describe("Resumable GitLab deployment page"),
+				updatedBefore: z
+					.string()
+					.datetime()
+					.optional()
+					.describe("Fixed deployment snapshot boundary reused across resumed pages"),
+			},
+			annotations: READ_ONLY_ANNOTATIONS,
+		},
+		async (args) => listProjectDeployments(client, args).then(textResult).catch(errorResult),
 	);
 
 	server.registerTool(

@@ -8,7 +8,7 @@ import type { GitLabReadClient } from "./tools/repositories.ts";
 const forbiddenSurface = /\b(create|update|delete|commit|branch|merge|apply|import|state|unlock|mutat(?:e|ion))\b/i;
 
 describe("Landing Zone MCP server", () => {
-	test("exposes only the six approved read tools", async () => {
+	test("exposes only the ten approved read tools", async () => {
 		const config = {
 			transport: { mode: "http", port: 0, host: "127.0.0.1", path: "/mcp" },
 			gitlab: { baseUrl: "https://gitlab.example", token: undefined, timeoutMs: 30_000, maxResponseBytes: 200_000 },
@@ -25,8 +25,12 @@ describe("Landing Zone MCP server", () => {
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
 			"lz_extract_terraform_topology",
 			"lz_find_representative_examples",
+			"lz_list_historical_merge_requests",
+			"lz_list_merge_request_pipelines",
 			"lz_list_open_changes",
+			"lz_list_project_deployments",
 			"lz_list_repositories",
+			"lz_read_merge_request",
 			"lz_read_pipeline_plan",
 			"lz_read_repository_files",
 		]);

@@ -9,6 +9,7 @@ import {
 	blastRadiusForServices,
 	buildGraphContext,
 	buildIacGraphContext,
+	ConfigChangeNodeSchema,
 	changeHistoryForStackInstance,
 	deploymentsRunningStack,
 	EMBEDDING_DIM,
@@ -54,6 +55,7 @@ import {
 	upsertEntities,
 	validTopologyEdges,
 } from "./index.ts";
+import { IncidentNodeSchema } from "./schema.ts";
 import { DEPLOYMENT_INVENTORY, parseModuleSources } from "./seed-iac.ts";
 
 function requiredLandingZoneApi<T>(name: string): T {
@@ -158,8 +160,30 @@ describe("schema", () => {
 
 	test("ALTER_MIGRATIONS add the outcome + EC columns for pre-existing graphs", () => {
 		expect(ALTER_MIGRATIONS.some((m) => m.includes("ConfigChange ADD outcome"))).toBe(true);
+		expect(ALTER_MIGRATIONS.some((m) => m.includes("ConfigChange ADD outcomeOrderKey"))).toBe(true);
 		expect(ALTER_MIGRATIONS.some((m) => m.includes("ElasticDeployment ADD ecId"))).toBe(true);
 		expect(ALTER_MIGRATIONS.some((m) => m.includes("ElasticDeployment ADD region"))).toBe(true);
+	});
+
+	test("ConfigChange, not Incident, owns commit and outcome-evidence metadata", () => {
+		expect(IncidentNodeSchema.safeParse({ id: "incident-1", commitSha: "abc123" }).success).toBeFalse();
+		expect(
+			ConfigChangeNodeSchema.safeParse({
+				id: "change-1",
+				commitSha: "abc123",
+				outcomeObservedAt: "2026-09-22T15:00:00.000Z",
+				outcomeRetrievedAt: "2026-09-22T15:01:00.000Z",
+				outcomeEvidenceSource: "gitlab-deployment",
+				outcomeEvidenceSha: "abc123",
+				outcomeEvidencePipelineId: "9001",
+				outcomeEvidenceTruncated: false,
+			}).success,
+		).toBeTrue();
+		const ddl = MIGRATIONS.find((migration) => migration.includes("NODE TABLE IF NOT EXISTS ConfigChange("));
+		expect(ddl).toContain("outcomeObservedAt STRING");
+		expect(
+			ALTER_MIGRATIONS.some((migration) => migration.includes("ConfigChange ADD outcomeEvidenceSource")),
+		).toBeTrue();
 	});
 
 	// SIO-1104 (5a): topology lifecycle columns -- fresh graphs via CREATE, existing
@@ -285,6 +309,18 @@ describe("Landing Zone graph writers", () => {
 			threadId: "thread-42",
 			summary: "Add example account",
 			createdAt: "2026-09-22T15:00:00.000Z",
+			lastSyncedAt: "2026-09-22T15:01:00.000Z",
+			source: "gitlab-deployment",
+			commitSha: "merge-sha",
+			outcome: "applied",
+			outcomeEvidence: {
+				source: "gitlab-deployment",
+				observedAt: "2026-09-22T15:00:30.000Z",
+				retrievedAt: "2026-09-22T15:01:00.000Z",
+				commitSha: "merge-sha",
+				pipelineId: "9001",
+				truncated: false,
+			},
 			mergeRequest: {
 				id: "101:42",
 				projectId: "101",
@@ -301,8 +337,32 @@ describe("Landing Zone graph writers", () => {
 		const changeWrite = store.calls.find((call) => call.cypher.includes("MERGE (c:ConfigChange"));
 		expect(changeWrite?.cypher).toContain("c.createdAt = coalesce(c.createdAt, $createdAt)");
 		expect(changeWrite?.cypher).toContain("c.outcome = CASE");
-		expect(changeWrite?.cypher).toContain("WHEN c.outcome = 'applied' THEN c.outcome");
-		expect(changeWrite?.cypher).toContain("WHEN $outcome = 'proposed'");
+		expect(changeWrite?.cypher).toContain("$outcomeObservedAt > c.outcomeObservedAt");
+		expect(changeWrite?.cypher).toContain("$outcomeRetrievedAt > c.outcomeRetrievedAt");
+		expect(changeWrite?.cypher).toContain("$outcomeOrderKey >= c.outcomeOrderKey");
+		expect(changeWrite?.cypher).toContain("c.outcomeOrderKey = CASE");
+		expect(changeWrite?.params?.source).toBe("gitlab-deployment");
+		expect(changeWrite?.params?.lastSyncedAt).toBe("2026-09-22T15:01:00.000Z");
+		expect(changeWrite?.params).toMatchObject({
+			commitSha: "merge-sha",
+			outcomeObservedAt: "2026-09-22T15:00:30.000Z",
+			outcomeRetrievedAt: "2026-09-22T15:01:00.000Z",
+			outcomeEvidenceSource: "gitlab-deployment",
+			outcomeEvidenceSha: "merge-sha",
+			outcomeEvidencePipelineId: "9001",
+			outcomeEvidenceTruncated: false,
+			outcomeOrderKey:
+				'[4,"applied","gitlab-deployment","merge-sha","9001","merge-sha","gitlab-deployment","2026-09-22T15:01:00.000Z",null,false]',
+		});
+	});
+
+	test("recordLandingZoneGitLabImportCheckpoint fails closed when its repository does not exist", async () => {
+		const write = requiredLandingZoneApi<
+			(store: InMemoryGraphStore, projectId: string, checkpoint: Record<string, unknown>) => Promise<void>
+		>("recordLandingZoneGitLabImportCheckpoint");
+		await expect(
+			write(new InMemoryGraphStore(), "missing", { updatedAfter: "2026-09-22T00:00:00.000Z" }),
+		).rejects.toThrow("repository does not exist");
 	});
 
 	test("recordTerraformPlan and recordGovernanceBinding attach outcomes and standards with stable identities", async () => {
@@ -351,6 +411,12 @@ describe("Landing Zone graph readers", () => {
 				summary: "Add account",
 				outcome: "applied",
 				createdAt: "2026-09-22T15:00:00.000Z",
+				outcomeObservedAt: "2026-09-22T15:10:00.000Z",
+				outcomeRetrievedAt: "2026-09-22T15:11:00.000Z",
+				outcomeEvidenceSource: "gitlab-deployment",
+				outcomeEvidenceSha: "merge-sha",
+				outcomeEvidencePipelineId: "9001",
+				outcomeEvidenceTruncated: false,
 			},
 		]);
 		store.stub("PROPOSED_IN", [
@@ -370,6 +436,12 @@ describe("Landing Zone graph readers", () => {
 				summary: "Add account",
 				outcome: "applied",
 				createdAt: "2026-09-22T15:00:00.000Z",
+				outcomeObservedAt: "2026-09-22T15:10:00.000Z",
+				outcomeRetrievedAt: "2026-09-22T15:11:00.000Z",
+				outcomeEvidenceSource: "gitlab-deployment",
+				outcomeEvidenceSha: "merge-sha",
+				outcomeEvidencePipelineId: "9001",
+				outcomeEvidenceTruncated: false,
 				mrUrl: "https://gitlab.com/example/-/merge_requests/42",
 				pipelineId: "9001",
 				pipelineStatus: "success",
@@ -451,6 +523,12 @@ describe("Landing Zone graph readers", () => {
 			{
 				changeId: "change-42",
 				outcome: "applied",
+				outcomeObservedAt: "2026-09-22T15:10:00.000Z",
+				outcomeRetrievedAt: "2026-09-22T15:11:00.000Z",
+				outcomeEvidenceSource: "gitlab-deployment",
+				outcomeEvidenceSha: "merge-sha",
+				outcomeEvidencePipelineId: "9001",
+				outcomeEvidenceTruncated: false,
 				mrUrl: "https://gitlab.com/example/-/merge_requests/42",
 				pipelineId: "9001",
 				pipelineStatus: "success",
@@ -463,6 +541,12 @@ describe("Landing Zone graph readers", () => {
 		expect(await read(store, "https://gitlab.com/example/-/merge_requests/42")).toEqual({
 			changeId: "change-42",
 			outcome: "applied",
+			outcomeObservedAt: "2026-09-22T15:10:00.000Z",
+			outcomeRetrievedAt: "2026-09-22T15:11:00.000Z",
+			outcomeEvidenceSource: "gitlab-deployment",
+			outcomeEvidenceSha: "merge-sha",
+			outcomeEvidencePipelineId: "9001",
+			outcomeEvidenceTruncated: false,
 			mrUrl: "https://gitlab.com/example/-/merge_requests/42",
 			pipelineId: "9001",
 			pipelineStatus: "success",

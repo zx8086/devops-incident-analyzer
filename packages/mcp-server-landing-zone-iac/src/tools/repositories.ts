@@ -173,6 +173,7 @@ export function resolveRepository(alias: string): LandingZoneRepository {
 
 export interface GitLabProject {
 	id: number;
+	path: string;
 	defaultBranch: string;
 	headSha: string;
 	lastActivityAt: string;
@@ -208,14 +209,68 @@ export interface GitLabPipelineJob {
 	webUrl: string;
 }
 
+export interface GitLabHistoricalMergeRequest {
+	iid: number;
+	title: string;
+	state: "opened" | "closed" | "locked" | "merged";
+	webUrl: string;
+	createdAt: string;
+	updatedAt: string;
+	mergeCommitSha?: string;
+	commitSha: string;
+}
+
+export interface GitLabHistoricalPipeline {
+	id: number;
+	status: string;
+	webUrl: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface GitLabDeployment {
+	sha: string;
+	status: string;
+	updatedAt: string;
+	pipelineId?: number;
+}
+
 export interface GitLabReadClient {
 	project(projectPath: string): Promise<GitLabProject>;
 	tree(projectPath: string, ref?: string, recursive?: boolean, path?: string): Promise<GitLabTreeResult>;
 	readFile(projectPath: string, path: string, ref?: string): Promise<GitLabFile>;
 	openChanges(projectPath: string): Promise<GitLabOpenChange[]>;
 	changePaths(projectPath: string, iid: number): Promise<string[]>;
-	pipelineJobs(projectPath: string, pipelineId: number): Promise<GitLabPipelineJob[]>;
+	pipelineJobs(
+		projectPath: string,
+		pipelineId: number,
+		page: number,
+		perPage: number,
+	): Promise<{ jobs: GitLabPipelineJob[]; nextPage?: number }>;
 	jobTrace(projectPath: string, jobId: number): Promise<string>;
+	historicalMergeRequests(
+		projectPath: string,
+		updatedAfter: string,
+		updatedBefore: string | undefined,
+		page: number,
+		perPage: number,
+	): Promise<{ mergeRequests: GitLabHistoricalMergeRequest[]; total?: number; nextPage?: number }>;
+	mergeRequest(projectPath: string, iid: number): Promise<GitLabHistoricalMergeRequest>;
+	mergeRequestPipelines(
+		projectPath: string,
+		iid: number,
+		page: number,
+		perPage: number,
+	): Promise<{ pipelines: GitLabHistoricalPipeline[]; nextPage?: number }>;
+	projectDeployments?(
+		projectPath: string,
+		page: number,
+		perPage: number,
+		updatedBefore?: string,
+	): Promise<{
+		deployments: GitLabDeployment[];
+		nextPage?: number;
+	}>;
 }
 
 export interface Provenance {
@@ -232,6 +287,7 @@ export interface Provenance {
 
 const GitLabProjectResponseSchema = z.object({
 	id: z.number().int(),
+	path_with_namespace: z.string(),
 	default_branch: z.string().nullable(),
 	last_activity_at: z.string(),
 });
@@ -248,7 +304,42 @@ const GitLabOpenChangesResponseSchema = z.array(
 );
 const GitLabChangeResponseSchema = z.object({ changes: z.array(z.object({ new_path: z.string() })) });
 const GitLabJobsResponseSchema = z.array(
-	z.object({ id: z.number(), name: z.string(), status: z.string(), web_url: z.string() }),
+	z.object({
+		id: z.number(),
+		name: z.string(),
+		status: z.string(),
+		web_url: z.string(),
+	}),
+);
+const GitLabHistoricalMergeRequestsResponseSchema = z.array(
+	z.object({
+		iid: z.number().int(),
+		title: z.string(),
+		state: z.enum(["opened", "closed", "locked", "merged"]),
+		web_url: z.string(),
+		created_at: z.string(),
+		updated_at: z.string(),
+		merge_commit_sha: z.string().nullable(),
+		sha: z.string(),
+	}),
+);
+const GitLabHistoricalMergeRequestResponseSchema = GitLabHistoricalMergeRequestsResponseSchema.element;
+const GitLabHistoricalPipelinesResponseSchema = z.array(
+	z.object({
+		id: z.number().int(),
+		status: z.string(),
+		web_url: z.string(),
+		created_at: z.string(),
+		updated_at: z.string(),
+	}),
+);
+const GitLabDeploymentsResponseSchema = z.array(
+	z.object({
+		sha: z.string(),
+		status: z.string(),
+		updated_at: z.string(),
+		deployable: z.object({ pipeline: z.object({ id: z.number().int() }).optional() }).optional(),
+	}),
 );
 
 interface GitLabClientOptions {
@@ -263,12 +354,17 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const apiRoot = `${options.baseUrl.replace(/\/$/, "")}/api/v4`;
 
-	async function request(path: string): Promise<string> {
+	async function responseFor(path: string): Promise<Response> {
 		const response = await fetchImpl(`${apiRoot}${path}`, {
 			headers: options.token ? { "PRIVATE-TOKEN": options.token } : undefined,
 			signal: AbortSignal.timeout(options.timeoutMs),
 		});
 		if (!response.ok) throw new Error(`GitLab read failed with HTTP ${response.status}`);
+		return response;
+	}
+
+	async function request(path: string): Promise<string> {
+		const response = await responseFor(path);
 		const text = await response.text();
 		if (Buffer.byteLength(text, "utf8") > options.maxResponseBytes) {
 			throw new Error(`GitLab response exceeded ${options.maxResponseBytes} bytes`);
@@ -280,8 +376,215 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 		return JSON.parse(await request(path)) as unknown;
 	}
 
+	async function responseJson(response: Response): Promise<unknown> {
+		const text = await response.text();
+		if (Buffer.byteLength(text, "utf8") > options.maxResponseBytes) {
+			throw new Error(`GitLab response exceeded ${options.maxResponseBytes} bytes`);
+		}
+		return JSON.parse(text) as unknown;
+	}
+
 	function projectApiPath(projectPath: string): string {
 		return `/projects/${encodeURIComponent(projectPath)}`;
+	}
+
+	function parseDecimalHeader(headers: Headers, name: string, minimum: number): number | undefined {
+		const raw = headers.get(name);
+		if (raw === null) return undefined;
+		if (!/^\d+$/.test(raw)) throw new Error(`GitLab response omitted a valid ${name} header`);
+		const value = Number(raw);
+		if (!Number.isSafeInteger(value) || value < minimum)
+			throw new Error(`GitLab response omitted a valid ${name} header`);
+		return value;
+	}
+
+	function validatePageHeaders(headers: Headers, page: number, perPage: number): void {
+		const responsePage = parseDecimalHeader(headers, "X-Page", 1);
+		if (responsePage !== undefined && responsePage !== page)
+			throw new Error(`GitLab X-Page ${responsePage} did not match requested page ${page}`);
+		const responsePerPage = parseDecimalHeader(headers, "X-Per-Page", 1);
+		if (responsePerPage !== undefined && responsePerPage !== perPage)
+			throw new Error(`GitLab X-Per-Page ${responsePerPage} did not match requested page size ${perPage}`);
+	}
+
+	function linkParts(value: string): string[] {
+		const parts: string[] = [];
+		let start = 0;
+		let quoted = false;
+		let escaped = false;
+		let angleOpen = false;
+		for (let index = 0; index < value.length; index++) {
+			const character = value[index];
+			if (quoted) {
+				if (escaped) escaped = false;
+				else if (character === "\\") escaped = true;
+				else if (character === '"') quoted = false;
+				continue;
+			}
+			if (character === '"') quoted = true;
+			else if (character === "<") {
+				if (angleOpen) throw new Error("GitLab response contained a malformed Link header");
+				angleOpen = true;
+			} else if (character === ">") {
+				if (!angleOpen) throw new Error("GitLab response contained a malformed Link header");
+				angleOpen = false;
+			} else if (character === "," && !angleOpen) {
+				const part = value.slice(start, index).trim();
+				if (!part) throw new Error("GitLab response contained a malformed Link header");
+				parts.push(part);
+				start = index + 1;
+			}
+		}
+		if (quoted || escaped || angleOpen) throw new Error("GitLab response contained a malformed Link header");
+		const finalPart = value.slice(start).trim();
+		if (!finalPart) throw new Error("GitLab response contained a malformed Link header");
+		parts.push(finalPart);
+		return parts;
+	}
+
+	function parseLinkHeader(value: string): Array<{ target: string; relations: string[] }> {
+		const tokenCharacter = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]$/;
+		const registeredRelation = /^[A-Za-z][A-Za-z0-9.-]*$/;
+		const absoluteUriScheme = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+		const isControlCharacter = (character: string): boolean => {
+			const code = character.charCodeAt(0);
+			return code <= 31 || code === 127;
+		};
+		const isValidRelation = (relation: string): boolean => {
+			if (registeredRelation.test(relation)) return true;
+			if (!absoluteUriScheme.test(relation)) return false;
+			try {
+				new URL(relation);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		return linkParts(value).map((part) => {
+			let cursor = 0;
+			const skipWhitespace = () => {
+				while (part[cursor] === " " || part[cursor] === "\t") cursor++;
+			};
+			skipWhitespace();
+			if (part[cursor] !== "<") throw new Error("GitLab response contained a malformed Link target");
+			const targetEnd = part.indexOf(">", cursor + 1);
+			if (targetEnd < 0) throw new Error("GitLab response contained a malformed Link target");
+			const target = part.slice(cursor + 1, targetEnd);
+			if (!target || /[<>\s"]/.test(target) || Array.from(target).some(isControlCharacter))
+				throw new Error("GitLab response contained a malformed Link target");
+			cursor = targetEnd + 1;
+			const relations: string[] = [];
+			let sawRelation = false;
+			while (cursor < part.length) {
+				skipWhitespace();
+				if (cursor >= part.length) break;
+				if (part[cursor] !== ";") throw new Error("GitLab response contained a malformed Link parameter delimiter");
+				cursor++;
+				skipWhitespace();
+				const nameStart = cursor;
+				while (cursor < part.length && tokenCharacter.test(part[cursor] ?? "")) cursor++;
+				if (cursor === nameStart) throw new Error("GitLab response contained a malformed Link parameter");
+				const name = part.slice(nameStart, cursor).toLowerCase();
+				skipWhitespace();
+				if (part[cursor] !== "=") throw new Error("GitLab response contained a malformed Link parameter");
+				cursor++;
+				skipWhitespace();
+
+				let parameterValue = "";
+				if (part[cursor] === '"') {
+					cursor++;
+					let closed = false;
+					while (cursor < part.length) {
+						const character = part[cursor];
+						if (character === "\\") {
+							cursor++;
+							if (cursor >= part.length) throw new Error("GitLab response contained a malformed Link quoted value");
+							parameterValue += part[cursor];
+							cursor++;
+						} else if (character === '"') {
+							closed = true;
+							cursor++;
+							break;
+						} else {
+							if (character === undefined || isControlCharacter(character))
+								throw new Error("GitLab response contained a malformed Link quoted value");
+							parameterValue += character;
+							cursor++;
+						}
+					}
+					if (!closed) throw new Error("GitLab response contained a malformed Link quoted value");
+				} else {
+					const valueStart = cursor;
+					while (cursor < part.length && tokenCharacter.test(part[cursor] ?? "")) cursor++;
+					if (cursor === valueStart) throw new Error("GitLab response contained a malformed Link parameter value");
+					parameterValue = part.slice(valueStart, cursor);
+				}
+
+				if (name === "rel") {
+					if (sawRelation) throw new Error("GitLab response contained duplicate Link relation parameters");
+					sawRelation = true;
+					const parsedRelations = parameterValue.split(/\s+/).filter(Boolean);
+					if (parsedRelations.length === 0 || parsedRelations.some((relation) => !isValidRelation(relation)))
+						throw new Error("GitLab response contained a malformed Link relation parameter");
+					relations.push(...parsedRelations);
+				}
+			}
+			return { target, relations };
+		});
+	}
+
+	function nextPageFromLink(value: string | null, requestedPage: number): number | undefined {
+		if (!value) return undefined;
+		let advertisedNext: number | undefined;
+		for (const { target, relations } of parseLinkHeader(value)) {
+			const isNext = relations.some((relation) => relation.toLowerCase() === "next");
+			if (!isNext) continue;
+			let rawPage: string | null;
+			try {
+				rawPage = new URL(target, apiRoot).searchParams.get("page");
+			} catch {
+				throw new Error("GitLab response advertised a malformed next-page link");
+			}
+			if (rawPage === null || !/^\d+$/.test(rawPage) || !Number.isSafeInteger(Number(rawPage)) || Number(rawPage) < 1)
+				throw new Error("GitLab response omitted a valid next-page link");
+			const nextPage = Number(rawPage);
+			if (nextPage <= requestedPage)
+				throw new Error(`GitLab next-page link ${nextPage} did not advance beyond requested page ${requestedPage}`);
+			if (advertisedNext !== undefined && advertisedNext !== nextPage)
+				throw new Error("GitLab response advertised conflicting next-page links");
+			advertisedNext = nextPage;
+		}
+		return advertisedNext;
+	}
+
+	function nextPageFrom(response: Response, requestedPage: number): number | undefined {
+		const rawHeaderPage = response.headers.get("X-Next-Page");
+		const headerPage = rawHeaderPage === "" ? undefined : parseDecimalHeader(response.headers, "X-Next-Page", 1);
+		if (headerPage !== undefined) {
+			if (headerPage <= requestedPage)
+				throw new Error(`GitLab X-Next-Page ${headerPage} did not advance beyond requested page ${requestedPage}`);
+		}
+		const linkPage = nextPageFromLink(response.headers.get("link"), requestedPage);
+		if (rawHeaderPage === "" && linkPage !== undefined)
+			throw new Error("GitLab X-Next-Page advertised completion but Link advertised a next page");
+		if (headerPage !== undefined && linkPage !== undefined && headerPage !== linkPage)
+			throw new Error(`GitLab X-Next-Page ${headerPage} disagreed with next-page Link ${linkPage}`);
+		return headerPage ?? linkPage;
+	}
+
+	function shapeMergeRequest(
+		mr: z.infer<typeof GitLabHistoricalMergeRequestResponseSchema>,
+	): GitLabHistoricalMergeRequest {
+		return {
+			iid: mr.iid,
+			title: mr.title,
+			state: mr.state,
+			webUrl: mr.web_url,
+			createdAt: mr.created_at,
+			updatedAt: mr.updated_at,
+			...(mr.merge_commit_sha && { mergeCommitSha: mr.merge_commit_sha }),
+			commitSha: mr.sha,
+		};
 	}
 
 	return {
@@ -297,6 +600,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 				: [];
 			return {
 				id: project.id,
+				path: project.path_with_namespace,
 				defaultBranch,
 				headSha: commits[0]?.id ?? "",
 				lastActivityAt: project.last_activity_at,
@@ -346,14 +650,98 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 			);
 			return change.changes.slice(0, 500).map((item) => item.new_path);
 		},
-		async pipelineJobs(projectPath, pipelineId) {
-			const jobs = GitLabJobsResponseSchema.parse(
-				await json(`${projectApiPath(projectPath)}/pipelines/${pipelineId}/jobs?per_page=100`),
+		async pipelineJobs(projectPath, pipelineId, page, perPage) {
+			const response = await responseFor(
+				`${projectApiPath(projectPath)}/pipelines/${pipelineId}/jobs?${new URLSearchParams({ page: String(page), per_page: String(perPage) }).toString()}`,
 			);
-			return jobs.map((job) => ({ id: job.id, name: job.name, status: job.status, webUrl: job.web_url }));
+			validatePageHeaders(response.headers, page, perPage);
+			const jobs = GitLabJobsResponseSchema.parse(await responseJson(response));
+			const nextPage = nextPageFrom(response, page);
+			return {
+				jobs: jobs.map((job) => ({
+					id: job.id,
+					name: job.name,
+					status: job.status,
+					webUrl: job.web_url,
+				})),
+				...(nextPage && { nextPage }),
+			};
 		},
 		jobTrace(projectPath, jobId) {
 			return request(`${projectApiPath(projectPath)}/jobs/${jobId}/trace`);
+		},
+		async historicalMergeRequests(projectPath, updatedAfter, updatedBefore, page, perPage) {
+			const params = new URLSearchParams({
+				scope: "all",
+				state: "all",
+				order_by: "updated_at",
+				sort: "asc",
+				updated_after: updatedAfter,
+				page: String(page),
+				per_page: String(perPage),
+			});
+			if (updatedBefore) params.set("updated_before", updatedBefore);
+			const response = await responseFor(`${projectApiPath(projectPath)}/merge_requests?${params.toString()}`);
+			const text = await response.text();
+			if (Buffer.byteLength(text, "utf8") > options.maxResponseBytes) {
+				throw new Error(`GitLab response exceeded ${options.maxResponseBytes} bytes`);
+			}
+			validatePageHeaders(response.headers, page, perPage);
+			const mergeRequests = GitLabHistoricalMergeRequestsResponseSchema.parse(JSON.parse(text) as unknown).map(
+				shapeMergeRequest,
+			);
+			const nextPage = nextPageFrom(response, page);
+			const totalHeader = response.headers.get("x-total");
+			const total = totalHeader === null ? undefined : parseDecimalHeader(response.headers, "X-Total", 0);
+			return { mergeRequests, ...(total !== undefined && { total }), ...(nextPage && { nextPage }) };
+		},
+		async mergeRequest(projectPath, iid) {
+			return shapeMergeRequest(
+				GitLabHistoricalMergeRequestResponseSchema.parse(
+					await json(`${projectApiPath(projectPath)}/merge_requests/${iid}`),
+				),
+			);
+		},
+		async mergeRequestPipelines(projectPath, iid, page, perPage) {
+			const response = await responseFor(
+				`${projectApiPath(projectPath)}/merge_requests/${iid}/pipelines?${new URLSearchParams({ page: String(page), per_page: String(perPage) }).toString()}`,
+			);
+			validatePageHeaders(response.headers, page, perPage);
+			const pipelines = GitLabHistoricalPipelinesResponseSchema.parse(await responseJson(response));
+			const nextPage = nextPageFrom(response, page);
+			return {
+				pipelines: pipelines.map((pipeline) => ({
+					id: pipeline.id,
+					status: pipeline.status,
+					webUrl: pipeline.web_url,
+					createdAt: pipeline.created_at,
+					updatedAt: pipeline.updated_at,
+				})),
+				...(nextPage && { nextPage }),
+			};
+		},
+		async projectDeployments(projectPath, page, perPage, updatedBefore) {
+			const params = new URLSearchParams({
+				status: "success",
+				order_by: "updated_at",
+				sort: "desc",
+				page: String(page),
+				per_page: String(perPage),
+			});
+			if (updatedBefore) params.set("updated_before", updatedBefore);
+			const response = await responseFor(`${projectApiPath(projectPath)}/deployments?${params.toString()}`);
+			validatePageHeaders(response.headers, page, perPage);
+			const deployments = GitLabDeploymentsResponseSchema.parse(await responseJson(response)).map((deployment) => ({
+				sha: deployment.sha,
+				status: deployment.status,
+				updatedAt: deployment.updated_at,
+				...(deployment.deployable?.pipeline?.id && { pipelineId: deployment.deployable.pipeline.id }),
+			}));
+			const nextPage = nextPageFrom(response, page);
+			return {
+				deployments,
+				...(nextPage && { nextPage }),
+			};
 		},
 	};
 }
@@ -394,8 +782,8 @@ export async function repositoryProvenance(
 		project,
 		provenance: {
 			source: "gitlab",
-			projectPath: repository.projectPath,
-			webUrl: `https://gitlab.com/${repository.projectPath}`,
+			projectPath: project.path,
+			webUrl: `https://gitlab.com/${project.path}`,
 			ref,
 			defaultBranch: project.defaultBranch,
 			retrievedAt: new Date().toISOString(),

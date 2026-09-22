@@ -22,6 +22,12 @@ export interface LandingZoneChangeHistoryEntry {
 	summary: string;
 	outcome: string;
 	createdAt: string;
+	outcomeObservedAt: string;
+	outcomeRetrievedAt: string;
+	outcomeEvidenceSource: string;
+	outcomeEvidenceSha: string;
+	outcomeEvidencePipelineId: string;
+	outcomeEvidenceTruncated: boolean;
 	mrUrl: string;
 	pipelineId: string;
 	pipelineStatus: string;
@@ -36,6 +42,12 @@ function shapeLandingZoneOutcome(row: Record<string, unknown>): LandingZoneChang
 		summary: String(row.summary ?? ""),
 		outcome: String(row.outcome ?? "proposed"),
 		createdAt: String(row.createdAt ?? ""),
+		outcomeObservedAt: String(row.outcomeObservedAt ?? ""),
+		outcomeRetrievedAt: String(row.outcomeRetrievedAt ?? ""),
+		outcomeEvidenceSource: String(row.outcomeEvidenceSource ?? ""),
+		outcomeEvidenceSha: String(row.outcomeEvidenceSha ?? ""),
+		outcomeEvidencePipelineId: String(row.outcomeEvidencePipelineId ?? ""),
+		outcomeEvidenceTruncated: Boolean(row.outcomeEvidenceTruncated ?? false),
 		mrUrl: String(row.mrUrl ?? ""),
 		pipelineId: String(row.pipelineId ?? ""),
 		pipelineStatus: String(row.pipelineStatus ?? ""),
@@ -53,7 +65,7 @@ export async function repositoryChangeHistory(
 	if (!repositoryPath) return [];
 	LIMIT_SCHEMA.parse(limit);
 	const changes = await store.run<Record<string, unknown>>(
-		"MATCH (c:ConfigChange)-[:CHANGE_TARGETS_REPOSITORY]->(r:Repository {path: $repositoryPath}) RETURN c.id AS changeId, c.summary AS summary, c.outcome AS outcome, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
+		"MATCH (c:ConfigChange)-[:CHANGE_TARGETS_REPOSITORY]->(r:Repository {path: $repositoryPath}) RETURN c.id AS changeId, c.summary AS summary, c.outcome AS outcome, c.createdAt AS createdAt, c.outcomeObservedAt AS outcomeObservedAt, c.outcomeRetrievedAt AS outcomeRetrievedAt, c.outcomeEvidenceSource AS outcomeEvidenceSource, c.outcomeEvidenceSha AS outcomeEvidenceSha, c.outcomeEvidencePipelineId AS outcomeEvidencePipelineId, c.outcomeEvidenceTruncated AS outcomeEvidenceTruncated ORDER BY c.createdAt DESC LIMIT $limit",
 		{ repositoryPath, limit },
 	);
 	return Promise.all(
@@ -121,7 +133,7 @@ export async function mergeRequestPipelineOutcome(
 ): Promise<MergeRequestPipelineOutcome | null> {
 	if (!mrUrl) return null;
 	const rows = await store.run<Record<string, unknown>>(
-		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest) WHERE m.webUrl = $mrUrl OR m.url = $mrUrl OPTIONAL MATCH (m)-[:RAN]->(p:Pipeline) OPTIONAL MATCH (p)-[:PRODUCED]->(tp:TerraformPlan) RETURN c.id AS changeId, c.summary AS summary, c.outcome AS outcome, c.createdAt AS createdAt, coalesce(m.webUrl, m.url) AS mrUrl, p.id AS pipelineId, p.status AS pipelineStatus, tp.id AS planId, tp.status AS planStatus, tp.summary AS planSummary, p.createdAt AS pipelineCreatedAt, CAST(p.id AS INT64) AS pipelineOrder ORDER BY pipelineCreatedAt DESC, pipelineOrder DESC LIMIT 1",
+		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest) WHERE m.webUrl = $mrUrl OR m.url = $mrUrl OPTIONAL MATCH (m)-[:RAN]->(p:Pipeline) OPTIONAL MATCH (p)-[:PRODUCED]->(tp:TerraformPlan) RETURN c.id AS changeId, c.summary AS summary, c.outcome AS outcome, c.createdAt AS createdAt, c.outcomeObservedAt AS outcomeObservedAt, c.outcomeRetrievedAt AS outcomeRetrievedAt, c.outcomeEvidenceSource AS outcomeEvidenceSource, c.outcomeEvidenceSha AS outcomeEvidenceSha, c.outcomeEvidencePipelineId AS outcomeEvidencePipelineId, c.outcomeEvidenceTruncated AS outcomeEvidenceTruncated, coalesce(m.webUrl, m.url) AS mrUrl, p.id AS pipelineId, p.status AS pipelineStatus, tp.id AS planId, tp.status AS planStatus, tp.summary AS planSummary, p.createdAt AS pipelineCreatedAt, CAST(p.id AS INT64) AS pipelineOrder ORDER BY pipelineCreatedAt DESC, pipelineOrder DESC LIMIT 1",
 		{ mrUrl },
 	);
 	if (!rows[0]) return null;

@@ -1,16 +1,132 @@
 // packages/agent/src/mcp-bridge.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { landingZoneGitLabImportEnabled } from "./landing-zone/gitlab-import.ts";
+import * as mcpBridge from "./mcp-bridge.ts";
 import {
 	_connectTimeoutForTest as connectTimeoutFor,
 	_getHealthPollTickForTest as getHealthPollTick,
 	_getHealthPollTimerForTest as getHealthPollTimer,
 	isClosedModuleRunnerError,
+	mcpEvents,
 	serializeMcpConnectError,
 	_startHealthPollingForTest as startHealthPolling,
 	stopHealthPolling,
 	_toolTimeoutForTest as toolTimeoutFor,
 	_withTimeoutForTest as withTimeout,
 } from "./mcp-bridge.ts";
+
+test("a connected-state transition emits once for scheduler readiness", () => {
+	const markConnected = (mcpBridge as unknown as Record<string, unknown>)._markServerConnectedForTest;
+	expect(markConnected).toBeFunction();
+	let events = 0;
+	const listener = () => events++;
+	mcpEvents.on("mcp_connected", listener);
+	try {
+		(markConnected as (server: string) => void)("scheduler-readiness-test-mcp");
+		(markConnected as (server: string) => void)("scheduler-readiness-test-mcp");
+		expect(events).toBe(1);
+	} finally {
+		mcpEvents.off("mcp_connected", listener);
+	}
+});
+
+describe("MCP replacement readiness", () => {
+	const bridgeTestApi = mcpBridge as unknown as Record<string, unknown>;
+	const seedReplacement = bridgeTestApi._seedServerForReplacementTest as
+		| ((server: string, tools: Array<{ name: string; description: string }>, identity: Record<string, unknown>) => void)
+		| undefined;
+	const replaceServer = bridgeTestApi._replaceServerForTest as
+		| ((
+				server: string,
+				url: string,
+				identity: Record<string, unknown>,
+				loadTools: () => Promise<Array<{ name: string; description: string }>>,
+		  ) => Promise<boolean>)
+		| undefined;
+	const resetReplacement = bridgeTestApi._resetReplacementStateForTest as (() => void) | undefined;
+	const expectedIdentity = bridgeTestApi._getExpectedIdentityForTest as
+		| ((server: string) => Record<string, unknown> | undefined)
+		| undefined;
+	const oldIdentity = {
+		instanceId: "old-instance",
+		role: "landing-zone-iac-mcp",
+		version: "1.0.0",
+		bootedAt: "2026-09-22T10:00:00.000Z",
+		pid: 1,
+		mode: "http",
+		upstreamFingerprint: "old",
+	};
+	const newIdentity = { ...oldIdentity, instanceId: "new-instance", upstreamFingerprint: "new" };
+
+	test("a successful connected replacement refreshes tools and emits scheduler readiness", async () => {
+		expect(seedReplacement).toBeFunction();
+		expect(replaceServer).toBeFunction();
+		resetReplacement?.();
+		seedReplacement?.("landing-zone-iac-mcp", [{ name: "stale-tool", description: "stale" }], oldIdentity);
+		const readyEvents: unknown[] = [];
+		const replacedEvents: unknown[] = [];
+		const readyListener = (event: unknown) => readyEvents.push(event);
+		const replacedListener = (event: unknown) => replacedEvents.push(event);
+		mcpEvents.on("mcp_connected", readyListener);
+		mcpEvents.on("mcp_replaced", replacedListener);
+		try {
+			const requiredTools = [
+				"lz_list_repositories",
+				"lz_list_historical_merge_requests",
+				"lz_read_merge_request",
+				"lz_list_merge_request_pipelines",
+				"lz_list_project_deployments",
+			];
+			const success = await replaceServer?.(
+				"landing-zone-iac-mcp",
+				"http://localhost:9999/mcp",
+				newIdentity,
+				async () => requiredTools.map((name) => ({ name, description: `${name} test tool` })),
+			);
+			expect(success).toBe(true);
+			const replacementToolNames = mcpBridge.getToolsForDataSource("landing-zone-iac").map((tool) => tool.name);
+			expect(replacementToolNames).toEqual(requiredTools);
+			expect(landingZoneGitLabImportEnabled(true, replacementToolNames)).toBe(true);
+			expect(readyEvents).toEqual([{ type: "mcp_connected", server: "landing-zone-iac-mcp", transition: "reconnect" }]);
+			expect(replacedEvents).toHaveLength(1);
+			expect(expectedIdentity?.("landing-zone-iac-mcp")?.instanceId).toBe("new-instance");
+		} finally {
+			mcpEvents.off("mcp_connected", readyListener);
+			mcpEvents.off("mcp_replaced", replacedListener);
+			resetReplacement?.();
+		}
+	});
+
+	test("a failed connected replacement preserves tools and identity without emitting readiness", async () => {
+		expect(seedReplacement).toBeFunction();
+		expect(replaceServer).toBeFunction();
+		resetReplacement?.();
+		seedReplacement?.("landing-zone-iac-mcp", [{ name: "stale-tool", description: "stale" }], oldIdentity);
+		const events: unknown[] = [];
+		const readyListener = (event: unknown) => events.push(event);
+		const replacedListener = (event: unknown) => events.push(event);
+		mcpEvents.on("mcp_connected", readyListener);
+		mcpEvents.on("mcp_replaced", replacedListener);
+		try {
+			const success = await replaceServer?.(
+				"landing-zone-iac-mcp",
+				"http://localhost:9999/mcp",
+				newIdentity,
+				async () => {
+					throw new Error("replacement unavailable");
+				},
+			);
+			expect(success).toBe(false);
+			expect(mcpBridge.getAllTools().map((tool) => tool.name)).toEqual(["stale-tool"]);
+			expect(events).toEqual([]);
+			expect(expectedIdentity?.("landing-zone-iac-mcp")?.instanceId).toBe("old-instance");
+		} finally {
+			mcpEvents.off("mcp_connected", readyListener);
+			mcpEvents.off("mcp_replaced", replacedListener);
+			resetReplacement?.();
+		}
+	});
+});
 
 // SIO-705: pino's default JSON serializer drops non-enumerable Error fields.
 // The styles-v3 production run logged `Failed to connect to MCP server` with

@@ -10,6 +10,15 @@ const mockStreamEvents = mock(() => ({
 }));
 
 const mockUpdateState = mock(() => Promise.resolve());
+const bootOrder: string[] = [];
+const mockRegisterSchedules = mock(() => {
+	bootOrder.push("schedules");
+	return [];
+});
+const mockCreateMcpClient = mock(async () => {
+	bootOrder.push("mcp");
+});
+const mockMcpEvents = new EventEmitter();
 // SIO-1687: records what pruneThreadState stashed as the evidence TOC.
 const mockSetEvidenceToc = mock((_threadId: string, _toc?: string) => undefined);
 const mockGetState = mock(() =>
@@ -88,7 +97,7 @@ mock.module("@devops-agent/agent", () => ({
 			getGraphAsync: mock(() => Promise.resolve({ nodes: {}, edges: [] })),
 		}),
 	),
-	createMcpClient: mock(() => Promise.resolve()),
+	createMcpClient: mockCreateMcpClient,
 	// SIO-1655: graph-registry imports both from the barrel to gate the console:
 	// the capability flag AND whether a hub exists to serve it.
 	isPiFleetGraphEnabled: mock(() => true),
@@ -164,7 +173,7 @@ mock.module("@devops-agent/agent", () => ({
 	processAttachments: mock(() => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] })),
 	// SIO-906: events route test imports mcpEvents from this specifier; include it so
 	// the shared process-global mock stays link-compatible across files.
-	mcpEvents: new EventEmitter(),
+	mcpEvents: mockMcpEvents,
 	// SIO-1045: agent.ts itself imports these at module scope (installSkillLearner is
 	// CALLED at load time; appliedSkillsForNames is used in readCompletedTurn). Also
 	// cover the memory/promote and actions routes that import the same specifier so
@@ -187,11 +196,13 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-1525: the gitlab-import sweep's registration gate + node function, same pattern.
 	importExternalChanges: mock(() => Promise.resolve({ imported: 0, errors: 0 })),
 	importEnabled: mock(() => false),
+	runLandingZoneGitLabImportSweep: mock(() => Promise.resolve({ outcomes: [], requiresCheckpoint: true })),
+	landingZoneGitLabImportEnabled: mock(() => false),
 	// SIO-1358: schedules.ts's other @devops-agent/agent imports -- getWorkspaceRoot resolves the
 	// real repo root (harmless; loadSchedules/loadWorkflows below are gitagent-bridge stubs so no
 	// real YAML is read), registerSchedules is a no-op stub since the schedules map is empty here.
 	getWorkspaceRoot: mock(() => "/tmp"),
-	registerSchedules: mock(() => []),
+	registerSchedules: mockRegisterSchedules,
 	selectedBackend: mock(() => "file" as const),
 	// SIO-1124: the /api/tickets routes import these from this same specifier.
 	getTicketProvider: mock(() => undefined),
@@ -310,7 +321,21 @@ mock.module("@langchain/core/messages", () => ({
 	},
 }));
 
-const { invokeAgent, pruneThreadState } = await import("./agent.ts");
+const { _waitForAgentStartupForTest, ensureMcpConnected, invokeAgent, pruneThreadState } = await import("./agent.ts");
+
+test("cold startup attempts MCP before its first schedule registration", async () => {
+	await _waitForAgentStartupForTest();
+	expect(mockCreateMcpClient).toHaveBeenCalled();
+	expect(bootOrder.indexOf("mcp")).toBeGreaterThanOrEqual(0);
+	expect(bootOrder.indexOf("schedules")).toBeGreaterThan(bootOrder.indexOf("mcp"));
+});
+
+test("refreshes schedule readiness after a health reconnect transition", async () => {
+	await ensureMcpConnected();
+	const registrationsBeforeReconnect = mockRegisterSchedules.mock.calls.length;
+	mockMcpEvents.emit("mcp_connected", { type: "mcp_connected", server: "landing-zone-iac-mcp" });
+	expect(mockRegisterSchedules.mock.calls.length).toBeGreaterThan(registrationsBeforeReconnect);
+});
 
 describe("invokeAgent", () => {
 	test("merges compliance metadata into streamEvents config", async () => {

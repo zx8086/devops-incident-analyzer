@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
+	createGitLabReadClient,
 	type GitLabReadClient,
 	LANDING_ZONE_REPOSITORIES,
 	readRepositoryFiles,
@@ -83,5 +84,309 @@ describe("Landing Zone repository allowlist", () => {
 		expect(result.files[0]?.content).not.toContain("aws-secret");
 		expect(result.files[0]?.content).not.toContain("gitlab-secret");
 		expect(result.files[0]?.content).not.toContain("oauth-secret");
+	});
+});
+
+describe("GitLab historical merge request pagination", () => {
+	test("accepts GitLab's transitional locked merge-request state", async () => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response(
+					JSON.stringify([
+						{
+							iid: 7,
+							title: "Temporarily locked",
+							state: "locked",
+							web_url: "https://gitlab.example/project/-/merge_requests/7",
+							created_at: "2026-09-02T00:00:00.000Z",
+							updated_at: "2026-09-03T00:00:00.000Z",
+							merge_commit_sha: null,
+							sha: "head-7",
+						},
+					]),
+					{ headers: { "x-total": "1", "x-page": "1", "x-per-page": "20" } },
+				)) as unknown as typeof fetch,
+		});
+
+		await expect(
+			client.historicalMergeRequests("project", "2026-09-01T00:00:00.000Z", undefined, 1, 20),
+		).resolves.toMatchObject({ mergeRequests: [{ state: "locked" }] });
+	});
+
+	test("reports an unavailable exact total without inventing one", async () => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 1_000,
+			fetchImpl: (async () => new Response("[]")) as unknown as typeof fetch,
+		});
+
+		const result = await client.historicalMergeRequests(
+			"pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+			"2026-09-01T00:00:00.000Z",
+			undefined,
+			1,
+			20,
+		);
+
+		expect(result.total).toBeUndefined();
+	});
+
+	test.each(["", "1.0", "+1", "1e2", "-1"])("rejects a non-decimal X-Total header: %s", async (total) => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 1_000,
+			fetchImpl: (async () => new Response("[]", { headers: { "x-total": total } })) as unknown as typeof fetch,
+		});
+
+		await expect(
+			client.historicalMergeRequests("project", "2026-09-01T00:00:00.000Z", undefined, 1, 20),
+		).rejects.toThrow("valid X-Total");
+	});
+
+	test("rejects pagination headers that do not describe the requested page", async () => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 1_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: { "x-total": "0", "x-page": "2", "x-per-page": "20" },
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(
+			client.historicalMergeRequests("project", "2026-09-01T00:00:00.000Z", undefined, 1, 20),
+		).rejects.toThrow("X-Page");
+	});
+});
+
+describe("GitLab direct merge request evidence", () => {
+	test("reads bounded metadata from the official single-MR endpoint", async () => {
+		const requested: string[] = [];
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async (input: string | URL | Request) => {
+				requested.push(String(input));
+				return new Response(
+					JSON.stringify({
+						iid: 7,
+						title: "Add account",
+						state: "merged",
+						web_url: "https://gitlab.example/project/-/merge_requests/7",
+						created_at: "2026-09-02T00:00:00.000Z",
+						updated_at: "2026-09-03T00:00:00.000Z",
+						merge_commit_sha: "merge-7",
+						sha: "head-7",
+					}),
+				);
+			}) as unknown as typeof fetch,
+		});
+
+		await expect(client.mergeRequest("group/project", 7)).resolves.toEqual({
+			iid: 7,
+			title: "Add account",
+			state: "merged",
+			webUrl: "https://gitlab.example/project/-/merge_requests/7",
+			createdAt: "2026-09-02T00:00:00.000Z",
+			updatedAt: "2026-09-03T00:00:00.000Z",
+			mergeCommitSha: "merge-7",
+			commitSha: "head-7",
+		});
+		expect(requested).toEqual(["https://gitlab.example/api/v4/projects/group%2Fproject/merge_requests/7"]);
+	});
+});
+
+describe("GitLab deployment pagination", () => {
+	test("requests newest deployments first and follows a Link-only next page", async () => {
+		const requested: string[] = [];
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async (input: string | URL | Request) => {
+				requested.push(String(input));
+				return new Response(
+					JSON.stringify([
+						{
+							sha: "newest-sha",
+							status: "success",
+							updated_at: "2026-09-22T12:00:00.000Z",
+							deployable: { pipeline: { id: 99 } },
+						},
+					]),
+					{
+						headers: {
+							"x-page": "4",
+							"x-per-page": "20",
+							link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next"',
+						},
+					},
+				);
+			}) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20, "2026-09-22T12:30:00.000Z")).resolves.toEqual({
+			deployments: [
+				{
+					sha: "newest-sha",
+					status: "success",
+					updatedAt: "2026-09-22T12:00:00.000Z",
+					pipelineId: 99,
+				},
+			],
+			nextPage: 5,
+		});
+		expect(requested[0]).toContain("order_by=updated_at");
+		expect(requested[0]).toContain("sort=desc");
+		expect(requested[0]).toContain("updated_before=2026-09-22T12%3A30%3A00.000Z");
+	});
+
+	test.each([
+		["malformed", "not-a-page"],
+		["self-loop", "4"],
+	] as const)("rejects a %s deployment next-page cursor", async (_case, nextPage) => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: { "x-page": "4", "x-per-page": "20", "x-next-page": nextPage },
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20)).rejects.toThrow(
+			/valid X-Next-Page|advance beyond requested page/,
+		);
+	});
+
+	test("accepts a structural next relation when rel is not the final Link parameter", async () => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: {
+						"x-page": "4",
+						"x-per-page": "20",
+						link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next"; type="application/json"',
+					},
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20)).resolves.toMatchObject({ nextPage: 5 });
+	});
+
+	test("accepts a valid absolute extension relation URI beside next", async () => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: {
+						"x-page": "4",
+						"x-per-page": "20",
+						link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="https://relations.example/custom next"',
+					},
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20)).resolves.toMatchObject({ nextPage: 5 });
+	});
+
+	test.each([
+		[
+			"unterminated relation quote",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next',
+		],
+		[
+			"unbalanced target angle bracket",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5; rel="next"',
+		],
+		[
+			"missing parameter delimiter",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5> rel="next"',
+		],
+		[
+			"malformed relation parameter",
+			"<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel",
+		],
+		[
+			"punctuation in a registered relation token",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next,"',
+		],
+		[
+			"an underscore in a registered relation token",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next_"',
+		],
+		[
+			"a valid relation mixed with an invalid token",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next bad!"',
+		],
+		[
+			"a malformed extension relation URI",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="https://"',
+		],
+		["an empty relation token", '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel=""'],
+	] as const)("rejects a structurally malformed Link header with %s", async (_case, link) => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: { "x-page": "4", "x-per-page": "20", link },
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20)).rejects.toThrow(/Link|parameter/i);
+	});
+
+	test.each([
+		[
+			"malformed advertised next relation",
+			{
+				link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=oops>; title="page"; rel="next"',
+			},
+		],
+		[
+			"empty next-page header contradicting a next Link",
+			{
+				"x-next-page": "",
+				link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next"',
+			},
+		],
+		[
+			"next-page header disagreeing with the next Link",
+			{
+				"x-next-page": "5",
+				link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=6>; rel="next"',
+			},
+		],
+		[
+			"self-looping next Link",
+			{ link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=4>; rel="next"' },
+		],
+	] as const)("rejects %s", async (_case, paginationHeaders) => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: { "x-page": "4", "x-per-page": "20", ...paginationHeaders },
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20)).rejects.toThrow(/next/i);
 	});
 });

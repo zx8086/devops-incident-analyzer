@@ -126,12 +126,145 @@ export async function listOpenChanges(client: GitLabReadClient, input: { reposit
 	};
 }
 
+export async function listHistoricalMergeRequests(
+	client: GitLabReadClient,
+	input: { repository: string; updatedAfter: string; updatedBefore?: string; page?: number; perPage?: number },
+) {
+	const repository = resolveRepository(input.repository);
+	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
+	const { project, provenance } = await repositoryProvenance(client, repository);
+	const page = input.page ?? 1;
+	const perPage = input.perPage ?? 20;
+	if (!Number.isInteger(page) || page < 1) throw new Error("page must be a positive integer");
+	if (!Number.isInteger(perPage) || perPage < 1 || perPage > 100) throw new Error("perPage must be between 1 and 100");
+	const result = await client.historicalMergeRequests(
+		repository.projectPath,
+		input.updatedAfter,
+		input.updatedBefore,
+		page,
+		perPage,
+	);
+	return {
+		repository,
+		project: { id: project.id, path: project.path, defaultBranch: project.defaultBranch, headSha: project.headSha },
+		mergeRequests: result.mergeRequests,
+		...(result.total !== undefined && { total: result.total }),
+		...(result.nextPage && { nextPage: result.nextPage }),
+		provenance,
+	};
+}
+
+export async function readMergeRequest(client: GitLabReadClient, input: { repository: string; iid: number }) {
+	const repository = resolveRepository(input.repository);
+	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
+	if (!Number.isInteger(input.iid) || input.iid < 1) throw new Error("iid must be a positive integer");
+	const { project, provenance } = await repositoryProvenance(client, repository);
+	return {
+		repository,
+		project: { id: project.id, path: project.path, defaultBranch: project.defaultBranch, headSha: project.headSha },
+		mergeRequest: await client.mergeRequest(project.path, input.iid),
+		provenance,
+	};
+}
+
+const MAX_PIPELINE_PAGES = 3;
+const MAX_JOB_PAGES = 3;
+const PIPELINES_PER_PAGE = 20;
+const JOBS_PER_PAGE = 100;
+
+async function listBoundedPipelineJobs(client: GitLabReadClient, projectPath: string, pipelineId: number) {
+	const jobs = [];
+	let page = 1;
+	let truncated = false;
+	for (let pagesRead = 0; pagesRead < MAX_JOB_PAGES; pagesRead++) {
+		const result = await client.pipelineJobs(projectPath, pipelineId, page, JOBS_PER_PAGE);
+		jobs.push(...result.jobs);
+		if (!result.nextPage) break;
+		if (pagesRead === MAX_JOB_PAGES - 1) {
+			truncated = true;
+			break;
+		}
+		page = result.nextPage;
+	}
+	return { jobs, truncated };
+}
+
+export async function listMergeRequestPipelines(client: GitLabReadClient, input: { repository: string; iid: number }) {
+	const repository = resolveRepository(input.repository);
+	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
+	const { provenance } = await repositoryProvenance(client, repository);
+	const pipelines = [];
+	let page = 1;
+	let truncated = false;
+	for (let pagesRead = 0; pagesRead < MAX_PIPELINE_PAGES; pagesRead++) {
+		const result = await client.mergeRequestPipelines(repository.projectPath, input.iid, page, PIPELINES_PER_PAGE);
+		for (const pipeline of result.pipelines) {
+			const jobsPage = await listBoundedPipelineJobs(client, repository.projectPath, pipeline.id);
+			truncated ||= jobsPage.truncated;
+			pipelines.push({
+				...pipeline,
+				planJobs: jobsPage.jobs
+					.filter((job) => /(^|[-_:])(terraform[-_:]?)?plan($|[-_:])/i.test(job.name))
+					.map((job) => ({ id: job.id, status: job.status, webUrl: job.webUrl })),
+			});
+		}
+		if (!result.nextPage) break;
+		if (pagesRead === MAX_PIPELINE_PAGES - 1) {
+			truncated = true;
+			break;
+		}
+		page = result.nextPage;
+	}
+	return {
+		repository,
+		iid: input.iid,
+		pipelines,
+		provenance: { ...provenance, truncated },
+	};
+}
+
+export async function listProjectDeployments(
+	client: GitLabReadClient,
+	input: { repository: string; commitSha: string; page?: number; updatedBefore?: string },
+) {
+	const repository = resolveRepository(input.repository);
+	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
+	if (!client.projectDeployments) throw new Error("GitLab deployments evidence is unavailable");
+	const { project, provenance } = await repositoryProvenance(client, repository);
+	const deployments = [];
+	let page = input.page ?? 1;
+	if (!Number.isInteger(page) || page < 1) throw new Error("page must be a positive integer");
+	let truncated = false;
+	let nextPage: number | undefined;
+	for (let read = 0; read < 3; read++) {
+		const result = await client.projectDeployments(project.path, page, 20, input.updatedBefore);
+		deployments.push(...result.deployments.filter((deployment) => deployment.sha === input.commitSha));
+		if (deployments.length > 0 || !result.nextPage) {
+			nextPage = result.nextPage;
+			truncated = result.nextPage !== undefined;
+			break;
+		}
+		if (result.nextPage <= page) throw new Error("GitLab deployment cursor did not advance");
+		nextPage = result.nextPage;
+		if (read === 2) {
+			truncated = true;
+			break;
+		}
+		page = result.nextPage;
+	}
+	return {
+		repository,
+		deployments,
+		...(nextPage && { nextPage }),
+		provenance: { ...provenance, truncated },
+	};
+}
+
 export async function readPipelinePlan(client: GitLabReadClient, input: { repository: string; pipelineId: number }) {
 	const repository = resolveRepository(input.repository);
 	const { provenance } = await repositoryProvenance(client, repository);
-	const jobs = (await client.pipelineJobs(repository.projectPath, input.pipelineId)).filter((job) =>
-		/(^|[-_:])(terraform[-_:]?)?plan($|[-_:])/i.test(job.name),
-	);
+	const boundedJobs = await listBoundedPipelineJobs(client, repository.projectPath, input.pipelineId);
+	const jobs = boundedJobs.jobs.filter((job) => /(^|[-_:])(terraform[-_:]?)?plan($|[-_:])/i.test(job.name));
 	const planJobs = await Promise.all(
 		jobs.slice(0, 10).map(async (job) => {
 			const trace = boundText(sanitizeEvidenceText(await client.jobTrace(repository.projectPath, job.id)), 18_000);
@@ -142,6 +275,6 @@ export async function readPipelinePlan(client: GitLabReadClient, input: { reposi
 		repository,
 		pipelineId: input.pipelineId,
 		jobs: planJobs,
-		provenance: { ...provenance, truncated: planJobs.some((job) => job.truncated) },
+		provenance: { ...provenance, truncated: boundedJobs.truncated || planJobs.some((job) => job.truncated) },
 	};
 }

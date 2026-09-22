@@ -2,7 +2,12 @@
 
 // SIO-1134: apps/web curates incidents (ticket creation) but has no direct
 // knowledge-graph dependency -- KG access from the web app goes through here.
-export { getGraphStore, isKnowledgeGraphEnabled, linkIncidentTicket } from "@devops-agent/knowledge-graph";
+export {
+	getGraphStore,
+	isKnowledgeGraphEnabled,
+	linkIncidentTicket,
+	readLandingZoneGitLabImportCheckpoint,
+} from "@devops-agent/knowledge-graph";
 export type { MemoryPrProposal, OpenMemoryPrResult } from "@devops-agent/memory-pr";
 // SIO-1358: apps/web registers schedules/*.yaml jobs but has no direct skillflow
 // dependency -- the scheduler goes through here (same pattern as the KG re-export above).
@@ -94,6 +99,19 @@ export {
 	type TopologySweepSummary,
 	topologyCronEnabled,
 } from "./kg-topology.ts";
+export {
+	type HistoricalMergeRequest,
+	type HistoricalPipeline,
+	type HistoricalProject,
+	importLandingZoneGitLabHistory,
+	type LandingZoneGitLabImportSweepResult,
+	type LandingZoneImportCheckpoint,
+	type LandingZoneImportOptions,
+	type LandingZoneImportOutcome,
+	type LandingZoneImportResult,
+	landingZoneGitLabImportEnabled,
+	runLandingZoneGitLabImportSweep,
+} from "./landing-zone/gitlab-import.ts";
 export { type BuildLandingZoneGraphOptions, buildLandingZoneGraph } from "./landing-zone/graph.ts";
 export {
 	buildLandingZoneMemoryAnnotations,
@@ -174,6 +192,7 @@ export {
 	getServerStates,
 	getServerStatesForUi,
 	getToolsForDataSource,
+	type McpConnectedEvent,
 	type McpReplacedEvent,
 	mcpEvents,
 	stopHealthPolling,

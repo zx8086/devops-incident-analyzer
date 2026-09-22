@@ -41,12 +41,14 @@ import {
 	linkResolution,
 	linkStackModule,
 	purgeUncuratedIncidents,
+	readLandingZoneGitLabImportCheckpoint,
 	recordAppMapTopologyEdges,
 	recordGovernanceBinding,
 	recordIacChange,
 	recordIncident,
 	recordIpBinding,
 	recordLandingZoneChange,
+	recordLandingZoneGitLabImportCheckpoint,
 	recordLandingZoneRepository,
 	recordModuleUsage,
 	recordNetworkTopology,
@@ -92,7 +94,44 @@ afterAll(() => {
 });
 
 describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
-	test("Landing Zone repository model is idempotent and queryable", async () => {
+	test("Landing Zone GitLab import checkpoints round-trip through the migrated Repository schema", async () => {
+		const store = new LadybugStore(join(dir, "lz-gitlab-import-checkpoint"));
+		await store.init();
+		await recordLandingZoneRepository(store, {
+			group: { id: "gitlab-group:pvhcorp", path: "pvhcorp" },
+			repository: {
+				id: "gitlab-project:42",
+				groupId: "gitlab-group:pvhcorp",
+				path: "pvhcorp/dhco/aws/aws-lz-account-creator",
+				name: "aws-lz-account-creator",
+			},
+		});
+		await recordLandingZoneGitLabImportCheckpoint(store, "42", {
+			updatedAfter: "2026-09-03T00:00:00.000Z",
+			backfillStartAt: "2026-09-01T00:00:00.000Z",
+			repositoryPath: "pvhcorp/dhco/aws/aws-lz-account-creator",
+			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", nextPage: 1, seenMrIds: ["42:7"] },
+			pendingMrIids: [7, 8],
+			pendingCursor: 1,
+			pendingDeploymentScans: {
+				"7": { sha: "merge-7", nextPage: 4, updatedBefore: "2026-09-04T00:00:00.000Z" },
+			},
+		});
+		expect(await readLandingZoneGitLabImportCheckpoint(store, "aws-lz-account-creator")).toEqual({
+			projectId: "42",
+			updatedAfter: "2026-09-03T00:00:00.000Z",
+			backfillStartAt: "2026-09-01T00:00:00.000Z",
+			repositoryPath: "pvhcorp/dhco/aws/aws-lz-account-creator",
+			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", nextPage: 1, seenMrIds: ["42:7"] },
+			pendingMrIids: [7, 8],
+			pendingCursor: 1,
+			pendingDeploymentScans: {
+				"7": { sha: "merge-7", nextPage: 4, updatedBefore: "2026-09-04T00:00:00.000Z" },
+			},
+		});
+	});
+
+	test("Landing Zone reader returns one current applied outcome after an MR-stable proposed transition", async () => {
 		const store = new LadybugStore(join(dir, "lz-repository-model"));
 		await store.init();
 		const repositoryPath = "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator";
@@ -134,21 +173,56 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 				iid: "42",
 				webUrl: `${previousRepositoryPath}/-/merge_requests/42`,
 			},
-			outcome: "proposed",
+			outcome: "declined",
 			createdAt: "2026-09-22T15:00:00.000Z",
+			outcomeEvidence: {
+				source: "gitlab-mr",
+				observedAt: "2026-09-22T15:00:00.000Z",
+				retrievedAt: "2026-09-22T15:00:30.000Z",
+				truncated: false,
+			},
 		});
 		await recordLandingZoneChange(store, {
 			id: "change-42",
 			repositoryId,
 			rootId,
 			mergeRequest: { id: `${repositoryId}:42`, projectId: repositoryId, iid: "42", webUrl: mrUrl },
+			outcome: "proposed",
+			outcomeEvidence: {
+				source: "gitlab-mr",
+				observedAt: "2026-09-22T15:05:00.000Z",
+				retrievedAt: "2026-09-22T15:05:30.000Z",
+				truncated: false,
+			},
+		});
+		await recordLandingZoneChange(store, {
+			id: "change-42",
+			repositoryId,
+			rootId,
+			mergeRequest: { id: `${repositoryId}:42`, projectId: repositoryId, iid: "42", webUrl: mrUrl },
+			commitSha: "merge-sha",
 			outcome: "applied",
+			outcomeEvidence: {
+				source: "gitlab-deployment",
+				observedAt: "2026-09-22T15:10:00.000Z",
+				retrievedAt: "2026-09-22T15:10:30.000Z",
+				commitSha: "merge-sha",
+				pipelineId: "10",
+				truncated: false,
+			},
 		});
 		await recordLandingZoneChange(store, {
 			id: "change-42",
 			repositoryId,
 			rootId,
 			mergeRequest: { id: `${repositoryId}:42`, projectId: repositoryId, iid: "42", webUrl: mrUrl },
+			outcome: "proposed",
+			outcomeEvidence: {
+				source: "gitlab-mr",
+				observedAt: "2026-09-22T15:05:00.000Z",
+				retrievedAt: "2026-09-22T15:20:00.000Z",
+				truncated: false,
+			},
 		});
 		await recordPipeline(store, {
 			mrId: `${repositoryId}:42`,
@@ -196,7 +270,10 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		expect(await accountManagingRoots(store, repositoryPath)).toEqual([{ rootId, rootPath: ".", repositoryPath }]);
 		const history = await repositoryChangeHistory(store, repositoryPath);
 		expect(history).toHaveLength(1);
+		expect(history[0]?.changeId).toBe("change-42");
 		expect(history[0]?.outcome).toBe("applied");
+		expect(history[0]?.outcomeEvidenceSource).toBe("gitlab-deployment");
+		expect(history[0]?.outcomeEvidenceSha).toBe("merge-sha");
 		expect(history[0]?.pipelineId).toBe("10");
 		expect(await standardsForRepository(store, repositoryPath)).toEqual([
 			{
@@ -210,6 +287,317 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 				adrUrl: "",
 			},
 		]);
+		await store.close();
+	});
+
+	test("Landing Zone outcome authority preserves verified applies and clears stale source evidence", async () => {
+		const store = new LadybugStore(join(dir, "lz-outcome-authority"));
+		await store.init();
+		await recordLandingZoneRepository(store, {
+			group: { id: "gitlab-group:pvhcorp", path: "pvhcorp" },
+			repository: {
+				id: "gitlab-project:42",
+				groupId: "gitlab-group:pvhcorp",
+				path: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+				name: "aws-lz-account-creator",
+			},
+		});
+		const writeOutcome = async (
+			id: string,
+			outcome: "proposed" | "pipeline-failed" | "applied",
+			source: "gitlab-mr" | "gitlab-pipeline" | "gitlab-deployment",
+			observedAt: string,
+			evidence: { commitSha?: string; pipelineId?: string } = {},
+		) =>
+			recordLandingZoneChange(store, {
+				id,
+				repositoryId: "gitlab-project:42",
+				outcome,
+				outcomeEvidence: { source, observedAt, truncated: false, ...evidence },
+			});
+
+		await writeOutcome("older-deployment", "pipeline-failed", "gitlab-pipeline", "2026-09-22T15:20:00.000Z", {
+			pipelineId: "20",
+		});
+		await writeOutcome("older-deployment", "applied", "gitlab-deployment", "2026-09-22T15:10:00.000Z", {
+			commitSha: "deployed-sha",
+			pipelineId: "10",
+		});
+		await writeOutcome("older-deployment", "proposed", "gitlab-mr", "2026-09-22T15:30:00.000Z");
+
+		await writeOutcome("equal-deployment", "pipeline-failed", "gitlab-pipeline", "2026-09-22T15:20:00.000Z", {
+			pipelineId: "20",
+		});
+		await writeOutcome("equal-deployment", "applied", "gitlab-deployment", "2026-09-22T15:20:00.000Z", {
+			commitSha: "equal-sha",
+		});
+
+		await writeOutcome("reopened", "pipeline-failed", "gitlab-pipeline", "2026-09-22T15:10:00.000Z", {
+			commitSha: "failed-sha",
+			pipelineId: "10",
+		});
+		await writeOutcome("reopened", "proposed", "gitlab-mr", "2026-09-22T15:20:00.000Z");
+		await writeOutcome("reopened", "pipeline-failed", "gitlab-pipeline", "2026-09-22T15:15:00.000Z", {
+			commitSha: "stale-sha",
+			pipelineId: "15",
+		});
+
+		const rows = await store.run<{
+			id: string;
+			outcome: string;
+			source: string;
+			sha: string | null;
+			pipelineId: string | null;
+		}>(
+			"MATCH (c:ConfigChange) WHERE c.id IN $ids RETURN c.id AS id, c.outcome AS outcome, c.outcomeEvidenceSource AS source, c.outcomeEvidenceSha AS sha, c.outcomeEvidencePipelineId AS pipelineId ORDER BY c.id",
+			{ ids: ["older-deployment", "equal-deployment", "reopened"] },
+		);
+		expect(rows).toEqual([
+			{
+				id: "equal-deployment",
+				outcome: "applied",
+				source: "gitlab-deployment",
+				sha: "equal-sha",
+				pipelineId: null,
+			},
+			{
+				id: "older-deployment",
+				outcome: "applied",
+				source: "gitlab-deployment",
+				sha: "deployed-sha",
+				pipelineId: "10",
+			},
+			{ id: "reopened", outcome: "proposed", source: "gitlab-mr", sha: null, pipelineId: null },
+		]);
+		await store.close();
+	});
+
+	test("Landing Zone applied replay preserves newer evidence and orders equal observations by retrieval time", async () => {
+		const store = new LadybugStore(join(dir, "lz-applied-replay-order"));
+		await store.init();
+		await recordLandingZoneRepository(store, {
+			group: { id: "gitlab-group:pvhcorp", path: "pvhcorp" },
+			repository: {
+				id: "gitlab-project:42",
+				groupId: "gitlab-group:pvhcorp",
+				path: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+				name: "aws-lz-account-creator",
+			},
+		});
+		const writeApplied = async (input: {
+			commitSha: string;
+			source: "gitlab-deployment" | "live-state";
+			observedAt: string;
+			retrievedAt: string;
+			pipelineId?: string;
+			truncated: boolean;
+		}) =>
+			recordLandingZoneChange(store, {
+				id: "applied-replay",
+				repositoryId: "gitlab-project:42",
+				commitSha: input.commitSha,
+				lastSyncedAt: input.retrievedAt,
+				source: input.source,
+				truncated: input.truncated,
+				outcome: "applied",
+				outcomeEvidence: {
+					source: input.source,
+					observedAt: input.observedAt,
+					retrievedAt: input.retrievedAt,
+					commitSha: input.commitSha,
+					...(input.pipelineId && { pipelineId: input.pipelineId }),
+					truncated: input.truncated,
+				},
+			});
+		const readApplied = async () =>
+			store.run<{
+				outcome: string;
+				observedAt: string;
+				retrievedAt: string;
+				commitSha: string;
+				source: string;
+				sha: string;
+				pipelineId: string | null;
+				truncated: boolean;
+				evidenceTruncated: boolean;
+			}>(
+				"MATCH (c:ConfigChange {id: $id}) RETURN c.outcome AS outcome, c.outcomeObservedAt AS observedAt, c.outcomeRetrievedAt AS retrievedAt, c.commitSha AS commitSha, c.source AS source, c.outcomeEvidenceSha AS sha, c.outcomeEvidencePipelineId AS pipelineId, c.outcomeEvidenceTruncated AS truncated, c.evidenceTruncated AS evidenceTruncated",
+				{ id: "applied-replay" },
+			);
+
+		await writeApplied({
+			commitSha: "newer-sha",
+			source: "gitlab-deployment",
+			observedAt: "2026-09-22T16:00:00.000Z",
+			retrievedAt: "2026-09-22T16:01:00.000Z",
+			pipelineId: "200",
+			truncated: true,
+		});
+		await writeApplied({
+			commitSha: "older-sha",
+			source: "live-state",
+			observedAt: "2026-09-22T15:00:00.000Z",
+			retrievedAt: "2026-09-22T15:01:00.000Z",
+			pipelineId: "100",
+			truncated: false,
+		});
+		expect(await readApplied()).toEqual([
+			{
+				outcome: "applied",
+				observedAt: "2026-09-22T16:00:00.000Z",
+				retrievedAt: "2026-09-22T16:01:00.000Z",
+				commitSha: "newer-sha",
+				source: "gitlab-deployment",
+				sha: "newer-sha",
+				pipelineId: "200",
+				truncated: true,
+				evidenceTruncated: true,
+			},
+		]);
+
+		await writeApplied({
+			commitSha: "equal-sha",
+			source: "live-state",
+			observedAt: "2026-09-22T16:00:00.000Z",
+			retrievedAt: "2026-09-22T16:02:00.000Z",
+			truncated: false,
+		});
+		expect(await readApplied()).toEqual([
+			{
+				outcome: "applied",
+				observedAt: "2026-09-22T16:00:00.000Z",
+				retrievedAt: "2026-09-22T16:02:00.000Z",
+				commitSha: "equal-sha",
+				source: "live-state",
+				sha: "equal-sha",
+				pipelineId: null,
+				truncated: false,
+				evidenceTruncated: false,
+			},
+		]);
+		await store.close();
+	});
+
+	test("Landing Zone equal applied observations converge across reverse insertion order and reject older retrievals", async () => {
+		const store = new LadybugStore(join(dir, "lz-applied-total-order"));
+		await store.init();
+		await recordLandingZoneRepository(store, {
+			group: { id: "gitlab-group:pvhcorp", path: "pvhcorp" },
+			repository: {
+				id: "gitlab-project:42",
+				groupId: "gitlab-group:pvhcorp",
+				path: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+				name: "aws-lz-account-creator",
+			},
+		});
+		type AppliedEvent = {
+			commitSha: string;
+			source: string;
+			evidenceSource: "gitlab-deployment" | "live-state";
+			observedAt: string;
+			retrievedAt: string;
+			pipelineId: string;
+			truncated: boolean;
+		};
+		const writeApplied = (id: string, event: AppliedEvent) =>
+			recordLandingZoneChange(store, {
+				id,
+				repositoryId: "gitlab-project:42",
+				commitSha: event.commitSha,
+				lastSyncedAt: event.retrievedAt,
+				source: event.source,
+				truncated: event.truncated,
+				outcome: "applied",
+				outcomeEvidence: {
+					source: event.evidenceSource,
+					observedAt: event.observedAt,
+					retrievedAt: event.retrievedAt,
+					commitSha: event.commitSha,
+					pipelineId: event.pipelineId,
+					truncated: event.truncated,
+				},
+			});
+		const readApplied = async (id: string) =>
+			(
+				await store.run<{
+					outcome: string;
+					observedAt: string;
+					retrievedAt: string;
+					commitSha: string;
+					lastSyncedAt: string;
+					source: string;
+					evidenceTruncated: boolean;
+					evidenceSource: string;
+					sha: string;
+					pipelineId: string;
+					truncated: boolean;
+				}>(
+					"MATCH (c:ConfigChange {id: $id}) RETURN c.outcome AS outcome, c.outcomeObservedAt AS observedAt, c.outcomeRetrievedAt AS retrievedAt, c.commitSha AS commitSha, c.lastSyncedAt AS lastSyncedAt, c.source AS source, c.evidenceTruncated AS evidenceTruncated, c.outcomeEvidenceSource AS evidenceSource, c.outcomeEvidenceSha AS sha, c.outcomeEvidencePipelineId AS pipelineId, c.outcomeEvidenceTruncated AS truncated",
+					{ id },
+				)
+			)[0];
+
+		const liveStateEvent: AppliedEvent = {
+			commitSha: "live-state-sha",
+			source: "live-state-check",
+			evidenceSource: "live-state",
+			observedAt: "2026-09-22T17:00:00.000Z",
+			retrievedAt: "2026-09-22T17:01:00.000Z",
+			pipelineId: "100",
+			truncated: false,
+		};
+		const deploymentEvent: AppliedEvent = {
+			commitSha: "deployment-sha",
+			source: "gitlab-deployment-page",
+			evidenceSource: "gitlab-deployment",
+			observedAt: "2026-09-22T17:00:00.000Z",
+			retrievedAt: "2026-09-22T17:01:00.000Z",
+			pipelineId: "200",
+			truncated: true,
+		};
+		await writeApplied("equal-forward", liveStateEvent);
+		await writeApplied("equal-forward", deploymentEvent);
+		await writeApplied("equal-reverse", deploymentEvent);
+		await writeApplied("equal-reverse", liveStateEvent);
+
+		const expectedDeployment = {
+			outcome: "applied",
+			observedAt: deploymentEvent.observedAt,
+			retrievedAt: deploymentEvent.retrievedAt,
+			commitSha: deploymentEvent.commitSha,
+			lastSyncedAt: deploymentEvent.retrievedAt,
+			source: deploymentEvent.source,
+			evidenceTruncated: deploymentEvent.truncated,
+			evidenceSource: deploymentEvent.evidenceSource,
+			sha: deploymentEvent.commitSha,
+			pipelineId: deploymentEvent.pipelineId,
+			truncated: deploymentEvent.truncated,
+		};
+		expect(await readApplied("equal-forward")).toEqual(expectedDeployment);
+		expect(await readApplied("equal-reverse")).toEqual(expectedDeployment);
+
+		const newerRetrieval: AppliedEvent = {
+			...deploymentEvent,
+			commitSha: "newer-retrieval-sha",
+			retrievedAt: "2026-09-22T17:02:00.000Z",
+			pipelineId: "300",
+		};
+		const olderRetrieval: AppliedEvent = {
+			...deploymentEvent,
+			commitSha: "older-retrieval-sha",
+			retrievedAt: "2026-09-22T17:01:30.000Z",
+			pipelineId: "999",
+		};
+		await writeApplied("retrieval-order", newerRetrieval);
+		await writeApplied("retrieval-order", olderRetrieval);
+		expect(await readApplied("retrieval-order")).toEqual({
+			...expectedDeployment,
+			commitSha: newerRetrieval.commitSha,
+			retrievedAt: newerRetrieval.retrievedAt,
+			lastSyncedAt: newerRetrieval.retrievedAt,
+			sha: newerRetrieval.commitSha,
+			pipelineId: newerRetrieval.pipelineId,
+		});
 		await store.close();
 	});
 

@@ -13,10 +13,12 @@ import {
 	getWorkspaceRoot,
 	importEnabled,
 	importExternalChanges,
+	landingZoneGitLabImportEnabled,
 	purgeCronEnabled as purgeBackendAvailable,
 	reconcileAll,
 	reconcileEnabled,
 	registerSchedules,
+	runLandingZoneGitLabImportSweep,
 	runTopologySweep,
 	runUncuratedPurgeSweep,
 	topologyCronEnabled as topologyBackendAvailable,
@@ -27,6 +29,14 @@ import { getLogger } from "@devops-agent/observability";
 const log = getLogger("agent:schedules");
 
 let started = false;
+
+export function refreshSchedules(): void {
+	// MCP tools connect lazily after this module's first registration pass. Re-run
+	// the same idempotent global-slot registration so tool-aware backend gates see
+	// the live registry instead of permanently retaining module-load state.
+	started = false;
+	startSchedules();
+}
 
 export function startSchedules(): void {
 	// Module load can run more than once under HMR; register once per module instance.
@@ -64,6 +74,7 @@ export function startSchedules(): void {
 		const workflows = new Map([
 			...loadWorkflows(join(root, "agents", "elastic-iac")),
 			...loadWorkflows(join(root, "agents", "incident-analyzer")),
+			...loadWorkflows(join(root, "agents", "landing-zone-terraform")),
 		]);
 
 		// Backend-availability preconditions -- same checks the old cron files made
@@ -97,15 +108,11 @@ export function startSchedules(): void {
 				"iac-gitlab-import-sweep: GitLab token missing or neither agent-memory backend nor knowledge graph enabled; not registering",
 			);
 		}
+		if (!landingZoneGitLabImportEnabled()) {
+			gate("lz-gitlab-import-sweep", "lz-gitlab-import-sweep: knowledge graph not enabled; not registering");
+		}
 
-		registerSchedules(filtered, workflows, {
-			nodes: {
-				"iac-reconcile-sweep": () => reconcileAll({ source: "cron" }),
-				"kg-topology-sweep": () => runTopologySweep({ source: "cron" }),
-				"kg-purge-sweep": () => runUncuratedPurgeSweep({ source: "cron" }),
-				"iac-gitlab-import-sweep": () => importExternalChanges({ source: "cron" }),
-			},
-		});
+		registerSchedules(filtered, workflows, SCHEDULE_NODE_HANDLERS);
 	} catch (error) {
 		started = false;
 		// SIO-1468: no registration pass ran to take ownership of surviving slots, so
@@ -118,3 +125,13 @@ export function startSchedules(): void {
 		);
 	}
 }
+
+export const SCHEDULE_NODE_HANDLERS = {
+	nodes: {
+		"iac-reconcile-sweep": () => reconcileAll({ source: "cron" }),
+		"kg-topology-sweep": () => runTopologySweep({ source: "cron" }),
+		"kg-purge-sweep": () => runUncuratedPurgeSweep({ source: "cron" }),
+		"iac-gitlab-import-sweep": () => importExternalChanges({ source: "cron" }),
+		"lz-gitlab-import-sweep": () => runLandingZoneGitLabImportSweep(),
+	},
+};

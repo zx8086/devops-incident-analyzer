@@ -51,6 +51,10 @@ tool_mapping:
       - lz_find_representative_examples
     review_evidence:
       - lz_list_open_changes
+      - lz_list_historical_merge_requests
+      - lz_read_merge_request
+      - lz_list_merge_request_pipelines
+      - lz_list_project_deployments
     ci_evidence:
       - lz_read_pipeline_plan
     terraform_topology:

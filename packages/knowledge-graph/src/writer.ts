@@ -4,6 +4,7 @@
 // parameterized MERGE -- values are bound ($params), never interpolated into the
 // Cypher string, so a service name like "); DROP" cannot alter the query.
 
+import { z } from "zod";
 import { validTopologyEdges } from "./reader.ts";
 import {
 	type AdrNode,
@@ -53,6 +54,207 @@ export interface EntityGraph {
 export interface LandingZoneRepositoryRecord {
 	group: GitLabGroupNode;
 	repository: RepositoryNode;
+	provenance?: { source: string; retrievedAt: string; truncated: boolean };
+}
+
+export interface LandingZoneGitLabImportProgress {
+	upperBound: string;
+	expectedTotal?: number;
+	nextPage: number;
+	seenMrIds: string[];
+}
+
+export interface LandingZoneGitLabImportCheckpoint {
+	projectId: string;
+	updatedAfter: string;
+	backfillStartAt?: string;
+	repositoryPath?: string;
+	inProgress?: LandingZoneGitLabImportProgress;
+	pendingMrIids?: number[];
+	pendingCursor?: number;
+	pendingDeploymentScans?: Record<string, { sha: string; nextPage: number; updatedBefore: string }>;
+}
+
+const MAX_PENDING_MERGE_REQUESTS = 1_000;
+
+function validImportProgress(value: unknown): value is LandingZoneGitLabImportProgress {
+	if (typeof value !== "object" || value === null) return false;
+	const progress = value as Partial<LandingZoneGitLabImportProgress>;
+	return (
+		typeof progress.upperBound === "string" &&
+		(progress.expectedTotal === undefined ||
+			(Number.isInteger(progress.expectedTotal) && Number(progress.expectedTotal) >= 0)) &&
+		Number.isInteger(progress.nextPage) &&
+		Number(progress.nextPage) >= 1 &&
+		Array.isArray(progress.seenMrIds) &&
+		progress.seenMrIds.every((id) => typeof id === "string")
+	);
+}
+
+export async function readLandingZoneGitLabImportCheckpoint(
+	store: GraphStore,
+	repository: string,
+): Promise<LandingZoneGitLabImportCheckpoint | undefined> {
+	const rows = await store.run<{ id?: string; updatedAfter?: string; state?: string }>(
+		"MATCH (r:Repository {name: $repository}) RETURN r.id AS id, r.gitlabImportUpdatedAfter AS updatedAfter, r.gitlabImportState AS state",
+		{ repository },
+	);
+	const updatedAfter = rows[0]?.updatedAfter;
+	const projectId = rows[0]?.id?.replace("gitlab-project:", "");
+	if (!updatedAfter || !projectId) return undefined;
+	let inProgress: LandingZoneGitLabImportProgress | undefined;
+	let pendingMrIids: number[] = [];
+	let pendingCursor = 0;
+	let backfillStartAt: string | undefined;
+	let repositoryPath: string | undefined;
+	const pendingDeploymentScans: Record<string, { sha: string; nextPage: number; updatedBefore: string }> = {};
+	if (rows[0]?.state) {
+		const parsed = JSON.parse(rows[0].state) as unknown;
+		const legacyProgress = validImportProgress(parsed) ? parsed : undefined;
+		const state =
+			typeof parsed === "object" && parsed !== null
+				? (parsed as {
+						inProgress?: unknown;
+						pendingMrIids?: unknown;
+						pendingCursor?: unknown;
+						pendingDeploymentScans?: unknown;
+						backfillStartAt?: unknown;
+						repositoryPath?: unknown;
+					})
+				: undefined;
+		if (legacyProgress) {
+			inProgress = legacyProgress;
+		} else if (state) {
+			if (state.inProgress !== undefined && !validImportProgress(state.inProgress))
+				throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+			if (state.backfillStartAt !== undefined && !z.string().datetime().safeParse(state.backfillStartAt).success)
+				throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+			if (state.repositoryPath !== undefined && (typeof state.repositoryPath !== "string" || !state.repositoryPath))
+				throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+			backfillStartAt = state.backfillStartAt as string | undefined;
+			repositoryPath = state.repositoryPath as string | undefined;
+			inProgress = state.inProgress as LandingZoneGitLabImportProgress | undefined;
+			if (state.pendingMrIids !== undefined) {
+				if (
+					!Array.isArray(state.pendingMrIids) ||
+					state.pendingMrIids.length > MAX_PENDING_MERGE_REQUESTS ||
+					!state.pendingMrIids.every((iid) => Number.isInteger(iid) && Number(iid) > 0)
+				)
+					throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+				pendingMrIids = state.pendingMrIids as number[];
+			}
+			if (state.pendingCursor !== undefined) {
+				if (
+					!Number.isInteger(state.pendingCursor) ||
+					Number(state.pendingCursor) < 0 ||
+					Number(state.pendingCursor) >= Math.max(1, pendingMrIids.length)
+				)
+					throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+				pendingCursor = Number(state.pendingCursor);
+			}
+			if (state.pendingDeploymentScans !== undefined) {
+				if (
+					typeof state.pendingDeploymentScans !== "object" ||
+					state.pendingDeploymentScans === null ||
+					Array.isArray(state.pendingDeploymentScans)
+				)
+					throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+				for (const [iid, scan] of Object.entries(state.pendingDeploymentScans)) {
+					const numericIid = Number(iid);
+					if (
+						!Number.isInteger(numericIid) ||
+						numericIid <= 0 ||
+						!pendingMrIids.includes(numericIid) ||
+						typeof scan !== "object" ||
+						scan === null ||
+						typeof (scan as { sha?: unknown }).sha !== "string" ||
+						(scan as { sha: string }).sha.length < 1 ||
+						(scan as { sha: string }).sha.length > 128 ||
+						!Number.isInteger((scan as { nextPage?: unknown }).nextPage) ||
+						Number((scan as { nextPage: number }).nextPage) < 1 ||
+						!z
+							.string()
+							.datetime()
+							.safeParse((scan as { updatedBefore?: unknown }).updatedBefore).success
+					)
+						throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+					pendingDeploymentScans[iid] = scan as { sha: string; nextPage: number; updatedBefore: string };
+				}
+			}
+		} else {
+			throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+		}
+	}
+	return {
+		projectId,
+		updatedAfter,
+		...(backfillStartAt && { backfillStartAt }),
+		...(repositoryPath && { repositoryPath }),
+		...(inProgress && { inProgress }),
+		...(pendingMrIids.length > 0 && { pendingMrIids }),
+		...(pendingMrIids.length > 0 && { pendingCursor }),
+		...(Object.keys(pendingDeploymentScans).length > 0 && { pendingDeploymentScans }),
+	};
+}
+
+export async function recordLandingZoneGitLabImportCheckpoint(
+	store: GraphStore,
+	projectId: string,
+	checkpoint: Omit<LandingZoneGitLabImportCheckpoint, "projectId">,
+): Promise<void> {
+	const pendingIids = checkpoint.pendingMrIids ?? [];
+	const pendingDeploymentScans = checkpoint.pendingDeploymentScans ?? {};
+	if (
+		(checkpoint.backfillStartAt !== undefined &&
+			!z.string().datetime().safeParse(checkpoint.backfillStartAt).success) ||
+		(checkpoint.repositoryPath !== undefined && !checkpoint.repositoryPath) ||
+		pendingIids.length > MAX_PENDING_MERGE_REQUESTS ||
+		!pendingIids.every((iid) => Number.isInteger(iid) && iid > 0) ||
+		!Number.isInteger(checkpoint.pendingCursor ?? 0) ||
+		(checkpoint.pendingCursor ?? 0) < 0 ||
+		(checkpoint.pendingCursor ?? 0) >= Math.max(1, pendingIids.length) ||
+		Object.entries(pendingDeploymentScans).some(([iid, scan]) => {
+			const numericIid = Number(iid);
+			return (
+				!Number.isInteger(numericIid) ||
+				numericIid <= 0 ||
+				!pendingIids.includes(numericIid) ||
+				typeof scan.sha !== "string" ||
+				scan.sha.length < 1 ||
+				scan.sha.length > 128 ||
+				!Number.isInteger(scan.nextPage) ||
+				scan.nextPage < 1 ||
+				!z.string().datetime().safeParse(scan.updatedBefore).success
+			);
+		})
+	) {
+		throw new Error("Invalid bounded GitLab pending merge request queue");
+	}
+	const repositoryId = `gitlab-project:${projectId}`;
+	const repositories = await store.run<{ id?: string }>(
+		"MATCH (r:Repository {id: $repositoryId}) RETURN r.id AS id LIMIT 1",
+		{ repositoryId },
+	);
+	if (!repositories[0]?.id) throw new Error(`GitLab import checkpoint repository does not exist: ${repositoryId}`);
+	await store.run(
+		"MATCH (r:Repository {id: $repositoryId}) SET r.gitlabImportUpdatedAfter = $updatedAfter, r.gitlabImportCheckpointedAt = $checkpointedAt, r.gitlabImportState = $state",
+		{
+			repositoryId,
+			updatedAfter: checkpoint.updatedAfter,
+			checkpointedAt: new Date().toISOString(),
+			state:
+				checkpoint.inProgress || pendingIids.length > 0 || checkpoint.backfillStartAt || checkpoint.repositoryPath
+					? JSON.stringify({
+							...(checkpoint.backfillStartAt && { backfillStartAt: checkpoint.backfillStartAt }),
+							...(checkpoint.repositoryPath && { repositoryPath: checkpoint.repositoryPath }),
+							...(checkpoint.inProgress && { inProgress: checkpoint.inProgress }),
+							pendingMrIids: pendingIids,
+							pendingCursor: checkpoint.pendingCursor ?? 0,
+							...(Object.keys(pendingDeploymentScans).length > 0 && { pendingDeploymentScans }),
+						})
+					: "",
+		},
+	);
 }
 
 export async function recordLandingZoneRepository(
@@ -63,11 +265,19 @@ export async function recordLandingZoneRepository(
 	const group = GitLabGroupNodeSchema.parse({ ...record.group, lastSyncedAt });
 	const repository = RepositoryNodeSchema.parse({ ...record.repository, lastSyncedAt });
 	await store.run(
-		"MERGE (g:GitLabGroup {id: $id}) SET g.path = $path, g.name = coalesce($name, g.name), g.webUrl = coalesce($webUrl, g.webUrl), g.lastSyncedAt = $lastSyncedAt",
-		{ id: group.id, path: group.path, name: group.name ?? null, webUrl: group.webUrl ?? null, lastSyncedAt },
+		"MERGE (g:GitLabGroup {id: $id}) SET g.path = $path, g.name = coalesce($name, g.name), g.webUrl = coalesce($webUrl, g.webUrl), g.lastSyncedAt = $lastSyncedAt, g.source = coalesce($source, g.source), g.evidenceTruncated = coalesce($evidenceTruncated, g.evidenceTruncated)",
+		{
+			id: group.id,
+			path: group.path,
+			name: group.name ?? null,
+			webUrl: group.webUrl ?? null,
+			lastSyncedAt,
+			source: record.provenance?.source ?? null,
+			evidenceTruncated: record.provenance?.truncated ?? null,
+		},
 	);
 	await store.run(
-		"MERGE (r:Repository {id: $id}) SET r.groupId = $groupId, r.path = $path, r.name = coalesce($name, r.name), r.defaultBranch = coalesce($defaultBranch, r.defaultBranch), r.webUrl = coalesce($webUrl, r.webUrl), r.commitSha = coalesce($commitSha, r.commitSha), r.lastSyncedAt = $lastSyncedAt",
+		"MERGE (r:Repository {id: $id}) SET r.groupId = $groupId, r.path = $path, r.name = coalesce($name, r.name), r.defaultBranch = coalesce($defaultBranch, r.defaultBranch), r.webUrl = coalesce($webUrl, r.webUrl), r.commitSha = coalesce($commitSha, r.commitSha), r.lastSyncedAt = $lastSyncedAt, r.source = coalesce($source, r.source), r.evidenceTruncated = coalesce($evidenceTruncated, r.evidenceTruncated)",
 		{
 			id: repository.id,
 			groupId: repository.groupId,
@@ -77,6 +287,8 @@ export async function recordLandingZoneRepository(
 			webUrl: repository.webUrl ?? null,
 			commitSha: repository.commitSha ?? null,
 			lastSyncedAt,
+			source: record.provenance?.source ?? null,
+			evidenceTruncated: record.provenance?.truncated ?? null,
 		},
 	);
 	await store.run(
@@ -148,11 +360,15 @@ export async function recordModuleUsage(store: GraphStore, input: ModuleUsageRec
 export interface LandingZoneChangeRecord {
 	id: string;
 	repositoryId: string;
+	commitSha?: string;
 	rootId?: string;
 	workflow?: string;
 	threadId?: string;
 	summary?: string;
 	createdAt?: string;
+	lastSyncedAt?: string;
+	source?: string;
+	truncated?: boolean;
 	mergeRequest?: {
 		id: string;
 		projectId: string;
@@ -161,18 +377,74 @@ export interface LandingZoneChangeRecord {
 		lastSyncedAt?: string;
 	};
 	outcome?: LandingZoneChangeOutcome;
+	outcomeEvidence?: {
+		source: "gitlab-deployment" | "gitlab-pipeline" | "gitlab-mr" | "live-state";
+		observedAt: string;
+		retrievedAt?: string;
+		commitSha?: string;
+		pipelineId?: string;
+		truncated: boolean;
+	};
+}
+
+const LANDING_ZONE_EVIDENCE_AUTHORITY = {
+	"gitlab-mr": 1,
+	"gitlab-pipeline": 2,
+	"live-state": 3,
+	"gitlab-deployment": 4,
+} as const;
+
+function landingZoneOutcomeOrderKey(change: LandingZoneChangeRecord, evidenceTruncated: boolean): string {
+	const evidenceSource = change.outcomeEvidence?.source;
+	const authorityRank = evidenceSource ? LANDING_ZONE_EVIDENCE_AUTHORITY[evidenceSource] : 0;
+	return JSON.stringify([
+		authorityRank,
+		change.outcome ?? null,
+		evidenceSource ?? null,
+		change.outcomeEvidence?.commitSha ?? null,
+		change.outcomeEvidence?.pipelineId ?? null,
+		change.commitSha ?? null,
+		change.source ?? null,
+		change.lastSyncedAt ?? null,
+		change.truncated ?? null,
+		evidenceTruncated,
+	]);
 }
 
 export async function recordLandingZoneChange(store: GraphStore, change: LandingZoneChangeRecord): Promise<void> {
 	if (!change.id || !change.repositoryId) return;
+	const now = new Date().toISOString();
+	const outcomeObservedAt =
+		change.outcomeEvidence?.observedAt ??
+		change.mergeRequest?.lastSyncedAt ??
+		change.lastSyncedAt ??
+		change.createdAt ??
+		now;
+	const outcomeRetrievedAt = change.outcomeEvidence?.retrievedAt ?? change.lastSyncedAt ?? outcomeObservedAt;
+	const outcomeEvidenceTruncated = change.outcomeEvidence?.truncated ?? change.truncated ?? false;
+	const outcomeOrderKey = landingZoneOutcomeOrderKey(change, outcomeEvidenceTruncated);
+	const outcomeIsAtLeastAsNew =
+		"(c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt > c.outcomeObservedAt OR ($outcomeObservedAt = c.outcomeObservedAt AND (c.outcomeRetrievedAt IS NULL OR c.outcomeRetrievedAt = '' OR $outcomeRetrievedAt > c.outcomeRetrievedAt OR ($outcomeRetrievedAt = c.outcomeRetrievedAt AND (c.outcomeOrderKey IS NULL OR c.outcomeOrderKey = '' OR $outcomeOrderKey >= c.outcomeOrderKey)))))";
+	const acceptsOutcome = `(($outcome = 'applied' AND ($outcomeEvidenceSource = 'gitlab-deployment' OR $outcomeEvidenceSource = 'live-state') AND ((c.outcome IS NULL OR c.outcome = '' OR c.outcome <> 'applied') OR ${outcomeIsAtLeastAsNew})) OR ($outcome <> 'applied' AND (c.outcome IS NULL OR c.outcome = '' OR c.outcome <> 'applied') AND ${outcomeIsAtLeastAsNew}))`;
 	await store.run(
-		"MERGE (c:ConfigChange {id: $id}) SET c.workflow = coalesce($workflow, c.workflow), c.summary = coalesce($summary, c.summary), c.createdAt = coalesce(c.createdAt, $createdAt), c.outcome = CASE WHEN $outcome IS NULL THEN coalesce(c.outcome, 'proposed') WHEN c.outcome = 'applied' THEN c.outcome WHEN $outcome = 'proposed' AND c.outcome IS NOT NULL THEN c.outcome ELSE $outcome END",
+		`MERGE (c:ConfigChange {id: $id}) WITH c, ${acceptsOutcome} AS acceptsOutcome SET c.workflow = coalesce($workflow, c.workflow), c.summary = coalesce($summary, c.summary), c.createdAt = coalesce(c.createdAt, $createdAt), c.commitSha = CASE WHEN acceptsOutcome THEN $commitSha ELSE c.commitSha END, c.lastSyncedAt = CASE WHEN acceptsOutcome THEN $lastSyncedAt ELSE c.lastSyncedAt END, c.source = CASE WHEN acceptsOutcome THEN $source ELSE c.source END, c.evidenceTruncated = CASE WHEN acceptsOutcome THEN $evidenceTruncated ELSE c.evidenceTruncated END, c.outcome = CASE WHEN acceptsOutcome THEN $outcome ELSE c.outcome END, c.outcomeRetrievedAt = CASE WHEN acceptsOutcome THEN $outcomeRetrievedAt ELSE c.outcomeRetrievedAt END, c.outcomeEvidenceSource = CASE WHEN acceptsOutcome THEN $outcomeEvidenceSource ELSE c.outcomeEvidenceSource END, c.outcomeEvidenceSha = CASE WHEN acceptsOutcome THEN $outcomeEvidenceSha ELSE c.outcomeEvidenceSha END, c.outcomeEvidencePipelineId = CASE WHEN acceptsOutcome THEN $outcomeEvidencePipelineId ELSE c.outcomeEvidencePipelineId END, c.outcomeEvidenceTruncated = CASE WHEN acceptsOutcome THEN $outcomeEvidenceTruncated ELSE c.outcomeEvidenceTruncated END, c.outcomeObservedAt = CASE WHEN acceptsOutcome THEN $outcomeObservedAt ELSE c.outcomeObservedAt END, c.outcomeOrderKey = CASE WHEN acceptsOutcome THEN $outcomeOrderKey ELSE c.outcomeOrderKey END`,
 		{
 			id: change.id,
 			workflow: change.workflow ?? null,
 			summary: change.summary ?? null,
-			createdAt: change.createdAt ?? new Date().toISOString(),
+			commitSha: change.commitSha ?? null,
+			createdAt: change.createdAt ?? now,
+			lastSyncedAt: change.lastSyncedAt ?? null,
+			source: change.source ?? null,
+			evidenceTruncated: change.truncated ?? null,
 			outcome: change.outcome ?? null,
+			outcomeObservedAt,
+			outcomeRetrievedAt,
+			outcomeEvidenceSource: change.outcomeEvidence?.source ?? null,
+			outcomeEvidenceSha: change.outcomeEvidence?.commitSha ?? null,
+			outcomeEvidencePipelineId: change.outcomeEvidence?.pipelineId ?? null,
+			outcomeEvidenceTruncated,
+			outcomeOrderKey,
 		},
 	);
 	await store.run(
@@ -222,6 +494,9 @@ export async function recordLandingZoneChange(store: GraphStore, change: Landing
 export interface TerraformPlanRecord {
 	pipelineId: string;
 	plan: TerraformPlanNode;
+	source?: string;
+	lastSyncedAt?: string;
+	truncated?: boolean;
 }
 
 export async function recordTerraformPlan(store: GraphStore, input: TerraformPlanRecord): Promise<void> {
@@ -229,13 +504,16 @@ export async function recordTerraformPlan(store: GraphStore, input: TerraformPla
 	const plan = TerraformPlanNodeSchema.parse(input.plan);
 	await store.run("MERGE (p:Pipeline {id: $pipelineId})", { pipelineId: input.pipelineId });
 	await store.run(
-		"MERGE (tp:TerraformPlan {id: $id}) SET tp.status = coalesce($status, tp.status), tp.summary = coalesce($summary, tp.summary), tp.artifactUrl = coalesce($artifactUrl, tp.artifactUrl), tp.createdAt = coalesce(tp.createdAt, $createdAt)",
+		"MERGE (tp:TerraformPlan {id: $id}) SET tp.status = coalesce($status, tp.status), tp.summary = coalesce($summary, tp.summary), tp.artifactUrl = coalesce($artifactUrl, tp.artifactUrl), tp.createdAt = coalesce(tp.createdAt, $createdAt), tp.source = coalesce($source, tp.source), tp.lastSyncedAt = coalesce($lastSyncedAt, tp.lastSyncedAt), tp.evidenceTruncated = coalesce($evidenceTruncated, tp.evidenceTruncated)",
 		{
 			id: plan.id,
 			status: plan.status ?? null,
 			summary: plan.summary ?? null,
 			artifactUrl: plan.artifactUrl ?? null,
 			createdAt: plan.createdAt ?? new Date().toISOString(),
+			source: input.source ?? null,
+			lastSyncedAt: input.lastSyncedAt ?? null,
+			evidenceTruncated: input.truncated ?? null,
 		},
 	);
 	await store.run(
@@ -713,6 +991,9 @@ interface PipelineRecordBase {
 	status?: string;
 	url?: string;
 	updatedAt?: string;
+	lastSyncedAt?: string;
+	source?: string;
+	truncated?: boolean;
 }
 
 export type PipelineRecord =
@@ -725,13 +1006,16 @@ export async function recordPipeline(store: GraphStore, pipeline: PipelineRecord
 	if (pipeline.mrId && !pipeline.createdAt) throw new Error("Landing Zone pipelines require createdAt");
 	const mrId = pipeline.mrId ?? pipeline.mrUrl;
 	await store.run(
-		"MERGE (pl:Pipeline {id: $id}) SET pl.status = coalesce($status, pl.status), pl.url = coalesce($url, pl.url), pl.createdAt = coalesce(pl.createdAt, $createdAt), pl.updatedAt = coalesce($updatedAt, pl.updatedAt)",
+		"MERGE (pl:Pipeline {id: $id}) SET pl.status = coalesce($status, pl.status), pl.url = coalesce($url, pl.url), pl.createdAt = coalesce(pl.createdAt, $createdAt), pl.updatedAt = coalesce($updatedAt, pl.updatedAt), pl.lastSyncedAt = coalesce($lastSyncedAt, pl.lastSyncedAt), pl.source = coalesce($source, pl.source), pl.evidenceTruncated = coalesce($evidenceTruncated, pl.evidenceTruncated)",
 		{
 			id,
 			status: pipeline.status ?? null,
 			url: pipeline.url ?? null,
 			createdAt: pipeline.createdAt ?? null,
 			updatedAt: pipeline.updatedAt ?? null,
+			lastSyncedAt: pipeline.lastSyncedAt ?? null,
+			source: pipeline.source ?? null,
+			evidenceTruncated: pipeline.truncated ?? null,
 		},
 	);
 	await store.run(
