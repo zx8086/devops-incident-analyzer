@@ -16,16 +16,18 @@ function latestText(messages: BaseMessage[]): string {
 
 const REVIEW_PATTERN = /\b(review|validate|check|plan|assessment|audit)\b/;
 const LEARNING_PATTERN =
-	/\b(learn|teach|example|show me|how does|how do|what is|explain|explanation|summary|guide|documentation)\b/;
+	/\b(learn|teach|example|show me|how|what is|explain|explanation|summary|guide|documentation)\b/;
 const CHANGE_PATTERN = /\b(change|create|add|modify|update|implement)\b/;
 const INFORMATIONAL_ARTIFACT_PATTERN =
-	/^(?:please\s+)?(?:create|write|provide|give(?: me)?|show me|update)\s+(?:an?\s+|the\s+)?(?:review|plan|assessment|audit|check|example|explanation|summary|guide|documentation)\b/;
+	/^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:create|write|provide|give(?: me)?|show me|update)\s+(?:an?\s+|the\s+)?(?:review|plan|assessment|audit|check|example|explanation|summary|guide|documentation)\b/;
 const DIRECT_CHANGE_PATTERN =
 	/^(?:please\s+)?(?:change|create|add|modify|update|implement)\b|\b(?:can you|could you|would you|need to|want to|go ahead and|we should|we must|i should|i need to)\s+(?:change|create|add|modify|update|implement)\b/;
+const CONJUNCTIVE_CHANGE_PATTERN = /\band\s+(?:please\s+)?(?:change|create|add|modify|update|implement)\b/;
 
 function clauseRequestsChange(clause: string): boolean {
 	if (INFORMATIONAL_ARTIFACT_PATTERN.test(clause)) return false;
 	if (DIRECT_CHANGE_PATTERN.test(clause)) return true;
+	if (!/\bhow\b/.test(clause) && CONJUNCTIVE_CHANGE_PATTERN.test(clause)) return true;
 	return CHANGE_PATTERN.test(clause) && !LEARNING_PATTERN.test(clause) && !REVIEW_PATTERN.test(clause);
 }
 
@@ -37,7 +39,7 @@ export async function classifyLandingZoneRequest(state: LandingZoneStateType): P
 	const text = latestText(state.messages);
 	const reviewRequested = REVIEW_PATTERN.test(text);
 	const learningRequested = LEARNING_PATTERN.test(text);
-	const clauses = text.split(/\s*(?:[,;]|\b(?:and|then|also)\b)\s*/).filter(Boolean);
+	const clauses = text.split(/\s*(?:[,;]|\b(?:and then|then|also)\b)\s*/).filter(Boolean);
 	const explicitChangeRequested = clauses.some(clauseRequestsChange);
 	let intent: LandingZoneIntent = "understand";
 	if (explicitChangeRequested) intent = "propose-change";

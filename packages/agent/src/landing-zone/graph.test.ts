@@ -144,6 +144,31 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.outcome).toBe("answered");
 	});
 
+	test("keeps change verbs inside an explanatory how-clause informational", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{
+				messages: [new HumanMessage("Explain the process, including how you create and update VPC subnets")],
+				requestId: "request-explanatory-how",
+			},
+			{ configurable: { thread_id: "thread-explanatory-how" } },
+		);
+
+		expect(result.intent).toBe("learn");
+		expect(result.outcome).toBe("answered");
+	});
+
+	test("treats a modal request to create a plan as review work", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage("Could you create a plan for the network?")], requestId: "request-modal-plan" },
+			{ configurable: { thread_id: "thread-modal-plan" } },
+		);
+
+		expect(result.intent).toBe("review");
+		expect(result.outcome).toBe("answered");
+	});
+
 	test("fails closed for a comma-separated mutation after an informational artifact", async () => {
 		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
 		const result = await graph.invoke(
