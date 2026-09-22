@@ -299,6 +299,11 @@ describe("atlassian-api.yaml runbook_lookup is scoped to procedural docs (SIO-18
 		const tool = atlassianTool();
 		if (!tool) return;
 		for (const q of [
+			// The direct phrasings, which are the likely ones and which the first round missed.
+			"find the runbook for this Couchbase timeout",
+			"is there a playbook for the kafka consumer failure",
+			"show me the ops doc for these gateway 504s",
+			"runbook for the styles-v3 outage",
 			"what are the remediation steps for this couchbase timeout",
 			"how do I fix this kafka consumer failure",
 			"what should I do about the gateway 504s",
@@ -318,6 +323,9 @@ describe("atlassian-api.yaml runbook_lookup is scoped to procedural docs (SIO-18
 			"how do I get access to the prd account",
 			"how to deploy the order service",
 			"change the log level on prana",
+			"where is the deployment runbook",
+			"the onboarding doc for new engineers",
+			"how to request access to the bastion",
 		]) {
 			expect({ q, matched: matchActionsByKeywords(q, tool).includes("runbook_lookup") }).toEqual({
 				q,
