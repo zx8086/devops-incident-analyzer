@@ -10,6 +10,7 @@ import {
 	classifyLandingZoneRequest,
 	createLandingZoneEvidenceNode,
 	joinLandingZoneEvidence,
+	recallLandingZoneMemory,
 	reconcileLandingZoneEvidence,
 	resolveLandingZoneScope,
 	selectPvhKnowledge,
@@ -41,6 +42,7 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		.addNode("bootstrap", bootstrapLandingZone)
 		.addNode("classifyRequest", classifyLandingZoneRequest)
 		.addNode("resolveScope", resolveLandingZoneScope)
+		.addNode("recallMemory", recallLandingZoneMemory)
 		.addNode("selectPvhKnowledge", selectPvhKnowledge)
 		.addNode("collectGitLabEvidence", createLandingZoneEvidenceNode("gitlab", evidenceOptions))
 		.addNode("collectOkfEvidence", createLandingZoneEvidenceNode("pvh-okf", evidenceOptions))
@@ -57,7 +59,8 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		.addEdge(START, "bootstrap")
 		.addEdge("bootstrap", "classifyRequest")
 		.addEdge("classifyRequest", "resolveScope")
-		.addEdge("resolveScope", "selectPvhKnowledge")
+		.addEdge("resolveScope", "recallMemory")
+		.addEdge("recallMemory", "selectPvhKnowledge")
 		.addEdge("joinEvidence", "reconcileEvidence")
 		.addEdge("reconcileEvidence", "assessRisk")
 		.addEdge("assessRisk", "answerQuestion")

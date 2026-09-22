@@ -84,6 +84,7 @@ describe("loadAgent(landing-zone-terraform)", () => {
 		const agent = loadLandingZoneAgent();
 
 		expect(agent.manifest.name).toBe("pvh-landing-zone-terraform-agent");
+		expect([...agent.skills.keys()]).toContain("search-memory");
 		expect(agent.manifest.tools).toEqual(["landing-zone"]);
 		expect(agent.hooks?.bootstrap?.steps).toEqual([
 			"load_live_memory",

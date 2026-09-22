@@ -5,7 +5,7 @@ import type { EvidenceItem, EvidenceSource } from "@devops-agent/shared";
 import { HumanMessage } from "@langchain/core/messages";
 import type { LandingZoneEvidenceCollectors } from "./evidence.ts";
 import { buildLandingZoneGraph } from "./graph.ts";
-import { assessLandingZoneRisk } from "./nodes.ts";
+import { answerLandingZoneQuestion, assessLandingZoneRisk } from "./nodes.ts";
 import type { LandingZoneStateType } from "./state.ts";
 import { LandingZoneIntentSchema, LandingZoneStateInputSchema } from "./types.ts";
 
@@ -13,6 +13,7 @@ const EXPECTED_NODES = [
 	"bootstrap",
 	"classifyRequest",
 	"resolveScope",
+	"recallMemory",
 	"selectPvhKnowledge",
 	"collectGitLabEvidence",
 	"collectOkfEvidence",
@@ -32,7 +33,8 @@ const EXPECTED_EDGES = [
 	["__start__", "bootstrap"],
 	["bootstrap", "classifyRequest"],
 	["classifyRequest", "resolveScope"],
-	["resolveScope", "selectPvhKnowledge"],
+	["resolveScope", "recallMemory"],
+	["recallMemory", "selectPvhKnowledge"],
 	["joinEvidence", "reconcileEvidence"],
 	["reconcileEvidence", "assessRisk"],
 	["assessRisk", "answerQuestion"],
@@ -55,6 +57,7 @@ const BASE_STATE_INPUT = {
 	memoryEvidence: null,
 	knowledgeGraphEvidence: null,
 	evidenceResults: [],
+	priorMemory: [],
 	reconciliation: null,
 	risk: null,
 	response: null,
@@ -68,6 +71,7 @@ const BASE_STATE_INPUT = {
 const observedEvidence = {
 	id: "gitlab:account-creator:abc123",
 	claimKey: "account-authoring-surface",
+	claimValue: "accounts/*.yml",
 	source: "gitlab",
 	retrievedAt: "2026-09-22T10:30:00.000Z",
 	status: "observed",
@@ -92,6 +96,7 @@ function proposedChangeState(evidenceResults: EvidenceItem[]): LandingZoneStateT
 		memoryEvidence: null,
 		knowledgeGraphEvidence: null,
 		evidenceResults,
+		priorMemory: [],
 		reconciliation: {
 			status: "pending",
 			conclusion: "Some evidence was collected.",
@@ -190,6 +195,58 @@ describe("Landing Zone required evidence gate", () => {
 
 		expect(result.risk?.blocked).toBeTrue();
 		expect(result.blockedReason).toContain("gitlab");
+	});
+});
+
+describe("Landing Zone memory answer boundary", () => {
+	test("does not expose prior memory in a blocked response", async () => {
+		const result = await answerLandingZoneQuestion({
+			...proposedChangeState([]),
+			blockedReason: "Current GitLab evidence is required.",
+			priorMemory: [
+				{
+					text: "A stale account value.",
+					annotations: {
+						kind: "account-vending",
+						validated_claims: JSON.stringify({ "account-authoring-surface": "accounts/*.yml" }),
+					},
+					advisory: true,
+					requiresLiveRevalidation: true,
+				},
+			],
+		});
+
+		expect(result.response).toBe("Current GitLab evidence is required.");
+		expect(result.response).not.toContain("stale account value");
+	});
+
+	test("shows advisory prior experience only after live evidence aligns", async () => {
+		const result = await answerLandingZoneQuestion({
+			...proposedChangeState([observedEvidence]),
+			intent: "review",
+			blockedReason: null,
+			reconciliation: {
+				status: "aligned",
+				conclusion: "Live evidence is aligned.",
+				comparisons: [],
+				conflicts: [],
+				unavailableSources: [],
+			},
+			priorMemory: [
+				{
+					text: "A previous review used account YAML.",
+					annotations: {
+						kind: "account-vending",
+						validated_claims: JSON.stringify({ "account-authoring-surface": "accounts/*.yml" }),
+					},
+					advisory: true,
+					requiresLiveRevalidation: true,
+				},
+			],
+		});
+
+		expect(result.response).toContain("Prior experience (advisory; revalidate against current live evidence)");
+		expect(result.response).toContain("A previous review used account YAML.");
 	});
 });
 

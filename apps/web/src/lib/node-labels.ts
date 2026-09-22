@@ -112,6 +112,7 @@ export const LANDING_ZONE_NODES: readonly NodeLabel[] = [
 	{ id: "bootstrap", activeLabel: "Starting session", completeLabel: "Session started" },
 	{ id: "classifyRequest", activeLabel: "Classifying request", completeLabel: "Request classified" },
 	{ id: "resolveScope", activeLabel: "Resolving repository", completeLabel: "Repository resolved" },
+	{ id: "recallMemory", activeLabel: "Recalling prior experience", completeLabel: "Prior experience recalled" },
 	{ id: "selectPvhKnowledge", activeLabel: "Selecting PVH knowledge", completeLabel: "PVH knowledge selected" },
 	{ id: "collectGitLabEvidence", activeLabel: "Reading GitLab", completeLabel: "GitLab evidence read" },
 	{ id: "collectOkfEvidence", activeLabel: "Reading PVH standards", completeLabel: "PVH standards read" },

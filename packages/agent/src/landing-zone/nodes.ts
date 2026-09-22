@@ -9,6 +9,7 @@ import {
 	type LandingZoneEvidenceCollectors,
 } from "./evidence.ts";
 import { selectLandingZoneKnowledge } from "./knowledge-selector.ts";
+import { memoryEnrichLandingZone, recordLandingZoneTurn, renderLandingZonePriorMemory } from "./memory.ts";
 import { reconcileEvidence } from "./reconciliation.ts";
 import { assessRisk } from "./risk.ts";
 import type { LandingZoneStateType } from "./state.ts";
@@ -70,6 +71,7 @@ export async function bootstrapLandingZone(state: LandingZoneStateType): Promise
 		awsApiEvidence: null,
 		memoryEvidence: null,
 		knowledgeGraphEvidence: null,
+		priorMemory: [],
 	};
 }
 
@@ -103,6 +105,10 @@ export async function resolveLandingZoneScope(state: LandingZoneStateType): Prom
 export async function selectPvhKnowledge(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
 	const selection = selectLandingZoneKnowledge(state.intent, state.repositoryScope, [latestText(state.messages)]);
 	return { repositoryScope: selection.repositories, selectedKnowledge: selection.entries };
+}
+
+export async function recallLandingZoneMemory(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
+	return memoryEnrichLandingZone(state);
 }
 
 export interface LandingZoneEvidenceNodeOptions {
@@ -231,14 +237,19 @@ export async function answerLandingZoneQuestion(state: LandingZoneStateType): Pr
 	}
 	const conclusion = state.reconciliation?.conclusion ?? "No evidence conclusion is available.";
 	const limits = state.risk?.reasons ?? [];
-	const response = limits.length > 0 ? `${conclusion} Limits: ${limits.join(" ")}` : conclusion;
+	const answer = limits.length > 0 ? `${conclusion} Limits: ${limits.join(" ")}` : conclusion;
+	const priorMemory =
+		state.reconciliation?.status === "aligned"
+			? renderLandingZonePriorMemory(state.priorMemory, state.evidenceResults)
+			: "";
+	const response = `${answer}${priorMemory}`;
 	return {
 		messages: [new AIMessage(response)],
 		response,
 		outcome: "answered",
 	};
 }
-
-export async function teardownLandingZone(_state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
+export async function teardownLandingZone(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
+	recordLandingZoneTurn(state);
 	return {};
 }
