@@ -8,6 +8,7 @@ import {
 	IAC_RENOVATE_NODES,
 	INCIDENT_MITIGATION_NODES,
 	INCIDENT_NODES,
+	LANDING_ZONE_NODES,
 } from "$lib/node-labels";
 import type { SubAgentProgressEntry } from "$lib/stores/agent-reducer";
 import Icon from "./Icon.svelte";
@@ -28,7 +29,7 @@ let {
 	// multi-minute gap between the "Querying..." and "Aligning" pills with
 	// visible per-datasource activity instead of a single static pill.
 	subAgentProgress?: Map<string, SubAgentProgressEntry>;
-	variant?: "incident" | "iac";
+	variant?: "incident" | "iac" | "landing-zone";
 } = $props();
 
 // For IaC, drift and maker flows are mutually exclusive within a run; render only the list
@@ -57,7 +58,7 @@ const incidentNodes = $derived.by(() => {
 	return [...INCIDENT_NODES, ...mitigation, ...learning];
 });
 
-const NODES = $derived(variant === "iac" ? iacNodes : incidentNodes);
+const NODES = $derived(variant === "iac" ? iacNodes : variant === "landing-zone" ? LANDING_ZONE_NODES : incidentNodes);
 
 const currentActiveLabel = $derived.by(() => {
 	for (const node of NODES) {
@@ -112,7 +113,7 @@ function pillClass(nodeId: string): string {
     </div>
 
     <div class="flex flex-wrap items-center gap-1.5">
-      {#each NODES as node, i}
+      {#each NODES as node, i (node.id)}
         {@const completed = completedNodes.get(node.id)}
         {@const isActive = activeNodes.has(node.id)}
 

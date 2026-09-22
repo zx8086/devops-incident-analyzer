@@ -108,6 +108,18 @@ export const IAC_RENOVATE_NODES: readonly NodeLabel[] = [
 	{ id: "watchRenovateMr", activeLabel: "Watching for MR", completeLabel: "MR found" },
 ] as const;
 
+export const LANDING_ZONE_NODES: readonly NodeLabel[] = [
+	{ id: "bootstrap", activeLabel: "Starting session", completeLabel: "Session started" },
+	{ id: "classifyRequest", activeLabel: "Classifying request", completeLabel: "Request classified" },
+	{ id: "resolveScope", activeLabel: "Resolving repository", completeLabel: "Repository resolved" },
+	{ id: "selectPvhKnowledge", activeLabel: "Selecting PVH knowledge", completeLabel: "PVH knowledge selected" },
+	{ id: "gatherEvidence", activeLabel: "Reading live evidence", completeLabel: "Live evidence read" },
+	{ id: "reconcileEvidence", activeLabel: "Reconciling evidence", completeLabel: "Evidence reconciled" },
+	{ id: "assessRisk", activeLabel: "Assessing risk", completeLabel: "Risk assessed" },
+	{ id: "answerQuestion", activeLabel: "Writing answer", completeLabel: "Answer written" },
+	{ id: "teardown", activeLabel: "Finishing session", completeLabel: "Session finished" },
+] as const;
+
 // Nodes intentionally excluded from every live row (plumbing / covered
 // elsewhere) but still labeled for the historical view and the graph panel.
 // SIO-1641: the incident and IaC plumbing nodes now emit progress events too;
@@ -141,7 +153,7 @@ const EXTRA_COMPLETED_ONLY_NODES: readonly NodeLabel[] = [
 
 // Flat lookup covering every registered node of both graphs, for
 // CompletedProgress.svelte's `completeLabel` and GraphTriagePanel's subtitle.
-export const ALL_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.fromEntries(
+const SHARED_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.fromEntries(
 	[
 		...INCIDENT_NODES,
 		RESPONDER_NODE,
@@ -154,3 +166,20 @@ export const ALL_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.fromE
 		...EXTRA_COMPLETED_ONLY_NODES,
 	].map((n) => [n.id, n]),
 );
+
+const LANDING_ZONE_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.fromEntries(
+	LANDING_ZONE_NODES.map((node) => [node.id, node]),
+);
+
+// Generic lookup retained for callers without agent context. Landing Zone-only
+// node ids are included, while shared bootstrap/teardown ids keep their generic
+// labels so incident and Elastic IaC history is never relabelled by insertion order.
+export const ALL_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.freeze({
+	...LANDING_ZONE_NODE_LABELS,
+	...SHARED_NODE_LABELS,
+});
+
+export function nodeLabelFor(nodeId: string, agent?: string): NodeLabel | undefined {
+	if (agent === "landing-zone-terraform") return LANDING_ZONE_NODE_LABELS[nodeId] ?? ALL_NODE_LABELS[nodeId];
+	return ALL_NODE_LABELS[nodeId];
+}

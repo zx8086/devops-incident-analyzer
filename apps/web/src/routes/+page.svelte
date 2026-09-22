@@ -23,6 +23,7 @@ import RenovateTriggerChoiceCard from "$lib/components/RenovateTriggerChoiceCard
 import StreamingProgress from "$lib/components/StreamingProgress.svelte";
 import SyntheticsDriftCard from "$lib/components/SyntheticsDriftCard.svelte";
 import SyntheticsPushChoiceCard from "$lib/components/SyntheticsPushChoiceCard.svelte";
+import { LANDING_ZONE_BANNER, LANDING_ZONE_EMPTY_STATE, LANDING_ZONE_STARTER_PROMPTS } from "$lib/landing-zone-copy";
 import { agentStore } from "$lib/stores/agent.svelte";
 import { piFleetStore } from "$lib/stores/pi-fleet.svelte";
 
@@ -93,6 +94,7 @@ const hasGateCard = $derived(graphPaused || Boolean(agentStore.hilLearningOutcom
 // agent, not a two-agent assumption. What is no longer binary is the SWITCH and
 // the labels: both come from AGENT_CHOICES, so a third agent needs no edit here.
 const isIac = $derived(agentStore.currentAgent === "elastic-iac");
+const isLandingZone = $derived(agentStore.currentAgent === "landing-zone-terraform");
 const currentChoice = $derived(agentChoice(agentStore.currentAgent));
 const agentTitle = $derived(currentChoice.title);
 const agentSubtitle = $derived(currentChoice.subtitle);
@@ -429,6 +431,10 @@ function handleSuggestionClick(suggestion: string) {
     <div class="bg-gray-50 border-b border-gray-200 px-6 py-2 text-xs text-tommy-navy/80">
       Elastic Cloud IaC maker. For config changes I propose a diff and open a GitLab MR for your review &mdash; CI computes the plan and you merge; I never apply those. A Fleet agent <strong>binary</strong> upgrade has no config file, so on your explicit approval it runs an imperative bulk_upgrade via CI (a live change you can track here).
     </div>
+  {:else if isLandingZone}
+    <div class="bg-gray-50 border-b border-gray-200 px-6 py-2 text-xs text-tommy-navy/80">
+      {LANDING_ZONE_BANNER}
+    </div>
   {:else}
     <DataSourceSelector dataSources={agentStore.availableDataSources} connected={agentStore.connectedDataSources} states={agentStore.stateDataSources} bind:selected={agentStore.selectedDataSources} />
 
@@ -471,6 +477,20 @@ function handleSuggestionClick(suggestion: string) {
               Describe an Elastic Cloud change in plain English (e.g. "upgrade ap-cld to 9.4.2").
               I edit the config, open a GitLab MR for your review, and CI computes the plan on the MR.
             </p>
+          {:else if isLandingZone}
+            <p class="text-sm text-gray-500 max-w-xl">{LANDING_ZONE_EMPTY_STATE}</p>
+            <div class="mt-6 grid w-full max-w-3xl grid-cols-1 gap-2 px-4 sm:grid-cols-2">
+              {#each LANDING_ZONE_STARTER_PROMPTS as starter (starter.id)}
+                <button
+                  type="button"
+                  onclick={() => handleSend(starter.prompt)}
+                  class="min-h-[44px] rounded-lg border border-gray-200 bg-white px-3 py-2 text-left transition-colors hover:border-tommy-accent-blue hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tommy-accent-blue"
+                >
+                  <span class="block text-xs font-semibold text-tommy-navy">{starter.label}</span>
+                  <span class="mt-0.5 block text-xs leading-5 text-gray-500">{starter.prompt}</span>
+                </button>
+              {/each}
+            </div>
           {:else}
             <p class="text-sm text-gray-500 max-w-md">
               I can analyze incidents across Elasticsearch, Kafka, Couchbase Capella, and Kong Konnect.
@@ -500,6 +520,7 @@ function handleSuggestionClick(suggestion: string) {
           {/if}
           <ChatMessage
             message={msg}
+            agent={agentStore.currentAgent}
             index={i}
             isLast={i === agentStore.messages.length - 1}
             isStreaming={false}
@@ -522,7 +543,7 @@ function handleSuggestionClick(suggestion: string) {
         {#if agentStore.activeNodes.size > 0 || agentStore.completedNodes.size > 0}
           <div class="px-4">
             <StreamingProgress
-              variant={isIac ? "iac" : "incident"}
+              variant={isIac ? "iac" : isLandingZone ? "landing-zone" : "incident"}
               activeNodes={agentStore.activeNodes}
               completedNodes={agentStore.completedNodes}
               subAgentProgress={agentStore.subAgentProgress}
@@ -538,6 +559,7 @@ function handleSuggestionClick(suggestion: string) {
         {#if agentStore.currentContent}
           <ChatMessage
             message={{ id: "streaming", role: "assistant", content: agentStore.currentContent }}
+            agent={agentStore.currentAgent}
             index={agentStore.messages.length}
             isLast={true}
             isStreaming={true}
@@ -575,6 +597,7 @@ function handleSuggestionClick(suggestion: string) {
           {#if summaryMsg}
             <ChatMessage
               message={summaryMsg}
+              agent={agentStore.currentAgent}
               index={driftSummaryIndex}
               isLast={true}
               isStreaming={false}
@@ -609,6 +632,7 @@ function handleSuggestionClick(suggestion: string) {
           {#if synthSummaryMsg}
             <ChatMessage
               message={synthSummaryMsg}
+              agent={agentStore.currentAgent}
               index={syntheticsSummaryIndex}
               isLast={true}
               isStreaming={false}
