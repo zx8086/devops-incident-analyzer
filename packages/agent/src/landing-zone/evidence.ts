@@ -31,6 +31,14 @@ export type LandingZoneEvidenceCollectors = Record<EvidenceSource, EvidenceColle
 
 const COLLECTOR_TIMEOUT_MS = 5_000;
 
+const REPOSITORY_PATH_PREFIX: Record<string, string> = {
+	"aws-lz-account-creator": "accounts",
+	"aws-lz-network-core": "environments",
+	"aws-lz-network-workloads": "environments",
+	"aws-lz-post-vending": "workloads",
+	"gitlab-k8s-runners-lzv2": "runners",
+};
+
 interface EvidenceTool {
 	name: string;
 	invoke(input: Record<string, unknown>, config?: { signal?: AbortSignal }): Promise<unknown>;
@@ -50,10 +58,12 @@ function evidence(
 	id: string,
 	summary: string,
 	provenance: EvidenceItem["provenance"],
+	claim?: { key: string; value: string },
 ): EvidenceItem {
 	return {
 		id,
-		claimKey: `${source}-context`,
+		claimKey: claim?.key ?? `${source}-context`,
+		...(claim && { claimValue: claim.value }),
 		source,
 		retrievedAt: new Date().toISOString(),
 		status: "observed",
@@ -61,6 +71,86 @@ function evidence(
 		provenance,
 		freshness: { status: "current" },
 	};
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function parseJson(value: string): unknown {
+	try {
+		return JSON.parse(value);
+	} catch {
+		return undefined;
+	}
+}
+
+function toolPayload(value: unknown): Record<string, unknown> | undefined {
+	if (typeof value === "string") return record(parseJson(value));
+	const direct = record(value);
+	if (!direct) return undefined;
+	const content = direct.content;
+	if (!Array.isArray(content)) return direct;
+	for (const part of content) {
+		const text = record(part)?.text;
+		if (typeof text !== "string") continue;
+		const parsed = record(parseJson(text));
+		if (parsed) return parsed;
+	}
+	return direct;
+}
+
+function resultPaths(value: unknown, field: "contracts" | "examples"): string[] {
+	const entries = toolPayload(value)?.[field];
+	if (!Array.isArray(entries)) return [];
+	return entries.flatMap((entry) => {
+		if (typeof entry === "string") return [entry];
+		const path = record(entry)?.path;
+		return typeof path === "string" ? [path] : [];
+	});
+}
+
+function canonicalSurfacePath(repository: string, path: string): string | undefined {
+	const normalized = path.replaceAll("<application>", "*").replaceAll("<app>", "*").replaceAll("<env>", "*");
+	if (repository === "aws-lz-account-creator" && /^accounts\/[^/]+\.ya?ml$/i.test(normalized)) {
+		return "accounts/*.yml";
+	}
+	if (repository === "aws-lz-network-workloads" && /^environments\/[^/]+\/vpcs\/[^/]+\.ya?ml$/i.test(normalized)) {
+		return "environments/*/vpcs/*.yaml";
+	}
+	if (repository === "aws-lz-network-core" && /^environments\/[^/]+\/WAN\/dns\/[^/]+\.ya?ml$/i.test(normalized)) {
+		return "environments/*/WAN/dns/*.yaml";
+	}
+	if (repository === "aws-lz-network-core" && /^environments\/[^/]+\/WAN\/[^/]+\.ya?ml$/i.test(normalized)) {
+		return "environments/*/WAN/*.yaml";
+	}
+	if (repository === "aws-lz-post-vending" && /^workloads\/[^/]+\.ya?ml$/i.test(normalized)) {
+		return "workloads/*.yml";
+	}
+	if (repository === "gitlab-k8s-runners-lzv2" && /^runners\/[^/]+\/[^/]+\.ya?ml$/i.test(normalized)) {
+		return "runners/*/*.yaml";
+	}
+	if (repository === "dhco-gitlab-terraform" && /^(?!_)[^/]+\.tf$/i.test(normalized)) {
+		return "root-domain/*.tf";
+	}
+	return undefined;
+}
+
+function surfaceClaim(repository: string, paths: string[]): { key: string; value: string } | undefined {
+	const surfaces = [...new Set(paths.flatMap((path) => canonicalSurfacePath(repository, path) ?? []))].sort();
+	if (surfaces.length === 0) return undefined;
+	return { key: `repository:${repository}:authoring-surface`, value: surfaces.join(" | ") };
+}
+
+function knowledgeSurfaceClaim(path: string, content: string): { key: string; value: string } | undefined {
+	const repository = path.match(/^repos\/([^/]+)\.md$/)?.[1];
+	if (!repository) return undefined;
+	const surface = content.match(/# Surface([\s\S]*?)(?=\n# Traps|$)/)?.[1] ?? "";
+	const editSurface = surface.split("**Never edit:**")[0] ?? "";
+	const paths = [...editSurface.matchAll(/`([^`]+)`/g)].map((match) => match[1] ?? "");
+	return surfaceClaim(repository, paths);
 }
 
 async function invokeTool(name: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
@@ -87,8 +177,17 @@ export async function collectGitLabEvidence(
 	if (context.repositories.length === 0) throw new Error("no repository scope was resolved");
 	const results = await Promise.allSettled(
 		context.repositories.map(async (repository) => {
-			const result = await invoke("lz_find_representative_examples", { repository, limit: 5 }, context.signal);
-			return evidence("gitlab", `gitlab:${repository}`, JSON.stringify(result), { repository, path: "." });
+			const result = await invoke(
+				"lz_find_representative_examples",
+				{
+					repository,
+					limit: 5,
+					...(REPOSITORY_PATH_PREFIX[repository] && { path: REPOSITORY_PATH_PREFIX[repository] }),
+				},
+				context.signal,
+			);
+			const claim = surfaceClaim(repository, resultPaths(result, "examples"));
+			return evidence("gitlab", `gitlab:${repository}`, JSON.stringify(result), { repository, path: "." }, claim);
 		}),
 	);
 	const items = results.flatMap((result, index) => {
@@ -156,7 +255,13 @@ export const DEFAULT_LANDING_ZONE_COLLECTORS: LandingZoneEvidenceCollectors = {
 		if (entries.length === 0) throw new Error("no selected PVH knowledge concepts were loaded");
 		return entries.map((entry) => {
 			const path = `${entry.category}/${entry.filename}`;
-			return evidence("pvh-okf", `pvh-okf:${path}`, entry.content, { path });
+			return evidence(
+				"pvh-okf",
+				`pvh-okf:${path}`,
+				entry.content,
+				{ path },
+				knowledgeSurfaceClaim(path, entry.content),
+			);
 		});
 	},
 	"terraform-docs": async () => {

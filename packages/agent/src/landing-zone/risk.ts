@@ -34,7 +34,7 @@ const STOP_RULES: StopRule[] = [
 	},
 	{
 		pattern:
-			/\b(destroy|delete|replace|recreate)\w*\b.*\b(plan|account|kms|network|resource|state)\b|\bplan\b.*\b(destroy|delete|replace|recreate)\w*\b/i,
+			/\b(destroy|delete|remove|replace|recreate)\w*\b.*\b(plan|account|kms|network|vpc|subnet|resource|state)\b|\bplan\b.*\b(destroy|delete|remove|replace|recreate)\w*\b/i,
 		reason: "A destructive plan requires explicit human review and recovery ownership.",
 	},
 	{

@@ -13,6 +13,7 @@ function evidence(
 	return {
 		id,
 		claimKey: "account-authoring-surface",
+		claimValue: summary,
 		source,
 		retrievedAt: "2026-09-22T12:00:00.000Z",
 		status: "observed",
@@ -57,6 +58,34 @@ describe("reconcileEvidence", () => {
 		]);
 
 		expect(comparisons[0]?.pvhStandard?.id).toBe("current");
+	});
+
+	test("aligns equivalent structured claims even when their explanations use different wording", () => {
+		const comparisons = reconcileEvidence([
+			evidence("policy", "pvh-okf", "The supported input is one YAML document per application.", {
+				claimValue: "accounts/*.yml",
+			}),
+			evidence("repo", "gitlab", "Five active files were read below the accounts directory.", {
+				claimValue: "accounts/*.yml",
+			}),
+		]);
+
+		expect(comparisons[0]?.alignment).toBe("aligned");
+	});
+
+	test("does not treat a representative live subset of approved authoring surfaces as a conflict", () => {
+		const comparisons = reconcileEvidence([
+			evidence("policy", "pvh-okf", "Two authoring surfaces are supported.", {
+				claimKey: "repository:aws-lz-network-core:authoring-surface",
+				claimValue: "environments/*/WAN/*.yaml | environments/*/WAN/dns/*.yaml",
+			}),
+			evidence("repo", "gitlab", "The current sample contains a WAN document.", {
+				claimKey: "repository:aws-lz-network-core:authoring-surface",
+				claimValue: "environments/*/WAN/*.yaml",
+			}),
+		]);
+
+		expect(comparisons[0]?.alignment).toBe("aligned");
 	});
 
 	test("never turns accepted-policy and production divergence into an automatic proposal", () => {

@@ -39,19 +39,28 @@ function strongest(items: EvidenceItem[], sources: EvidenceItem["source"][]): Ev
 	return items.filter((item) => sources.includes(item.source)).sort(compareEvidence)[0];
 }
 
-function comparableSummary(item: EvidenceItem | undefined): string | undefined {
+function comparableValue(item: EvidenceItem | undefined): string | undefined {
 	if (!item || item.status === "unverified" || item.freshness.status !== "current") return undefined;
-	return item.summary.trim().toLowerCase().replace(/\s+/g, " ");
+	return item.claimValue?.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function differs(left: EvidenceItem | undefined, right: EvidenceItem | undefined, includeStale = false): boolean {
+function differs(
+	left: EvidenceItem | undefined,
+	right: EvidenceItem | undefined,
+	includeStale = false,
+	rightMayBeSubset = false,
+): boolean {
 	const normalize = (item: EvidenceItem | undefined) =>
 		includeStale && item?.status !== "unverified"
-			? item?.summary.trim().toLowerCase().replace(/\s+/g, " ")
-			: comparableSummary(item);
-	const leftSummary = normalize(left);
-	const rightSummary = normalize(right);
-	return leftSummary !== undefined && rightSummary !== undefined && leftSummary !== rightSummary;
+			? item?.claimValue?.trim().toLowerCase().replace(/\s+/g, " ")
+			: comparableValue(item);
+	const leftValue = normalize(left);
+	const rightValue = normalize(right);
+	if (leftValue !== undefined && rightValue !== undefined && rightMayBeSubset) {
+		const allowed = new Set(leftValue.split(" | "));
+		return rightValue.split(" | ").some((value) => !allowed.has(value));
+	}
+	return leftValue !== undefined && rightValue !== undefined && leftValue !== rightValue;
 }
 
 function comparisonFor(claim: string, items: EvidenceItem[]): StandardsComparison {
@@ -63,9 +72,13 @@ function comparisonFor(claim: string, items: EvidenceItem[]): StandardsCompariso
 		(item): item is EvidenceItem => item !== undefined,
 	);
 	const allCurrent = authoritative.every((item) => item.status === "observed" && item.freshness.status === "current");
-	const pvhLiveConflict = differs(pvhStandard, liveImplementation, true);
-	const contractLiveConflict = differs(terraformContract, liveImplementation, true);
+	const liveSurfaceMayBeSubset = claim.endsWith(":authoring-surface");
+	const pvhLiveConflict = differs(pvhStandard, liveImplementation, true, liveSurfaceMayBeSubset);
+	const contractLiveConflict = differs(terraformContract, liveImplementation, true, liveSurfaceMayBeSubset);
 	const pvhAwsDifference = differs(pvhStandard, awsRecommendation);
+	const authoritativeValuesAvailable = authoritative.every((item) => comparableValue(item) !== undefined);
+	const pvhAwsCorroborated =
+		comparableValue(pvhStandard) !== undefined && comparableValue(pvhStandard) === comparableValue(awsRecommendation);
 	const exceptionRecorded = items.some((item) => /\b(exception|waiver|approved deviation)\b/i.test(item.summary));
 
 	let alignment: StandardsComparison["alignment"] = "unverified";
@@ -77,11 +90,14 @@ function comparisonFor(claim: string, items: EvidenceItem[]): StandardsCompariso
 		} else if (pvhAwsDifference) {
 			alignment = "divergent";
 			action = "explain";
-		} else if (authoritative.length === 1) {
-			alignment = "unresolved";
+		} else if (authoritative.length >= 2 && authoritativeValuesAvailable) {
+			alignment = "aligned";
+			action = "explain";
+		} else if (pvhAwsCorroborated) {
+			alignment = "aligned";
 			action = "explain";
 		} else {
-			alignment = "aligned";
+			alignment = "unresolved";
 			action = "explain";
 		}
 	} else if (authoritative.length > 0) {

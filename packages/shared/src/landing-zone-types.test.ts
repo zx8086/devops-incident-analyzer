@@ -15,6 +15,7 @@ import {
 const baseEvidence = {
 	id: "gitlab:aws-lz-account-creator:abc123:accounts/example.yml",
 	claimKey: "account-authoring-surface",
+	claimValue: "accounts/*.yml",
 	source: "gitlab",
 	retrievedAt: "2026-09-22T10:30:00.000Z",
 	status: "observed",

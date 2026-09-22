@@ -361,4 +361,24 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.risk?.requiresHumanDecision).toBeTrue();
 		expect(result.outcome).toBe("blocked");
 	});
+
+	test.each([
+		["Apply a plan that destroys the KMS key", "destructive plan"],
+		["Allow public access from 0.0.0.0/0", "Public access"],
+		["Grant IAM Action * and Resource *", "Broad IAM"],
+		["Commit a plaintext secret in tfvars", "Secrets and credentials"],
+		["Delete the workload VPC resource", "destructive plan"],
+		["Remove the subnet resource", "destructive plan"],
+		["Migrate backend locking", "Backend and locking"],
+	] as const)("routes high-risk imperative requests through the stop gates: %s", async (request, reason) => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage(request)], requestId: `request-stop-${reason}` },
+			{ configurable: { thread_id: `thread-stop-${reason}` } },
+		);
+
+		expect(result.intent).toBe("propose-change");
+		expect(result.risk?.blocked).toBeTrue();
+		expect(result.risk?.stopConditions.join(" ")).toContain(reason);
+	});
 });
