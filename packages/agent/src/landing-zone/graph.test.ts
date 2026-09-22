@@ -142,6 +142,13 @@ describe("Landing Zone required evidence gate", () => {
 		expect(result.risk?.blocked).toBeTrue();
 		expect(result.blockedReason).toContain("gitlab");
 	});
+
+	test("does not let proposed GitLab evidence substitute for observed repository state", async () => {
+		const result = await assessLandingZoneRisk(proposedChangeState([{ ...observedEvidence, status: "proposed" }]));
+
+		expect(result.risk?.blocked).toBeTrue();
+		expect(result.blockedReason).toContain("gitlab");
+	});
 });
 
 describe("buildLandingZoneGraph", () => {

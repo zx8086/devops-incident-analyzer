@@ -105,10 +105,7 @@ export async function assessLandingZoneRisk(state: LandingZoneStateType): Promis
 	const missingEvidenceSources = requiredEvidenceSources.filter((source) => {
 		if (state.reconciliation?.unavailableSources.includes(source)) return true;
 		return !state.evidenceResults.some(
-			(item) =>
-				item.source === source &&
-				(item.status === "observed" || item.status === "proposed") &&
-				item.freshness.status === "current",
+			(item) => item.source === source && item.status === "observed" && item.freshness.status === "current",
 		);
 	});
 	const blocked =
