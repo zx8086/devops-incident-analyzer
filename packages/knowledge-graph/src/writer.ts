@@ -120,7 +120,15 @@ export async function recordLandingZoneRepository(
 	const repository = RepositoryNodeSchema.parse({ ...record.repository, lastSyncedAt });
 	await store.run(
 		"MERGE (g:GitLabGroup {id: $id}) SET g.path = $path, g.name = coalesce($name, g.name), g.webUrl = coalesce($webUrl, g.webUrl), g.lastSyncedAt = $lastSyncedAt, g.source = coalesce($source, g.source), g.evidenceTruncated = coalesce($evidenceTruncated, g.evidenceTruncated)",
-		{ id: group.id, path: group.path, name: group.name ?? null, webUrl: group.webUrl ?? null, lastSyncedAt, source: record.provenance?.source ?? null, evidenceTruncated: record.provenance?.truncated ?? null },
+		{
+			id: group.id,
+			path: group.path,
+			name: group.name ?? null,
+			webUrl: group.webUrl ?? null,
+			lastSyncedAt,
+			source: record.provenance?.source ?? null,
+			evidenceTruncated: record.provenance?.truncated ?? null,
+		},
 	);
 	await store.run(
 		"MERGE (r:Repository {id: $id}) SET r.groupId = $groupId, r.path = $path, r.name = coalesce($name, r.name), r.defaultBranch = coalesce($defaultBranch, r.defaultBranch), r.webUrl = coalesce($webUrl, r.webUrl), r.commitSha = coalesce($commitSha, r.commitSha), r.lastSyncedAt = $lastSyncedAt, r.source = coalesce($source, r.source), r.evidenceTruncated = coalesce($evidenceTruncated, r.evidenceTruncated)",

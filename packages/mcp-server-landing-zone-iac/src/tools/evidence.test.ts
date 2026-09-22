@@ -132,7 +132,9 @@ describe("representative evidence", () => {
 			perPage: 10,
 		});
 
-		expect(calls).toEqual([["pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator", "2026-09-01T00:00:00.000Z", undefined, 2, 10]]);
+		expect(calls).toEqual([
+			["pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator", "2026-09-01T00:00:00.000Z", undefined, 2, 10],
+		]);
 		expect(result).toMatchObject({
 			project: { id: 42, path: "pvhcorp/dhco/aws/aws-lz-renamed/account-creator" },
 			nextPage: 3,

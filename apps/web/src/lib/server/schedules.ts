@@ -18,9 +18,9 @@ import {
 	reconcileAll,
 	reconcileEnabled,
 	registerSchedules,
+	runLandingZoneGitLabImportSweep,
 	runTopologySweep,
 	runUncuratedPurgeSweep,
-	runLandingZoneGitLabImportSweep,
 	topologyCronEnabled as topologyBackendAvailable,
 } from "@devops-agent/agent";
 import { loadSchedules, loadWorkflows } from "@devops-agent/gitagent-bridge";

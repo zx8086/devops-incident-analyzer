@@ -450,16 +450,18 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 			if (Buffer.byteLength(text, "utf8") > options.maxResponseBytes) {
 				throw new Error(`GitLab response exceeded ${options.maxResponseBytes} bytes`);
 			}
-			const mergeRequests = GitLabHistoricalMergeRequestsResponseSchema.parse(JSON.parse(text) as unknown).map((mr) => ({
-				iid: mr.iid,
-				title: mr.title,
-				state: mr.state,
-				webUrl: mr.web_url,
-				createdAt: mr.created_at,
-				updatedAt: mr.updated_at,
-				...(mr.merge_commit_sha && { mergeCommitSha: mr.merge_commit_sha }),
-				commitSha: mr.sha,
-			}));
+			const mergeRequests = GitLabHistoricalMergeRequestsResponseSchema.parse(JSON.parse(text) as unknown).map(
+				(mr) => ({
+					iid: mr.iid,
+					title: mr.title,
+					state: mr.state,
+					webUrl: mr.web_url,
+					createdAt: mr.created_at,
+					updatedAt: mr.updated_at,
+					...(mr.merge_commit_sha && { mergeCommitSha: mr.merge_commit_sha }),
+					commitSha: mr.sha,
+				}),
+			);
 			const nextPage = Number(response.headers.get("x-next-page"));
 			return { mergeRequests, ...(Number.isInteger(nextPage) && nextPage > 0 && { nextPage }) };
 		},

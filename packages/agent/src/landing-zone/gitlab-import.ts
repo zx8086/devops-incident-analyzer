@@ -1,18 +1,18 @@
 // packages/agent/src/landing-zone/gitlab-import.ts
 
 import {
+	type GraphStore,
 	getGraphStore,
 	isKnowledgeGraphEnabled,
-	recordLandingZoneChange,
+	type LandingZoneChangeRecord,
+	type LandingZoneRepositoryRecord,
+	type PipelineRecord,
 	readLandingZoneGitLabImportCheckpoint,
+	recordLandingZoneChange,
 	recordLandingZoneGitLabImportCheckpoint,
 	recordLandingZoneRepository,
 	recordPipeline,
 	recordTerraformPlan,
-	type GraphStore,
-	type LandingZoneChangeRecord,
-	type LandingZoneRepositoryRecord,
-	type PipelineRecord,
 	type TerraformPlanRecord,
 } from "@devops-agent/knowledge-graph";
 import { z } from "zod";
@@ -72,13 +72,21 @@ export interface LandingZoneImportDependencies {
 	listRepositories?: () => Promise<Array<{ name: string; availability: "active" | "no-git-refs" }>>;
 	readCheckpoint?: (store: GraphStore, repository: string) => Promise<LandingZoneImportCheckpoint | undefined>;
 	recordCheckpoint?: (store: GraphStore, checkpoint: LandingZoneImportCheckpoint) => Promise<void>;
-	listMergeRequests: (input: { repository: string; updatedAfter: string; updatedBefore?: string; page: number }) => Promise<{
+	listMergeRequests: (input: {
+		repository: string;
+		updatedAfter: string;
+		updatedBefore?: string;
+		page: number;
+	}) => Promise<{
 		project: HistoricalProject;
 		mergeRequests: HistoricalMergeRequest[];
 		nextPage?: number;
 		provenance?: HistoricalProvenance;
 	}>;
-	listPipelines: (input: { repository: string; iid: number }) => Promise<{ pipelines: HistoricalPipeline[]; provenance?: HistoricalProvenance }>;
+	listPipelines: (input: {
+		repository: string;
+		iid: number;
+	}) => Promise<{ pipelines: HistoricalPipeline[]; provenance?: HistoricalProvenance }>;
 	store: GraphStore;
 	writers: {
 		recordRepository: (store: GraphStore, record: LandingZoneRepositoryRecord) => Promise<void>;
@@ -129,11 +137,22 @@ const HistoricalMergeRequestPageSchema = z
 		project: HistoricalProjectSchema,
 		mergeRequests: z.array(HistoricalMergeRequestSchema),
 		nextPage: z.number().int().positive().optional(),
-		provenance: z.object({ source: z.literal("gitlab"), retrievedAt: z.string().datetime(), truncated: z.boolean() }).optional(),
+		provenance: z
+			.object({ source: z.literal("gitlab"), retrievedAt: z.string().datetime(), truncated: z.boolean() })
+			.optional(),
 	})
 	.passthrough();
-const HistoricalPipelinePageSchema = z.object({ pipelines: z.array(HistoricalPipelineSchema), provenance: z.object({ source: z.literal("gitlab"), retrievedAt: z.string().datetime(), truncated: z.boolean() }).optional() }).passthrough();
-const RepositoryCatalogSchema = z.object({ repositories: z.array(z.object({ name: z.string(), availability: z.enum(["active", "no-git-refs"]) })) });
+const HistoricalPipelinePageSchema = z
+	.object({
+		pipelines: z.array(HistoricalPipelineSchema),
+		provenance: z
+			.object({ source: z.literal("gitlab"), retrievedAt: z.string().datetime(), truncated: z.boolean() })
+			.optional(),
+	})
+	.passthrough();
+const RepositoryCatalogSchema = z.object({
+	repositories: z.array(z.object({ name: z.string(), availability: z.enum(["active", "no-git-refs"]) })),
+});
 
 interface LandingZoneReadTool {
 	name: string;
@@ -162,9 +181,11 @@ async function invokeReadTool(name: string, input: Record<string, unknown>): Pro
 
 function defaultDependencies(): LandingZoneImportDependencies {
 	return {
-		listRepositories: async () => RepositoryCatalogSchema.parse(await invokeReadTool("lz_list_repositories", {})).repositories,
+		listRepositories: async () =>
+			RepositoryCatalogSchema.parse(await invokeReadTool("lz_list_repositories", {})).repositories,
 		readCheckpoint: readLandingZoneGitLabImportCheckpoint,
-		recordCheckpoint: async (store, checkpoint) => recordLandingZoneGitLabImportCheckpoint(store, checkpoint.projectId, checkpoint),
+		recordCheckpoint: async (store, checkpoint) =>
+			recordLandingZoneGitLabImportCheckpoint(store, checkpoint.projectId, checkpoint),
 		listMergeRequests: async (input) =>
 			HistoricalMergeRequestPageSchema.parse(
 				await invokeReadTool("lz_list_historical_merge_requests", {
@@ -228,7 +249,8 @@ export async function importLandingZoneGitLabHistory(
 		});
 		pages.push(page);
 		if (!page.nextPage) break;
-		if (pageNumber === maxPages) throw new Error(`GitLab history safety cap of ${maxPages} pages exceeded for ${options.repository}`);
+		if (pageNumber === maxPages)
+			throw new Error(`GitLab history safety cap of ${maxPages} pages exceeded for ${options.repository}`);
 	}
 	const firstPage = pages[0];
 	if (!firstPage) return { outcomes };
@@ -266,53 +288,54 @@ export async function importLandingZoneGitLabHistory(
 			const commitSha = mr.mergeCommitSha ?? mr.commitSha;
 			if (!commitSha) throw new Error(`GitLab merge request ${mrId} did not provide a commit SHA`);
 			await resolvedDependencies.writers.recordChange(resolvedDependencies.store, {
-			id: `gitlab:${mrId}:${commitSha}`,
-			repositoryId,
-			summary: mr.title,
-			createdAt: mr.createdAt,
-			lastSyncedAt: page.provenance?.retrievedAt,
-			source: page.provenance?.source,
-			truncated: page.provenance?.truncated,
-			outcome,
-			mergeRequest: {
-				id: mrId,
-				projectId,
-				iid: String(mr.iid),
-				webUrl: mr.webUrl,
-				lastSyncedAt: mr.updatedAt,
-			},
+				id: `gitlab:${mrId}:${commitSha}`,
+				repositoryId,
+				summary: mr.title,
+				createdAt: mr.createdAt,
+				lastSyncedAt: page.provenance?.retrievedAt,
+				source: page.provenance?.source,
+				truncated: page.provenance?.truncated,
+				outcome,
+				mergeRequest: {
+					id: mrId,
+					projectId,
+					iid: String(mr.iid),
+					webUrl: mr.webUrl,
+					lastSyncedAt: mr.updatedAt,
+				},
 			});
 			for (const pipeline of pipelines) {
-			await resolvedDependencies.writers.recordPipeline(resolvedDependencies.store, {
-				mrUrl: mr.webUrl,
-				mrId,
-				projectId,
-				iid: String(mr.iid),
-				pipelineId: pipeline.id,
-				status: pipeline.status,
+				await resolvedDependencies.writers.recordPipeline(resolvedDependencies.store, {
+					mrUrl: mr.webUrl,
+					mrId,
+					projectId,
+					iid: String(mr.iid),
+					pipelineId: pipeline.id,
+					status: pipeline.status,
 					url: pipeline.webUrl,
 					createdAt: pipeline.createdAt,
 					updatedAt: pipeline.updatedAt,
 					lastSyncedAt: pipelinePage.provenance?.retrievedAt,
-				source: pipelinePage.provenance?.source,
-				truncated: pipelinePage.provenance?.truncated,
-			});
-			if (pipeline.hasTerraformPlan) {
-				await resolvedDependencies.writers.recordPlan(resolvedDependencies.store, {
-					pipelineId: String(pipeline.id),
-					plan: { id: `gitlab:plan:${pipeline.id}`, status: pipeline.status, createdAt: pipeline.createdAt },
 					source: pipelinePage.provenance?.source,
-					lastSyncedAt: pipelinePage.provenance?.retrievedAt,
 					truncated: pipelinePage.provenance?.truncated,
 				});
-			}
+				if (pipeline.hasTerraformPlan) {
+					await resolvedDependencies.writers.recordPlan(resolvedDependencies.store, {
+						pipelineId: String(pipeline.id),
+						plan: { id: `gitlab:plan:${pipeline.id}`, status: pipeline.status, createdAt: pipeline.createdAt },
+						source: pipelinePage.provenance?.source,
+						lastSyncedAt: pipelinePage.provenance?.retrievedAt,
+						truncated: pipelinePage.provenance?.truncated,
+					});
+				}
 			}
 		}
 	}
 	if (!projectId) return { outcomes };
-	const checkpoint = options.checkpoint?.inProgress?.completedScan && !observedNewMr
-		? { projectId, updatedAfter: upperBound }
-		: { projectId, updatedAfter, inProgress: { upperBound, seenMrIds: [...seenMrIds].sort(), completedScan: true } };
+	const checkpoint =
+		options.checkpoint?.inProgress?.completedScan && !observedNewMr
+			? { projectId, updatedAfter: upperBound }
+			: { projectId, updatedAfter, inProgress: { upperBound, seenMrIds: [...seenMrIds].sort(), completedScan: true } };
 	await resolvedDependencies.recordCheckpoint?.(resolvedDependencies.store, checkpoint);
 	return { outcomes, checkpoint };
 }

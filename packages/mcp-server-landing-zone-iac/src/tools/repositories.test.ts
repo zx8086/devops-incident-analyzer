@@ -89,10 +89,34 @@ describe("Landing Zone repository allowlist", () => {
 
 describe("verified Terraform deployment evidence", () => {
 	test.each([
-		["review app with an environment", { id: 1, name: "review", status: "success", webUrl: "https://gitlab.com/jobs/1", deploymentTier: "development" }],
-		["verification job with an environment", { id: 2, name: "verify", status: "success", webUrl: "https://gitlab.com/jobs/2", deploymentTier: "production" }],
-		["generic environment job", { id: 3, name: "deploy-preview", status: "success", webUrl: "https://gitlab.com/jobs/3", deploymentTier: "staging" }],
-		["failed apply", { id: 4, name: "terraform-apply", status: "failed", webUrl: "https://gitlab.com/jobs/4", deploymentTier: "production" }],
+		[
+			"review app with an environment",
+			{ id: 1, name: "review", status: "success", webUrl: "https://gitlab.com/jobs/1", deploymentTier: "development" },
+		],
+		[
+			"verification job with an environment",
+			{ id: 2, name: "verify", status: "success", webUrl: "https://gitlab.com/jobs/2", deploymentTier: "production" },
+		],
+		[
+			"generic environment job",
+			{
+				id: 3,
+				name: "deploy-preview",
+				status: "success",
+				webUrl: "https://gitlab.com/jobs/3",
+				deploymentTier: "staging",
+			},
+		],
+		[
+			"failed apply",
+			{
+				id: 4,
+				name: "terraform-apply",
+				status: "failed",
+				webUrl: "https://gitlab.com/jobs/4",
+				deploymentTier: "production",
+			},
+		],
 	] as const)("rejects %s", (_label, job) => {
 		expect(isVerifiedTerraformDeploymentJob(job)).toBe(false);
 	});

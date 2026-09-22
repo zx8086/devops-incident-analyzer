@@ -90,7 +90,8 @@ function registerAll(server: McpServer, client: GitLabReadClient): void {
 	server.registerTool(
 		"lz_list_historical_merge_requests",
 		{
-			description: "List one bounded, resumable page of historical Landing Zone review records after an explicit timestamp.",
+			description:
+				"List one bounded, resumable page of historical Landing Zone review records after an explicit timestamp.",
 			inputSchema: {
 				repository: RepositoryParam,
 				updatedAfter: z.string().datetime().describe("Explicit UTC checkpoint or backfill start timestamp"),
@@ -106,7 +107,8 @@ function registerAll(server: McpServer, client: GitLabReadClient): void {
 	server.registerTool(
 		"lz_list_merge_request_pipelines",
 		{
-			description: "List bounded pipeline metadata for a historical review record, including verified deployment and Terraform-plan signals without plan content.",
+			description:
+				"List bounded pipeline metadata for a historical review record, including verified deployment and Terraform-plan signals without plan content.",
 			inputSchema: {
 				repository: RepositoryParam,
 				iid: z.number().int().positive().describe("GitLab merge request IID"),
