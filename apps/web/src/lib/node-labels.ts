@@ -108,6 +108,18 @@ export const IAC_RENOVATE_NODES: readonly NodeLabel[] = [
 	{ id: "watchRenovateMr", activeLabel: "Watching for MR", completeLabel: "MR found" },
 ] as const;
 
+export const LANDING_ZONE_NODES: readonly NodeLabel[] = [
+	{ id: "bootstrap", activeLabel: "Starting session", completeLabel: "Session started" },
+	{ id: "classifyRequest", activeLabel: "Classifying request", completeLabel: "Request classified" },
+	{ id: "resolveScope", activeLabel: "Resolving repository", completeLabel: "Repository resolved" },
+	{ id: "selectPvhKnowledge", activeLabel: "Selecting PVH knowledge", completeLabel: "PVH knowledge selected" },
+	{ id: "gatherEvidence", activeLabel: "Reading live evidence", completeLabel: "Live evidence read" },
+	{ id: "reconcileEvidence", activeLabel: "Reconciling evidence", completeLabel: "Evidence reconciled" },
+	{ id: "assessRisk", activeLabel: "Assessing risk", completeLabel: "Risk assessed" },
+	{ id: "answerQuestion", activeLabel: "Writing answer", completeLabel: "Answer written" },
+	{ id: "teardown", activeLabel: "Finishing session", completeLabel: "Session finished" },
+] as const;
+
 // Nodes intentionally excluded from every live row (plumbing / covered
 // elsewhere) but still labeled for the historical view and the graph panel.
 // SIO-1641: the incident and IaC plumbing nodes now emit progress events too;
@@ -151,6 +163,7 @@ export const ALL_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.fromE
 		...IAC_DRIFT_NODES,
 		...IAC_FLEET_NODES,
 		...IAC_RENOVATE_NODES,
+		...LANDING_ZONE_NODES,
 		...EXTRA_COMPLETED_ONLY_NODES,
 	].map((n) => [n.id, n]),
 );
