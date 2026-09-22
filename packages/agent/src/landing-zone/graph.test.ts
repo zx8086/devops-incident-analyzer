@@ -381,4 +381,33 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.risk?.blocked).toBeTrue();
 		expect(result.risk?.stopConditions.join(" ")).toContain(reason);
 	});
+
+	test.each([
+		"What permissions does this policy grant?",
+		"Which commit removed the subnet?",
+		"Why was public access allowed?",
+	] as const)("keeps informational questions out of mutation stop gates: %s", async (request) => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage(request)], requestId: `request-question-${request}` },
+			{ configurable: { thread_id: `thread-question-${request}` } },
+		);
+
+		expect(result.intent).not.toBe("propose-change");
+		expect(result.outcome).toBe("answered");
+	});
+
+	test("still fails closed when an informational question appends a destructive request", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{
+				messages: [new HumanMessage("Which commit removed the subnet, and delete the workload VPC resource")],
+				requestId: "request-question-then-delete",
+			},
+			{ configurable: { thread_id: "thread-question-then-delete" } },
+		);
+
+		expect(result.intent).toBe("propose-change");
+		expect(result.risk?.stopConditions.join(" ")).toContain("destructive plan");
+	});
 });

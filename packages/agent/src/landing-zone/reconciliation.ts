@@ -119,6 +119,7 @@ function comparisonFor(claim: string, items: EvidenceItem[]): StandardsCompariso
 export function reconcileEvidence(items: EvidenceItem[]): StandardsComparison[] {
 	const byClaim = new Map<string, EvidenceItem[]>();
 	for (const item of items) {
+		if (item.claimValue === undefined) continue;
 		const group = byClaim.get(item.claimKey) ?? [];
 		group.push(item);
 		byClaim.set(item.claimKey, group);

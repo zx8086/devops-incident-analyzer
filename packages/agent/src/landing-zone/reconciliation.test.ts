@@ -100,13 +100,12 @@ describe("reconcileEvidence", () => {
 		expect(comparison.action).toBe("escalate");
 	});
 
-	test("marks memory-only and empty graph observations as not recorded, not never happened", () => {
+	test("does not manufacture a comparison from memory-only and empty graph context", () => {
 		const comparisons = reconcileEvidence([
-			evidence("memory", "memory", "No matching memory was recorded."),
-			evidence("graph", "knowledge-graph", '{"rows":[]}'),
+			evidence("memory", "memory", "No matching memory was recorded.", { claimValue: undefined }),
+			evidence("graph", "knowledge-graph", '{"rows":[]}', { claimValue: undefined }),
 		]);
 
-		expect(comparisons[0]?.alignment).toBe("unverified");
-		expect(comparisons[0]?.action).toBe("monitor");
+		expect(comparisons).toEqual([]);
 	});
 });

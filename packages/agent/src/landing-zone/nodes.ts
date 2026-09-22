@@ -37,6 +37,7 @@ const CONJUNCTIVE_CHANGE_PATTERN =
 	/\band\s+(?:please\s+)?(?:change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b/;
 const HOW_ACTION_PATTERN =
 	/\b(change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate|review|validate|check|plan|assess|audit)\b/;
+const INFORMATIONAL_QUESTION_PATTERN = /^(?:what|which|who|where|when|why|how|does|do|did|is|are|was|were)\b/;
 
 function clauseRequestsChange(clause: string): boolean {
 	if (INFORMATIONAL_ARTIFACT_PATTERN.test(clause)) return false;
@@ -47,7 +48,12 @@ function clauseRequestsChange(clause: string): boolean {
 		const howIndex = prefix.search(/\bhow\b/);
 		if (howIndex === -1 || !HOW_ACTION_PATTERN.test(prefix.slice(howIndex))) return true;
 	}
-	return CHANGE_PATTERN.test(clause) && !LEARNING_PATTERN.test(clause) && !REVIEW_PATTERN.test(clause);
+	return (
+		CHANGE_PATTERN.test(clause) &&
+		!LEARNING_PATTERN.test(clause) &&
+		!REVIEW_PATTERN.test(clause) &&
+		!INFORMATIONAL_QUESTION_PATTERN.test(clause)
+	);
 }
 
 export async function bootstrapLandingZone(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
