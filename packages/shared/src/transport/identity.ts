@@ -12,6 +12,7 @@ export type McpRole =
 	| "aws-proxy"
 	| "kafka-proxy"
 	| "elastic-iac-mcp"
+	| "landing-zone-iac-mcp"
 	| "knowledge-graph-mcp";
 
 export type McpTransportMode = "stdio" | "http" | "agentcore-proxy";

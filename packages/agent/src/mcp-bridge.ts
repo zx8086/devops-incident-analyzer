@@ -57,6 +57,8 @@ export interface McpClientConfig {
 	awsUrl?: string;
 	// Unified Elastic IaC maker server (terraform + git + gitlab + elastic reads).
 	elasticIacUrl?: string;
+	// Read-only PVH Landing Zone repository, review, pipeline, and topology evidence.
+	landingZoneIacUrl?: string;
 	// SIO-967: read-only knowledge-graph query server. Mounted IN-PROCESS in the web
 	// app (lbug exclusive file lock) and reached over localhost like any other server.
 	knowledgeGraphUrl?: string;
@@ -307,6 +309,9 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 	if (config.elasticIacUrl) {
 		serverEntries.push({ name: "elastic-iac-mcp", url: `${config.elasticIacUrl}/mcp` });
 	}
+	if (config.landingZoneIacUrl) {
+		serverEntries.push({ name: "landing-zone-iac-mcp", url: `${config.landingZoneIacUrl}/mcp` });
+	}
 	if (config.knowledgeGraphUrl) {
 		serverEntries.push({ name: "knowledge-graph-mcp", url: `${config.knowledgeGraphUrl}/mcp` });
 	}
@@ -441,6 +446,7 @@ export const DATASOURCE_TO_MCP_SERVER: Record<string, string> = {
 	atlassian: "atlassian-mcp",
 	aws: "aws-mcp",
 	"elastic-iac": "elastic-iac-mcp",
+	"landing-zone-iac": "landing-zone-iac-mcp",
 	"knowledge-graph": "knowledge-graph-mcp",
 };
 
@@ -464,6 +470,7 @@ export const MCP_SERVER_TO_ROLE: Record<string, McpRole> = {
 	"atlassian-mcp": "atlassian-mcp",
 	"aws-mcp": "aws-proxy",
 	"elastic-iac-mcp": "elastic-iac-mcp",
+	"landing-zone-iac-mcp": "landing-zone-iac-mcp",
 	"knowledge-graph-mcp": "knowledge-graph-mcp",
 };
 

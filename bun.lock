@@ -310,6 +310,23 @@
         "typescript": "catalog:dev",
       },
     },
+    "packages/mcp-server-landing-zone-iac": {
+      "name": "@devops-agent/mcp-server-landing-zone-iac",
+      "version": "0.1.0",
+      "dependencies": {
+        "@devops-agent/shared": "workspace:*",
+        "@modelcontextprotocol/sdk": "catalog:",
+        "@opentelemetry/api": "^1.9.0",
+        "pino": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@biomejs/biome": "catalog:dev",
+        "@types/bun": "catalog:dev",
+        "bun-types": "catalog:dev",
+        "typescript": "catalog:dev",
+      },
+    },
     "packages/memory-pr": {
       "name": "@devops-agent/memory-pr",
       "version": "0.1.0",
@@ -708,6 +725,8 @@
     "@devops-agent/mcp-server-knowledge-graph": ["@devops-agent/mcp-server-knowledge-graph@workspace:packages/mcp-server-knowledge-graph"],
 
     "@devops-agent/mcp-server-konnect": ["@devops-agent/mcp-server-konnect@workspace:packages/mcp-server-konnect"],
+
+    "@devops-agent/mcp-server-landing-zone-iac": ["@devops-agent/mcp-server-landing-zone-iac@workspace:packages/mcp-server-landing-zone-iac"],
 
     "@devops-agent/memory-pr": ["@devops-agent/memory-pr@workspace:packages/memory-pr"],
 
