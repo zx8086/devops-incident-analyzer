@@ -2,6 +2,13 @@
 
 import type { EvidenceSource } from "@devops-agent/shared";
 import { AIMessage, type BaseMessage } from "@langchain/core/messages";
+import {
+	collectEvidenceSource,
+	DEFAULT_LANDING_ZONE_COLLECTORS,
+	evidenceContext,
+	type LandingZoneEvidenceCollectors,
+} from "./evidence.ts";
+import { selectLandingZoneKnowledge } from "./knowledge-selector.ts";
 import type { LandingZoneStateType } from "./state.ts";
 import type { LandingZoneIntent } from "./types.ts";
 
@@ -39,7 +46,17 @@ function clauseRequestsChange(clause: string): boolean {
 }
 
 export async function bootstrapLandingZone(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
-	return { requestId: state.requestId || crypto.randomUUID(), outcome: "pending" };
+	return {
+		requestId: state.requestId || crypto.randomUUID(),
+		outcome: "pending",
+		gitlabEvidence: null,
+		okfEvidence: null,
+		terraformDocsEvidence: null,
+		awsDocsEvidence: null,
+		awsApiEvidence: null,
+		memoryEvidence: null,
+		knowledgeGraphEvidence: null,
+	};
 }
 
 export async function classifyLandingZoneRequest(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
@@ -70,17 +87,47 @@ export async function resolveLandingZoneScope(state: LandingZoneStateType): Prom
 }
 
 export async function selectPvhKnowledge(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
-	return {
-		selectedKnowledge: [
-			"conventions",
-			"shared",
-			...state.repositoryScope.map((repository) => `repos/${repository}.md`),
-		],
+	const selection = selectLandingZoneKnowledge(state.intent, state.repositoryScope, [latestText(state.messages)]);
+	return { repositoryScope: selection.repositories, selectedKnowledge: selection.entries };
+}
+
+export interface LandingZoneEvidenceNodeOptions {
+	collectors?: LandingZoneEvidenceCollectors;
+	awsLiveStateAuthorized?: boolean;
+}
+
+const EVIDENCE_STATE_KEYS = {
+	gitlab: "gitlabEvidence",
+	"pvh-okf": "okfEvidence",
+	"terraform-docs": "terraformDocsEvidence",
+	"aws-docs": "awsDocsEvidence",
+	"aws-api": "awsApiEvidence",
+	memory: "memoryEvidence",
+	"knowledge-graph": "knowledgeGraphEvidence",
+} as const;
+
+export function createLandingZoneEvidenceNode(source: EvidenceSource, options: LandingZoneEvidenceNodeOptions = {}) {
+	return async (state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> => {
+		const result = await collectEvidenceSource(
+			source,
+			evidenceContext(state, options.awsLiveStateAuthorized),
+			options.collectors ?? DEFAULT_LANDING_ZONE_COLLECTORS,
+		);
+		return { [EVIDENCE_STATE_KEYS[source]]: result } as Partial<LandingZoneStateType>;
 	};
 }
 
-export async function gatherLandingZoneEvidence(_state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
-	return { evidenceResults: [] };
+export async function joinLandingZoneEvidence(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
+	const outcomes = [
+		state.gitlabEvidence,
+		state.okfEvidence,
+		state.terraformDocsEvidence,
+		state.awsDocsEvidence,
+		state.awsApiEvidence,
+		state.memoryEvidence,
+		state.knowledgeGraphEvidence,
+	].filter((outcome) => outcome !== null);
+	return { evidenceResults: outcomes.flatMap((outcome) => outcome.evidence) };
 }
 
 export async function reconcileLandingZoneEvidence(
@@ -95,7 +142,18 @@ export async function reconcileLandingZoneEvidence(
 					: "Live evidence not collected yet.",
 			comparisons: [],
 			conflicts: [],
-			unavailableSources: [],
+			unavailableSources: [
+				state.gitlabEvidence,
+				state.okfEvidence,
+				state.terraformDocsEvidence,
+				state.awsDocsEvidence,
+				state.awsApiEvidence,
+				state.memoryEvidence,
+				state.knowledgeGraphEvidence,
+			]
+				.filter((outcome) => outcome?.status === "unavailable")
+				.map((outcome) => outcome?.source)
+				.filter((source): source is EvidenceSource => source !== undefined),
 		},
 	};
 }

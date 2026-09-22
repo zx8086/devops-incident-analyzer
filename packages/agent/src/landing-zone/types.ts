@@ -5,6 +5,7 @@ import {
 	EvidenceItemSchema,
 	type EvidenceReconciliation,
 	EvidenceReconciliationSchema,
+	EvidenceSourceSchema,
 	type LandingZoneRiskAssessment,
 	LandingZoneRiskAssessmentSchema,
 	ResponseCitationSchema,
@@ -17,6 +18,16 @@ export type LandingZoneIntent = z.infer<typeof LandingZoneIntentSchema>;
 
 export const LandingZoneEvidenceResultSchema = EvidenceItemSchema;
 export type LandingZoneEvidenceResult = EvidenceItem;
+
+const EvidenceCollectionOutcomeSchema = z
+	.object({
+		source: EvidenceSourceSchema,
+		status: z.enum(["collected", "unavailable", "skipped"]),
+		evidence: z.array(EvidenceItemSchema),
+		reason: z.string().optional(),
+	})
+	.strict()
+	.nullable();
 
 export const LandingZoneReconciliationSchema = EvidenceReconciliationSchema;
 export type LandingZoneReconciliation = EvidenceReconciliation;
@@ -45,6 +56,13 @@ export const LandingZoneStateInputSchema = z
 		repositoryScope: z.array(z.string()),
 		accountScope: z.array(z.string()),
 		selectedKnowledge: z.array(z.string()),
+		gitlabEvidence: EvidenceCollectionOutcomeSchema,
+		okfEvidence: EvidenceCollectionOutcomeSchema,
+		terraformDocsEvidence: EvidenceCollectionOutcomeSchema,
+		awsDocsEvidence: EvidenceCollectionOutcomeSchema,
+		awsApiEvidence: EvidenceCollectionOutcomeSchema,
+		memoryEvidence: EvidenceCollectionOutcomeSchema,
+		knowledgeGraphEvidence: EvidenceCollectionOutcomeSchema,
 		evidenceResults: z.array(LandingZoneEvidenceResultSchema),
 		reconciliation: LandingZoneReconciliationSchema.nullable(),
 		risk: LandingZoneRiskSchema.nullable(),
