@@ -1,0 +1,15 @@
+name: gitlab-import-sweep
+version: 0.1.0
+description: >
+  Reconciles bounded historical GitLab merge-request and pipeline metadata into
+  the Landing Zone knowledge graph. It requires an explicit checkpoint or
+  start timestamp and never persists plan content. Scheduled execution stays
+  disabled until the initial controlled backfill establishes a checkpoint.
+
+triggers:
+  - type: manual
+
+steps:
+  - name: sweep
+    node: lz-gitlab-import-sweep
+    outputs: []

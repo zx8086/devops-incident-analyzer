@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { findRepresentativeExamples, readPipelinePlan } from "./evidence.ts";
+import {
+	findRepresentativeExamples,
+	listHistoricalMergeRequests,
+	listMergeRequestPipelines,
+	readPipelinePlan,
+} from "./evidence.ts";
 import type { GitLabReadClient } from "./repositories.ts";
 
 function fakeClient(): GitLabReadClient {
@@ -38,6 +43,12 @@ function fakeClient(): GitLabReadClient {
 		},
 		async jobTrace() {
 			return "Plan: 2 to add, 0 to change, 0 to destroy.";
+		},
+		async historicalMergeRequests() {
+			return { mergeRequests: [] };
+		},
+		async mergeRequestPipelines() {
+			return [];
 		},
 	};
 }
@@ -85,5 +96,58 @@ describe("representative evidence", () => {
 
 		expect(result.provenance.truncated).toBe(true);
 		expect(result.warnings).toContain("Repository tree evidence was truncated at 500 entries");
+	});
+
+	test("returns one validated historical page with a resumable GitLab page number", async () => {
+		const client = fakeClient();
+		const calls: unknown[][] = [];
+		client.historicalMergeRequests = async (...args) => {
+			calls.push(args);
+			return {
+				mergeRequests: [
+					{
+						iid: 7,
+						title: "Account update",
+						state: "merged",
+						webUrl: "https://gitlab.example/mr/7",
+						createdAt: "2026-09-02T00:00:00.000Z",
+						updatedAt: "2026-09-03T00:00:00.000Z",
+						commitSha: "abc123",
+					},
+				],
+				nextPage: 3,
+			};
+		};
+
+		const result = await listHistoricalMergeRequests(client, {
+			repository: "aws-lz-account-creator",
+			updatedAfter: "2026-09-01T00:00:00.000Z",
+			page: 2,
+			perPage: 10,
+		});
+
+		expect(calls).toEqual([["pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator", "2026-09-01T00:00:00.000Z", 2, 10]]);
+		expect(result).toMatchObject({ project: { id: 42 }, nextPage: 3, mergeRequests: [{ commitSha: "abc123" }] });
+	});
+
+	test("exposes deployment and plan signals without persisting plan content", async () => {
+		const client = fakeClient();
+		client.mergeRequestPipelines = async () => [
+			{
+				id: 99,
+				status: "success",
+				webUrl: "https://gitlab.example/pipelines/99",
+				createdAt: "2026-09-03T00:00:00.000Z",
+				updatedAt: "2026-09-03T00:01:00.000Z",
+				hasTerraformPlan: true,
+				isVerifiedDeployment: true,
+			},
+		];
+
+		const result = await listMergeRequestPipelines(client, { repository: "aws-lz-account-creator", iid: 7 });
+		expect(result.pipelines).toEqual([
+			expect.objectContaining({ id: 99, hasTerraformPlan: true, isVerifiedDeployment: true }),
+		]);
+		expect(JSON.stringify(result)).not.toContain("Plan: 2 to add");
 	});
 });

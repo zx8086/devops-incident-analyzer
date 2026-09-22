@@ -96,6 +96,19 @@ export {
 } from "./kg-topology.ts";
 export { type BuildLandingZoneGraphOptions, buildLandingZoneGraph } from "./landing-zone/graph.ts";
 export {
+	type HistoricalMergeRequest,
+	type HistoricalPipeline,
+	type HistoricalProject,
+	type LandingZoneGitLabImportSweepResult,
+	type LandingZoneImportCheckpoint,
+	type LandingZoneImportOptions,
+	type LandingZoneImportOutcome,
+	type LandingZoneImportResult,
+	landingZoneGitLabImportEnabled,
+	importLandingZoneGitLabHistory,
+	runLandingZoneGitLabImportSweep,
+} from "./landing-zone/gitlab-import.ts";
+export {
 	buildLandingZoneMemoryAnnotations,
 	type LandingZoneDecisionInput,
 	type LandingZoneMemoryDependencies,

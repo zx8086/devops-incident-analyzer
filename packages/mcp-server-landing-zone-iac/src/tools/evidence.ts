@@ -126,6 +126,42 @@ export async function listOpenChanges(client: GitLabReadClient, input: { reposit
 	};
 }
 
+export async function listHistoricalMergeRequests(
+	client: GitLabReadClient,
+	input: { repository: string; updatedAfter: string; page?: number; perPage?: number },
+) {
+	const repository = resolveRepository(input.repository);
+	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
+	const { project, provenance } = await repositoryProvenance(client, repository);
+	const page = input.page ?? 1;
+	const perPage = input.perPage ?? 20;
+	if (!Number.isInteger(page) || page < 1) throw new Error("page must be a positive integer");
+	if (!Number.isInteger(perPage) || perPage < 1 || perPage > 100) throw new Error("perPage must be between 1 and 100");
+	const result = await client.historicalMergeRequests(repository.projectPath, input.updatedAfter, page, perPage);
+	return {
+		repository,
+		project: { id: project.id, path: repository.projectPath, defaultBranch: project.defaultBranch, headSha: project.headSha },
+		mergeRequests: result.mergeRequests,
+		...(result.nextPage && { nextPage: result.nextPage }),
+		provenance,
+	};
+}
+
+export async function listMergeRequestPipelines(
+	client: GitLabReadClient,
+	input: { repository: string; iid: number },
+) {
+	const repository = resolveRepository(input.repository);
+	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
+	const { provenance } = await repositoryProvenance(client, repository);
+	return {
+		repository,
+		iid: input.iid,
+		pipelines: await client.mergeRequestPipelines(repository.projectPath, input.iid),
+		provenance,
+	};
+}
+
 export async function readPipelinePlan(client: GitLabReadClient, input: { repository: string; pipelineId: number }) {
 	const repository = resolveRepository(input.repository);
 	const { provenance } = await repositoryProvenance(client, repository);

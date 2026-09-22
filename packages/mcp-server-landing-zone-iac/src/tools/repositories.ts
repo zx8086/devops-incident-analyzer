@@ -206,6 +206,28 @@ export interface GitLabPipelineJob {
 	name: string;
 	status: string;
 	webUrl: string;
+	environmentName?: string;
+}
+
+export interface GitLabHistoricalMergeRequest {
+	iid: number;
+	title: string;
+	state: "opened" | "closed" | "merged";
+	webUrl: string;
+	createdAt: string;
+	updatedAt: string;
+	mergeCommitSha?: string;
+	commitSha: string;
+}
+
+export interface GitLabHistoricalPipeline {
+	id: number;
+	status: string;
+	webUrl: string;
+	createdAt: string;
+	updatedAt: string;
+	hasTerraformPlan: boolean;
+	isVerifiedDeployment: boolean;
 }
 
 export interface GitLabReadClient {
@@ -216,6 +238,13 @@ export interface GitLabReadClient {
 	changePaths(projectPath: string, iid: number): Promise<string[]>;
 	pipelineJobs(projectPath: string, pipelineId: number): Promise<GitLabPipelineJob[]>;
 	jobTrace(projectPath: string, jobId: number): Promise<string>;
+	historicalMergeRequests(
+		projectPath: string,
+		updatedAfter: string,
+		page: number,
+		perPage: number,
+	): Promise<{ mergeRequests: GitLabHistoricalMergeRequest[]; nextPage?: number }>;
+	mergeRequestPipelines(projectPath: string, iid: number): Promise<GitLabHistoricalPipeline[]>;
 }
 
 export interface Provenance {
@@ -248,7 +277,34 @@ const GitLabOpenChangesResponseSchema = z.array(
 );
 const GitLabChangeResponseSchema = z.object({ changes: z.array(z.object({ new_path: z.string() })) });
 const GitLabJobsResponseSchema = z.array(
-	z.object({ id: z.number(), name: z.string(), status: z.string(), web_url: z.string() }),
+	z.object({
+		id: z.number(),
+		name: z.string(),
+		status: z.string(),
+		web_url: z.string(),
+		environment: z.object({ name: z.string() }).nullable().optional(),
+	}),
+);
+const GitLabHistoricalMergeRequestsResponseSchema = z.array(
+	z.object({
+		iid: z.number().int(),
+		title: z.string(),
+		state: z.enum(["opened", "closed", "merged"]),
+		web_url: z.string(),
+		created_at: z.string(),
+		updated_at: z.string(),
+		merge_commit_sha: z.string().nullable(),
+		sha: z.string(),
+	}),
+);
+const GitLabHistoricalPipelinesResponseSchema = z.array(
+	z.object({
+		id: z.number().int(),
+		status: z.string(),
+		web_url: z.string(),
+		created_at: z.string(),
+		updated_at: z.string(),
+	}),
 );
 
 interface GitLabClientOptions {
@@ -263,12 +319,17 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const apiRoot = `${options.baseUrl.replace(/\/$/, "")}/api/v4`;
 
-	async function request(path: string): Promise<string> {
+	async function responseFor(path: string): Promise<Response> {
 		const response = await fetchImpl(`${apiRoot}${path}`, {
 			headers: options.token ? { "PRIVATE-TOKEN": options.token } : undefined,
 			signal: AbortSignal.timeout(options.timeoutMs),
 		});
 		if (!response.ok) throw new Error(`GitLab read failed with HTTP ${response.status}`);
+		return response;
+	}
+
+	async function request(path: string): Promise<string> {
+		const response = await responseFor(path);
 		const text = await response.text();
 		if (Buffer.byteLength(text, "utf8") > options.maxResponseBytes) {
 			throw new Error(`GitLab response exceeded ${options.maxResponseBytes} bytes`);
@@ -350,10 +411,63 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 			const jobs = GitLabJobsResponseSchema.parse(
 				await json(`${projectApiPath(projectPath)}/pipelines/${pipelineId}/jobs?per_page=100`),
 			);
-			return jobs.map((job) => ({ id: job.id, name: job.name, status: job.status, webUrl: job.web_url }));
+			return jobs.map((job) => ({
+				id: job.id,
+				name: job.name,
+				status: job.status,
+				webUrl: job.web_url,
+				...(job.environment?.name && { environmentName: job.environment.name }),
+			}));
 		},
 		jobTrace(projectPath, jobId) {
 			return request(`${projectApiPath(projectPath)}/jobs/${jobId}/trace`);
+		},
+		async historicalMergeRequests(projectPath, updatedAfter, page, perPage) {
+			const params = new URLSearchParams({
+				scope: "all",
+				state: "all",
+				order_by: "updated_at",
+				sort: "asc",
+				updated_after: updatedAfter,
+				page: String(page),
+				per_page: String(perPage),
+			});
+			const response = await responseFor(`${projectApiPath(projectPath)}/merge_requests?${params.toString()}`);
+			const text = await response.text();
+			if (Buffer.byteLength(text, "utf8") > options.maxResponseBytes) {
+				throw new Error(`GitLab response exceeded ${options.maxResponseBytes} bytes`);
+			}
+			const mergeRequests = GitLabHistoricalMergeRequestsResponseSchema.parse(JSON.parse(text) as unknown).map((mr) => ({
+				iid: mr.iid,
+				title: mr.title,
+				state: mr.state,
+				webUrl: mr.web_url,
+				createdAt: mr.created_at,
+				updatedAt: mr.updated_at,
+				...(mr.merge_commit_sha && { mergeCommitSha: mr.merge_commit_sha }),
+				commitSha: mr.sha,
+			}));
+			const nextPage = Number(response.headers.get("x-next-page"));
+			return { mergeRequests, ...(Number.isInteger(nextPage) && nextPage > 0 && { nextPage }) };
+		},
+		async mergeRequestPipelines(projectPath, iid) {
+			const pipelines = GitLabHistoricalPipelinesResponseSchema.parse(
+				await json(`${projectApiPath(projectPath)}/merge_requests/${iid}/pipelines?per_page=20`),
+			);
+			return Promise.all(
+				pipelines.slice(0, 20).map(async (pipeline) => {
+					const jobs = await this.pipelineJobs(projectPath, pipeline.id);
+					return {
+						id: pipeline.id,
+						status: pipeline.status,
+						webUrl: pipeline.web_url,
+						createdAt: pipeline.created_at,
+						updatedAt: pipeline.updated_at,
+						hasTerraformPlan: jobs.some((job) => /(^|[-_:])(terraform[-_:]?)?plan($|[-_:])/i.test(job.name)),
+						isVerifiedDeployment: jobs.some((job) => job.status === "success" && Boolean(job.environmentName)),
+					};
+				}),
+			);
 		},
 	};
 }

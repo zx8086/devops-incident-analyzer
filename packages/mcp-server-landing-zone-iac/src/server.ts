@@ -4,7 +4,13 @@ import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/
 import { z } from "zod";
 import pkg from "../package.json" with { type: "json" };
 import type { Config } from "./config.ts";
-import { findRepresentativeExamples, listOpenChanges, readPipelinePlan } from "./tools/evidence.ts";
+import {
+	findRepresentativeExamples,
+	listHistoricalMergeRequests,
+	listMergeRequestPipelines,
+	listOpenChanges,
+	readPipelinePlan,
+} from "./tools/evidence.ts";
 import {
 	createGitLabReadClient,
 	type GitLabReadClient,
@@ -79,6 +85,34 @@ function registerAll(server: McpServer, client: GitLabReadClient): void {
 			annotations: READ_ONLY_ANNOTATIONS,
 		},
 		async (args) => listOpenChanges(client, args).then(textResult).catch(errorResult),
+	);
+
+	server.registerTool(
+		"lz_list_historical_merge_requests",
+		{
+			description: "List one bounded, resumable page of historical Landing Zone review records after an explicit timestamp.",
+			inputSchema: {
+				repository: RepositoryParam,
+				updatedAfter: z.string().datetime().describe("Explicit UTC checkpoint or backfill start timestamp"),
+				page: z.number().int().positive().optional().describe("GitLab page number; defaults to 1"),
+				perPage: z.number().int().min(1).max(100).optional().describe("Bounded page size; defaults to 20"),
+			},
+			annotations: READ_ONLY_ANNOTATIONS,
+		},
+		async (args) => listHistoricalMergeRequests(client, args).then(textResult).catch(errorResult),
+	);
+
+	server.registerTool(
+		"lz_list_merge_request_pipelines",
+		{
+			description: "List bounded pipeline metadata for a historical review record, including verified deployment and Terraform-plan signals without plan content.",
+			inputSchema: {
+				repository: RepositoryParam,
+				iid: z.number().int().positive().describe("GitLab merge request IID"),
+			},
+			annotations: READ_ONLY_ANNOTATIONS,
+		},
+		async (args) => listMergeRequestPipelines(client, args).then(textResult).catch(errorResult),
 	);
 
 	server.registerTool(
