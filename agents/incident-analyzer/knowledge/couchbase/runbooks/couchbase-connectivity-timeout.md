@@ -44,6 +44,7 @@ tools:
   - aws_ec2_describe_network_interfaces
   - aws_ec2_describe_security_groups
   - aws_ec2_describe_flow_logs
+  - aws_ec2_describe_network_acls
   - elasticsearch_search
   - elasticsearch_count_documents
   - elasticsearch_ml_get_anomaly_records
@@ -142,13 +143,37 @@ Refusals that return instantly are a TCP RST, not a timeout. In DEVOPS-1375 Quer
 refused 16-23 of 50 attempts across all three AZ endpoint ENIs while KV TLS 11207 control
 was 50/50 clean.
 
-### C2. Prove the reset originates beyond the PVH boundary
-Use `aws_ec2_describe_vpc_endpoints` for the endpoint and its service name, and
-`aws_ec2_describe_network_interfaces` for the per-AZ endpoint ENIs. Use
-`aws_ec2_describe_security_groups` for the endpoint SG and the client SGs, and
-`aws_ec2_describe_flow_logs` to confirm flow logs are enabled. Flow logs recording ACCEPT
-through the endpoint ENIs followed by a reset place the RST on the Capella-managed NLB
-behind the endpoint service, not at the PVH SG, NACL or endpoint layer.
+### C2. Rule out the PVH side before attributing the reset
+
+This section decides whether to escalate to Couchbase. Escalating on weak evidence wastes
+the vendor's time and returns the ticket; the steps below are what DEVOPS-1375 needed to
+make the attribution stick.
+
+Identify the path first. Use `aws_ec2_describe_vpc_endpoints` for the endpoint and its
+service name, and `aws_ec2_describe_network_interfaces` for the per-AZ endpoint ENIs.
+
+Then clear every PVH-side layer explicitly, because each one can produce a reset:
+- `aws_ec2_describe_security_groups` for the endpoint SG and the client SGs
+- `aws_ec2_describe_network_acls` for the subnets on both sides -- a NACL denial is the
+  layer most often skipped, and unlike an SG it can reject an established flow
+
+Only then read the flow-log records. Note that `aws_ec2_describe_flow_logs` returns the
+flow-log CONFIGURATION, not the records: use it to find whether logging is enabled and
+where it delivers, then query the records themselves with `aws_logs_start_query` and
+`aws_logs_get_query_results` against that destination log group, filtered to the endpoint
+ENIs and the port.
+
+What the records can and cannot establish:
+- An ACCEPT record means the flow passed the SG and NACL evaluation. That EXONERATES those
+  layers; it does not identify who sent the reset.
+- VPC flow logs do not record TCP flags, so a reset is not directly visible in them. The
+  reset is observed at the client (an instant refusal, roughly 0.01s) and the flow log's
+  role is to show the request was accepted outbound rather than dropped locally.
+
+The attribution is therefore a conjunction, not a single observation: PVH SGs and NACLs
+clear, flow logs show ACCEPT through the endpoint ENIs, the client sees an immediate RST,
+and a control port on the same ENIs stays clean. If any of those four is missing, say the
+origin is undetermined rather than naming the far side.
 
 ### C3. Measure the blast radius before escalating
 A Capella-side endpoint fault is multi-service by nature. Use `konnect_query_api_requests`
@@ -166,15 +191,15 @@ own history.
 ## Cross-Datasource Correlation
 - Couchbase healthy + ECS CPU 100 percent + client timeouts = client-side stall, Section A
 - server_duration microseconds + dispatch_duration seconds = transit or dispatch, never the server
-- Instant TCP RST on 18093 + clean 11207 control = Capella-side endpoint fault, Section C
+- Instant TCP RST on 18093 + clean 11207 control on the SAME ENIs = the fault follows the port, not the path; Section C attributes it only once the PVH layers are cleared
 - Error burst across several unrelated services = infrastructure layer, not application code
 - Kafka connector lag alongside these timeouts is usually a downstream symptom, not a cause
 
 ## Escalation Criteria
-- RST confirmed originating beyond the endpoint ENIs: escalate to Couchbase Capella support with the per-AZ connect/refuse counts and the flow-log evidence
+- All four C2 conditions met (SGs and NACLs clear, ACCEPT records through the endpoint ENIs, instant client-side RST, clean control port): escalate to Couchbase Capella support with the per-AZ connect/refuse counts and the flow-log records. Fewer than four: report the origin as undetermined and say which check is missing
 - Query-service ping latency above 60,000ms: page on-call, the cluster is not serving
 - Recurrence within 72 hours of a closed ticket in this family: reopen the parent rather than filing a new report
 - Sustained ECS CPU at 100 percent: the fix is capacity or a client-side profile, not a Couchbase ticket
 
 ## All Tools Used Are Read-Only
-capella_ping, capella_get_cluster_health, capella_get_system_vitals, capella_get_system_nodes, capella_get_cluster_diagnostics_report, capella_get_fatal_requests, capella_get_completed_requests, capella_get_buckets, capella_explain_sql_plus_plus_query, capella_get_index_advisor_recommendations, aws_logs_start_query, aws_logs_get_query_results, aws_cloudwatch_get_metric_data, aws_ecs_describe_services, aws_ecs_describe_tasks, aws_ec2_describe_vpc_endpoints, aws_ec2_describe_network_interfaces, aws_ec2_describe_security_groups, aws_ec2_describe_flow_logs, elasticsearch_search, elasticsearch_count_documents, elasticsearch_ml_get_anomaly_records, konnect_query_api_requests
+capella_ping, capella_get_cluster_health, capella_get_system_vitals, capella_get_system_nodes, capella_get_cluster_diagnostics_report, capella_get_fatal_requests, capella_get_completed_requests, capella_get_buckets, capella_explain_sql_plus_plus_query, capella_get_index_advisor_recommendations, aws_logs_start_query, aws_logs_get_query_results, aws_cloudwatch_get_metric_data, aws_ecs_describe_services, aws_ecs_describe_tasks, aws_ec2_describe_vpc_endpoints, aws_ec2_describe_network_interfaces, aws_ec2_describe_security_groups, aws_ec2_describe_flow_logs, aws_ec2_describe_network_acls, elasticsearch_search, elasticsearch_count_documents, elasticsearch_ml_get_anomaly_records, konnect_query_api_requests

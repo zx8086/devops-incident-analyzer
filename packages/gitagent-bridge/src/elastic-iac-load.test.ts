@@ -167,10 +167,12 @@ describe("knowledge frontmatter stripping across categories (SIO-1282)", () => {
 		// SIO-1640 added the triggered aws-msk-consumer-lag runbook: 11 total, 8 triggered.
 		// SIO-1748 added three triggered runbooks for the workload-state check
 		// families (alb target health, sqs dlq, asg scaling): 14 total, 11 triggered.
-		// SIO-1870 added nine triggered runbooks, one per recurring failure family in
-		// the DEVOPS incident corpus, and the new runbooks-konnect category they
-		// introduced: 24 total, 21 triggered. The three without triggers are
-		// code-change-correlation (deliberate, above) plus the two IAM runbooks.
+		// SIO-1870 added TEN triggered runbooks and the new runbooks-konnect category:
+		// one per recurring failure family in the DEVOPS incident corpus (nine), plus
+		// couchbase-index-degradation for the contributing-factor family DEVOPS-1393
+		// named, which database-slow-queries does not cover. 24 total, 21 triggered.
+		// The three without triggers are code-change-correlation (deliberate, above)
+		// plus the two IAM runbooks.
 		expect(runbooks.filter((k) => k.triggers).length).toBe(21);
 		for (const rb of runbooks) {
 			expect(rb.content.trimStart().startsWith("#")).toBe(true);
