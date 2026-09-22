@@ -7,9 +7,11 @@ import {
 	collectEvidenceSource,
 	collectGitLabEvidence,
 	collectKnowledgeGraphEvidence,
+	DEFAULT_LANDING_ZONE_COLLECTORS,
 	type EvidenceCollectionContext,
 	type LandingZoneEvidenceCollectors,
 } from "./evidence.ts";
+import { reconcileEvidence } from "./reconciliation.ts";
 
 function item(source: EvidenceSource): EvidenceItem {
 	return {
@@ -96,9 +98,11 @@ describe("parallel Landing Zone evidence collection", () => {
 	});
 
 	test("preserves successful GitLab repositories when a sibling read fails", async () => {
+		const inputs: Record<string, unknown>[] = [];
 		const result = await collectGitLabEvidence(
 			{ ...context, repositories: ["aws-lz-account-creator", "aws-lz-network-workloads"] },
 			async (_name, input) => {
+				inputs.push(input);
 				if (input.repository === "aws-lz-network-workloads") throw new Error("not found");
 				return { examples: ["accounts/example.yml"] };
 			},
@@ -107,6 +111,50 @@ describe("parallel Landing Zone evidence collection", () => {
 		expect(result.find((entry) => entry.id === "gitlab:aws-lz-network-workloads:unavailable")?.status).toBe(
 			"unverified",
 		);
+		expect(result[0]?.claimKey).toBe("repository:aws-lz-account-creator:authoring-surface");
+		expect(result[0]?.claimValue).toBe("accounts/*.yml");
+		expect(inputs[0]?.path).toBe("accounts");
+	});
+
+	test("emits the same structured authoring-surface claim from PVH repository knowledge", async () => {
+		const result = await DEFAULT_LANDING_ZONE_COLLECTORS["pvh-okf"](context);
+		const account = result.find((entry) => entry.id === "pvh-okf:repos/aws-lz-account-creator.md");
+
+		expect(account?.claimKey).toBe("repository:aws-lz-account-creator:authoring-surface");
+		expect(account?.claimValue).toBe("accounts/*.yml");
+	});
+
+	test("reconciles default PVH knowledge with representative GitLab paths", async () => {
+		const pvh = await DEFAULT_LANDING_ZONE_COLLECTORS["pvh-okf"](context);
+		const gitlab = await collectGitLabEvidence(context, async () => ({
+			examples: ["accounts/alpha.yml", "accounts/beta.yaml", "accounts/gamma.yml"],
+		}));
+		const comparison = reconcileEvidence([...pvh, ...gitlab]).find(
+			(entry) => entry.claim === "repository:aws-lz-account-creator:authoring-surface",
+		);
+
+		expect(comparison?.alignment).toBe("aligned");
+		expect(comparison?.pvhStandard?.claimValue).toBe("accounts/*.yml");
+		expect(comparison?.liveImplementation?.claimValue).toBe("accounts/*.yml");
+	});
+
+	test("normalizes GitLab project declarations into the PVH repository claim", async () => {
+		const projectContext = {
+			...context,
+			repositories: ["dhco-gitlab-terraform"],
+			selectedKnowledge: ["repos/dhco-gitlab-terraform.md"],
+		};
+		const pvh = await DEFAULT_LANDING_ZONE_COLLECTORS["pvh-okf"](projectContext);
+		const gitlab = await collectGitLabEvidence(projectContext, async () => ({
+			examples: ["active-dir.tf", "aws.tf", "retail.tf"],
+		}));
+		const comparison = reconcileEvidence([...pvh, ...gitlab]).find(
+			(entry) => entry.claim === "repository:dhco-gitlab-terraform:authoring-surface",
+		);
+
+		expect(comparison?.alignment).toBe("aligned");
+		expect(comparison?.pvhStandard?.claimValue).toBe("root-domain/*.tf");
+		expect(comparison?.liveImplementation?.claimValue).toBe("root-domain/*.tf");
 	});
 
 	test("queries the knowledge graph before producing observed evidence", async () => {

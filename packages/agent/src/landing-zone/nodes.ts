@@ -9,6 +9,8 @@ import {
 	type LandingZoneEvidenceCollectors,
 } from "./evidence.ts";
 import { selectLandingZoneKnowledge } from "./knowledge-selector.ts";
+import { reconcileEvidence } from "./reconciliation.ts";
+import { assessRisk } from "./risk.ts";
 import type { LandingZoneStateType } from "./state.ts";
 import type { LandingZoneIntent } from "./types.ts";
 
@@ -25,13 +27,19 @@ function latestText(messages: BaseMessage[]): string {
 const REVIEW_PATTERN = /\b(review|validate|check|plan|assessment|audit)\b/;
 const LEARNING_PATTERN =
 	/\b(learn|teach|example|show me|how|what is|explain|explanation|summary|guide|documentation)\b/;
-const CHANGE_PATTERN = /\b(change|create|add|modify|update|implement)\b/;
+const CHANGE_PATTERN =
+	/\b(change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b/;
 const INFORMATIONAL_ARTIFACT_PATTERN =
 	/^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:create|write|provide|give(?: me)?|show me|update)\s+(?:an?\s+|the\s+)?(?:review|plan|assessment|audit|check|example|explanation|summary|guide|documentation)\b/;
 const DIRECT_CHANGE_PATTERN =
-	/^(?:please\s+)?(?:change|create|add|modify|update|implement)\b|\b(?:can you|could you|would you|need to|want to|go ahead and|we should|we must|i should|i need to)\s+(?:change|create|add|modify|update|implement)\b/;
-const CONJUNCTIVE_CHANGE_PATTERN = /\band\s+(?:please\s+)?(?:change|create|add|modify|update|implement)\b/;
-const HOW_ACTION_PATTERN = /\b(change|create|add|modify|update|implement|review|validate|check|plan|assess|audit)\b/;
+	/^(?:please\s+)?(?:change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b|\b(?:can you|could you|would you|need to|want to|go ahead and|we should|we must|i should|i need to)\s+(?:change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b/;
+const CONJUNCTIVE_CHANGE_PATTERN =
+	/\band\s+(?:please\s+)?(?:change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b/;
+const HOW_ACTION_PATTERN =
+	/\b(change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate|review|validate|check|plan|assess|audit)\b/;
+const INFORMATIONAL_QUESTION_PATTERN = /^(?:what|which|who|where|when|why|how|does|do|did|is|are|was|were)\b/;
+const PROSPECTIVE_QUESTION_CHANGE_PATTERN =
+	/^(?:what|which|who|where|when|why)\b.*(?:\b(?:should|can|could|would|will|may|might)\s+(?:we|i|you|be)\s+|\bto\s+)(?:change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b/;
 
 function clauseRequestsChange(clause: string): boolean {
 	if (INFORMATIONAL_ARTIFACT_PATTERN.test(clause)) return false;
@@ -42,7 +50,13 @@ function clauseRequestsChange(clause: string): boolean {
 		const howIndex = prefix.search(/\bhow\b/);
 		if (howIndex === -1 || !HOW_ACTION_PATTERN.test(prefix.slice(howIndex))) return true;
 	}
-	return CHANGE_PATTERN.test(clause) && !LEARNING_PATTERN.test(clause) && !REVIEW_PATTERN.test(clause);
+	if (PROSPECTIVE_QUESTION_CHANGE_PATTERN.test(clause)) return true;
+	return (
+		CHANGE_PATTERN.test(clause) &&
+		!LEARNING_PATTERN.test(clause) &&
+		!REVIEW_PATTERN.test(clause) &&
+		!INFORMATIONAL_QUESTION_PATTERN.test(clause)
+	);
 }
 
 export async function bootstrapLandingZone(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
@@ -133,57 +147,81 @@ export async function joinLandingZoneEvidence(state: LandingZoneStateType): Prom
 export async function reconcileLandingZoneEvidence(
 	state: LandingZoneStateType,
 ): Promise<Partial<LandingZoneStateType>> {
+	const comparisons = reconcileEvidence(state.evidenceResults);
+	const conflicts = comparisons
+		.filter((comparison) => comparison.alignment === "divergent" || comparison.alignment === "exception")
+		.map(
+			(comparison) =>
+				`${comparison.claim}: ${comparison.alignment}; retain the live implementation and escalate before changing it.`,
+		);
+	const unavailableSources = [
+		state.gitlabEvidence,
+		state.okfEvidence,
+		state.terraformDocsEvidence,
+		state.awsDocsEvidence,
+		state.awsApiEvidence,
+		state.memoryEvidence,
+		state.knowledgeGraphEvidence,
+	]
+		.filter((outcome) => outcome?.status === "unavailable")
+		.map((outcome) => outcome?.source)
+		.filter((source): source is EvidenceSource => source !== undefined);
+	const status = (() => {
+		if (comparisons.length === 0) return "unknown" as const;
+		if (conflicts.length > 0) return "conflicting-evidence" as const;
+		if (comparisons.some((comparison) => comparison.alignment === "unverified")) return "unknown" as const;
+		if (comparisons.some((comparison) => comparison.alignment === "unresolved")) return "pending" as const;
+		return "aligned" as const;
+	})();
+	const conclusion = (() => {
+		if (status === "unknown")
+			return "Evidence is unavailable or unverified; no repository-specific conclusion can be made.";
+		if (status === "conflicting-evidence") {
+			return "Authoritative sources disagree; preserve the live implementation and request a platform decision before change.";
+		}
+		if (status === "pending")
+			return "Available evidence supports an explanation, but the full contract is not yet corroborated.";
+		return "Current PVH, repository, Terraform, and AWS evidence is aligned for the evaluated claims.";
+	})();
 	return {
 		reconciliation: {
-			status: state.evidenceResults.length > 0 ? "pending" : "unknown",
-			conclusion:
-				state.evidenceResults.length > 0
-					? "Evidence collected for reconciliation."
-					: "Live evidence not collected yet.",
-			comparisons: [],
-			conflicts: [],
-			unavailableSources: [
-				state.gitlabEvidence,
-				state.okfEvidence,
-				state.terraformDocsEvidence,
-				state.awsDocsEvidence,
-				state.awsApiEvidence,
-				state.memoryEvidence,
-				state.knowledgeGraphEvidence,
-			]
-				.filter((outcome) => outcome?.status === "unavailable")
-				.map((outcome) => outcome?.source)
-				.filter((source): source is EvidenceSource => source !== undefined),
+			status,
+			conclusion,
+			comparisons,
+			conflicts,
+			unavailableSources,
 		},
 	};
 }
 
 export async function assessLandingZoneRisk(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
-	const requiredEvidenceSources: EvidenceSource[] = state.intent === "propose-change" ? ["gitlab"] : [];
-	const missingEvidenceSources = requiredEvidenceSources.filter((source) => {
-		if (state.reconciliation?.unavailableSources.includes(source)) return true;
-		return !state.evidenceResults.some(
-			(item) => item.source === source && item.status === "observed" && item.freshness.status === "current",
-		);
+	if (!state.reconciliation) {
+		const blockedReason = "Evidence reconciliation is required before risk can be assessed.";
+		return {
+			blockedReason,
+			risk: {
+				level: "blocked",
+				reasons: [blockedReason],
+				requiresHumanDecision: true,
+				blocked: true,
+				stopConditions: [blockedReason],
+				requiredEvidenceSources: state.intent === "propose-change" ? ["gitlab"] : [],
+			},
+		};
+	}
+	const risk = assessRisk(state.reconciliation, {
+		intent: state.intent,
+		requestText: latestText(state.messages),
+		currentEvidenceSources: state.evidenceResults
+			.filter((item) => item.status === "observed" && item.freshness.status === "current")
+			.map((item) => item.source),
+		repositories: state.repositoryScope,
+		evidence: state.evidenceResults,
 	});
-	const blocked =
-		state.intent === "propose-change" &&
-		(state.reconciliation?.status === "unknown" || missingEvidenceSources.length > 0);
-	const blockedReason = blocked
-		? missingEvidenceSources.length > 0
-			? `Required live evidence is unavailable: ${missingEvidenceSources.join(", ")}.`
-			: "A proposed change requires current live evidence."
-		: null;
+	const blockedReason = risk.blocked ? (risk.stopConditions[0] ?? "The proposed change is blocked by policy.") : null;
 	return {
 		blockedReason,
-		risk: {
-			level: blocked ? "blocked" : state.intent === "propose-change" ? "high" : "low",
-			reasons: blocked ? [blockedReason ?? "Required live evidence is unavailable."] : [],
-			requiresHumanDecision: state.intent === "propose-change",
-			blocked,
-			stopConditions: blocked ? ["Required live repository evidence is unavailable."] : [],
-			requiredEvidenceSources,
-		},
+		risk,
 	};
 }
 
@@ -191,7 +229,9 @@ export async function answerLandingZoneQuestion(state: LandingZoneStateType): Pr
 	if (state.blockedReason) {
 		return { messages: [new AIMessage(state.blockedReason)], response: state.blockedReason, outcome: "blocked" };
 	}
-	const response = state.reconciliation?.conclusion ?? "No evidence conclusion is available.";
+	const conclusion = state.reconciliation?.conclusion ?? "No evidence conclusion is available.";
+	const limits = state.risk?.reasons ?? [];
+	const response = limits.length > 0 ? `${conclusion} Limits: ${limits.join(" ")}` : conclusion;
 	return {
 		messages: [new AIMessage(response)],
 		response,

@@ -65,6 +65,7 @@ export const EvidenceItemSchema = z
 	.object({
 		id: IdentifierSchema,
 		claimKey: IdentifierSchema,
+		claimValue: SummarySchema.optional(),
 		source: EvidenceSourceSchema,
 		retrievedAt: TimestampSchema,
 		status: EvidenceStatusSchema,

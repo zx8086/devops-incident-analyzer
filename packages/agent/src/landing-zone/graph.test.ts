@@ -72,7 +72,7 @@ const observedEvidence = {
 	retrievedAt: "2026-09-22T10:30:00.000Z",
 	status: "observed",
 	summary: "Account requests are authored in YAML.",
-	provenance: { path: "accounts/example.yml" },
+	provenance: { repository: "aws-lz-account-creator", path: "accounts/example.yml" },
 	freshness: { status: "current" },
 } as const;
 
@@ -249,8 +249,12 @@ describe("buildLandingZoneGraph", () => {
 		);
 
 		expect(result.messages.at(-1)?.getType()).toBe("ai");
-		expect(result.response).toBe("Evidence collected for reconciliation.");
-		expect(result.messages.at(-1)?.content).toBe("Evidence collected for reconciliation.");
+		expect(result.response).toContain(
+			"Available evidence supports an explanation, but the full contract is not yet corroborated.",
+		);
+		expect(result.response).toContain("general guidance only");
+		if (!result.response) throw new Error("expected a user-facing response");
+		expect(result.messages.at(-1)?.content).toBe(result.response);
 	});
 
 	test("still blocks an imperative account-creation request without live evidence", async () => {
@@ -356,5 +360,69 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.intent).toBe("propose-change");
 		expect(result.risk?.requiresHumanDecision).toBeTrue();
 		expect(result.outcome).toBe("blocked");
+	});
+
+	test.each([
+		["Apply a plan that destroys the KMS key", "destructive plan"],
+		["Allow public access from 0.0.0.0/0", "Public access"],
+		["Grant IAM Action * and Resource *", "Broad IAM"],
+		["Commit a plaintext secret in tfvars", "Secrets and credentials"],
+		["Delete the workload VPC resource", "destructive plan"],
+		["Remove the subnet resource", "destructive plan"],
+		["Migrate backend locking", "Backend and locking"],
+	] as const)("routes high-risk imperative requests through the stop gates: %s", async (request, reason) => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage(request)], requestId: `request-stop-${reason}` },
+			{ configurable: { thread_id: `thread-stop-${reason}` } },
+		);
+
+		expect(result.intent).toBe("propose-change");
+		expect(result.risk?.blocked).toBeTrue();
+		expect(result.risk?.stopConditions.join(" ")).toContain(reason);
+	});
+
+	test.each([
+		"What permissions does this policy grant?",
+		"Which commit removed the subnet?",
+		"Why was public access allowed?",
+	] as const)("keeps informational questions out of mutation stop gates: %s", async (request) => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage(request)], requestId: `request-question-${request}` },
+			{ configurable: { thread_id: `thread-question-${request}` } },
+		);
+
+		expect(result.intent).not.toBe("propose-change");
+		expect(result.outcome).toBe("answered");
+	});
+
+	test("still fails closed when an informational question appends a destructive request", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{
+				messages: [new HumanMessage("Which commit removed the subnet, and delete the workload VPC resource")],
+				requestId: "request-question-then-delete",
+			},
+			{ configurable: { thread_id: "thread-question-then-delete" } },
+		);
+
+		expect(result.intent).toBe("propose-change");
+		expect(result.risk?.stopConditions.join(" ")).toContain("destructive plan");
+	});
+
+	test.each([
+		"Which subnet should we remove?",
+		"What IAM permissions could we grant?",
+		"Which workload VPC to delete?",
+	] as const)("routes prospective change questions through mutation stop gates: %s", async (request) => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage(request)], requestId: `request-prospective-${request}` },
+			{ configurable: { thread_id: `thread-prospective-${request}` } },
+		);
+
+		expect(result.intent).toBe("propose-change");
+		expect(result.risk?.blocked).toBeTrue();
 	});
 });
