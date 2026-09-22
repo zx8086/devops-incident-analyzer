@@ -9,6 +9,7 @@ import {
 	type LandingZoneEvidenceCollectors,
 } from "./evidence.ts";
 import { selectLandingZoneKnowledge } from "./knowledge-selector.ts";
+import { memoryEnrichLandingZone } from "./memory.ts";
 import { reconcileEvidence } from "./reconciliation.ts";
 import { assessRisk } from "./risk.ts";
 import type { LandingZoneStateType } from "./state.ts";
@@ -70,6 +71,7 @@ export async function bootstrapLandingZone(state: LandingZoneStateType): Promise
 		awsApiEvidence: null,
 		memoryEvidence: null,
 		knowledgeGraphEvidence: null,
+		priorMemory: [],
 	};
 }
 
@@ -103,6 +105,10 @@ export async function resolveLandingZoneScope(state: LandingZoneStateType): Prom
 export async function selectPvhKnowledge(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
 	const selection = selectLandingZoneKnowledge(state.intent, state.repositoryScope, [latestText(state.messages)]);
 	return { repositoryScope: selection.repositories, selectedKnowledge: selection.entries };
+}
+
+export async function recallLandingZoneMemory(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
+	return memoryEnrichLandingZone(state);
 }
 
 export interface LandingZoneEvidenceNodeOptions {

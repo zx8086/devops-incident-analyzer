@@ -95,14 +95,29 @@ export {
 	topologyCronEnabled,
 } from "./kg-topology.ts";
 export { type BuildLandingZoneGraphOptions, buildLandingZoneGraph } from "./landing-zone/graph.ts";
+export {
+	buildLandingZoneMemoryAnnotations,
+	type LandingZoneDecisionInput,
+	type LandingZoneMemoryDependencies,
+	type LandingZoneMemoryScope,
+	type LandingZoneMemoryWriteDependencies,
+	type LandingZoneOutcomeInput,
+	memoryEnrichLandingZone,
+	recordLandingZoneDecision,
+	recordLandingZoneOutcome,
+} from "./landing-zone/memory.ts";
 export { LandingZoneState, type LandingZoneStateType } from "./landing-zone/state.ts";
 export {
 	type LandingZoneEvidenceResult,
 	LandingZoneEvidenceResultSchema,
 	type LandingZoneIntent,
 	LandingZoneIntentSchema,
+	type LandingZoneMemoryKind,
+	LandingZoneMemoryKindSchema,
 	type LandingZoneOutcome,
 	LandingZoneOutcomeSchema,
+	type LandingZonePriorMemory,
+	LandingZonePriorMemorySchema,
 	type LandingZoneReconciliation,
 	LandingZoneReconciliationSchema,
 	type LandingZoneRisk,

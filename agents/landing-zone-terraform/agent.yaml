@@ -8,6 +8,9 @@ repository:
   url: https://gitlab.com/pvhcorp/dhco/aws/aws-landing-zone
   default_branch: main
 
+skills:
+  - id: search-memory
+
 tools:
   - id: landing-zone
 

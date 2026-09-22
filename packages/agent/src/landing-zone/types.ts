@@ -16,6 +16,33 @@ import { z } from "zod";
 export const LandingZoneIntentSchema = z.enum(["learn", "understand", "review", "propose-change"]);
 export type LandingZoneIntent = z.infer<typeof LandingZoneIntentSchema>;
 
+export const LandingZoneMemoryKindSchema = z.enum([
+	"terraform-change",
+	"account-vending",
+	"network-onboarding",
+	"dns-design",
+	"gitlab-project",
+	"runner-onboarding",
+	"plan-outcome",
+	"key-decision",
+	"platform-exception",
+	"failed-approach",
+	"learned-pattern",
+	"in-flight-change",
+]);
+export type LandingZoneMemoryKind = z.infer<typeof LandingZoneMemoryKindSchema>;
+
+export const LandingZonePriorMemorySchema = z
+	.object({
+		text: z.string().trim().min(1).max(8_192),
+		annotations: z.record(z.string(), z.string()),
+		blockId: z.string().trim().min(1).optional(),
+		advisory: z.literal(true),
+		requiresLiveRevalidation: z.literal(true),
+	})
+	.strict();
+export type LandingZonePriorMemory = z.infer<typeof LandingZonePriorMemorySchema>;
+
 export const LandingZoneEvidenceResultSchema = EvidenceItemSchema;
 export type LandingZoneEvidenceResult = EvidenceItem;
 
@@ -64,6 +91,7 @@ export const LandingZoneStateInputSchema = z
 		memoryEvidence: EvidenceCollectionOutcomeSchema,
 		knowledgeGraphEvidence: EvidenceCollectionOutcomeSchema,
 		evidenceResults: z.array(LandingZoneEvidenceResultSchema),
+		priorMemory: z.array(LandingZonePriorMemorySchema),
 		reconciliation: LandingZoneReconciliationSchema.nullable(),
 		risk: LandingZoneRiskSchema.nullable(),
 		response: z.string().nullable(),

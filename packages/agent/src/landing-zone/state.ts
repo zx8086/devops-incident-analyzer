@@ -9,7 +9,7 @@ import type {
 } from "@devops-agent/shared";
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 import type { EvidenceCollectionOutcome } from "./evidence.ts";
-import type { LandingZoneIntent, LandingZoneOutcome, ProposedChangeReview } from "./types.ts";
+import type { LandingZoneIntent, LandingZoneOutcome, LandingZonePriorMemory, ProposedChangeReview } from "./types.ts";
 
 const replace = <T>(fallback: T) => ({
 	reducer: (_previous: T, next: T) => next,
@@ -31,6 +31,7 @@ export const LandingZoneState = Annotation.Root({
 	memoryEvidence: Annotation<EvidenceCollectionOutcome | null>(replace<EvidenceCollectionOutcome | null>(null)),
 	knowledgeGraphEvidence: Annotation<EvidenceCollectionOutcome | null>(replace<EvidenceCollectionOutcome | null>(null)),
 	evidenceResults: Annotation<EvidenceItem[]>(replace<EvidenceItem[]>([])),
+	priorMemory: Annotation<LandingZonePriorMemory[]>(replace<LandingZonePriorMemory[]>([])),
 	reconciliation: Annotation<EvidenceReconciliation | null>(replace<EvidenceReconciliation | null>(null)),
 	risk: Annotation<LandingZoneRiskAssessment | null>(replace<LandingZoneRiskAssessment | null>(null)),
 	response: Annotation<string | null>(replace<string | null>(null)),
