@@ -10,7 +10,15 @@ const mockStreamEvents = mock(() => ({
 }));
 
 const mockUpdateState = mock(() => Promise.resolve());
-const mockRegisterSchedules = mock(() => []);
+const bootOrder: string[] = [];
+const mockRegisterSchedules = mock(() => {
+	bootOrder.push("schedules");
+	return [];
+});
+const mockCreateMcpClient = mock(async () => {
+	bootOrder.push("mcp");
+});
+const mockMcpEvents = new EventEmitter();
 // SIO-1687: records what pruneThreadState stashed as the evidence TOC.
 const mockSetEvidenceToc = mock((_threadId: string, _toc?: string) => undefined);
 const mockGetState = mock(() =>
@@ -89,7 +97,7 @@ mock.module("@devops-agent/agent", () => ({
 			getGraphAsync: mock(() => Promise.resolve({ nodes: {}, edges: [] })),
 		}),
 	),
-	createMcpClient: mock(() => Promise.resolve()),
+	createMcpClient: mockCreateMcpClient,
 	// SIO-1655: graph-registry imports both from the barrel to gate the console:
 	// the capability flag AND whether a hub exists to serve it.
 	isPiFleetGraphEnabled: mock(() => true),
@@ -165,7 +173,7 @@ mock.module("@devops-agent/agent", () => ({
 	processAttachments: mock(() => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] })),
 	// SIO-906: events route test imports mcpEvents from this specifier; include it so
 	// the shared process-global mock stays link-compatible across files.
-	mcpEvents: new EventEmitter(),
+	mcpEvents: mockMcpEvents,
 	// SIO-1045: agent.ts itself imports these at module scope (installSkillLearner is
 	// CALLED at load time; appliedSkillsForNames is used in readCompletedTurn). Also
 	// cover the memory/promote and actions routes that import the same specifier so
@@ -313,12 +321,20 @@ mock.module("@langchain/core/messages", () => ({
 	},
 }));
 
-const { ensureMcpConnected, invokeAgent, pruneThreadState } = await import("./agent.ts");
+const { _waitForAgentStartupForTest, ensureMcpConnected, invokeAgent, pruneThreadState } = await import("./agent.ts");
 
-test("refreshes schedule readiness after the lazy MCP connection completes", async () => {
-	const registrationsBeforeConnect = mockRegisterSchedules.mock.calls.length;
+test("cold startup attempts MCP before its first schedule registration", async () => {
+	await _waitForAgentStartupForTest();
+	expect(mockCreateMcpClient).toHaveBeenCalled();
+	expect(bootOrder.indexOf("mcp")).toBeGreaterThanOrEqual(0);
+	expect(bootOrder.indexOf("schedules")).toBeGreaterThan(bootOrder.indexOf("mcp"));
+});
+
+test("refreshes schedule readiness after a health reconnect transition", async () => {
 	await ensureMcpConnected();
-	expect(mockRegisterSchedules.mock.calls.length).toBeGreaterThan(registrationsBeforeConnect);
+	const registrationsBeforeReconnect = mockRegisterSchedules.mock.calls.length;
+	mockMcpEvents.emit("mcp_connected", { type: "mcp_connected", server: "landing-zone-iac-mcp" });
+	expect(mockRegisterSchedules.mock.calls.length).toBeGreaterThan(registrationsBeforeReconnect);
 });
 
 describe("invokeAgent", () => {

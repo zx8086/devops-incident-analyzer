@@ -21,6 +21,7 @@ import {
 	installMemoryPromotion,
 	installSkillLearner,
 	isEvidenceTocEnabled,
+	mcpEvents,
 	needsPruning,
 	type OutcomeTurn,
 	pruneState,
@@ -56,18 +57,6 @@ installAgentMemory();
 // SIO-1016: also inject the confidence-feedback reader (runs in the same post-turn
 // slot, independently gated by SKILL_OUTCOME_TRACKING_ENABLED).
 installSkillLearner(readCompletedTurn, undefined, readCompletedTurnOutcome);
-// SIO-1358: start every enabled schedules/*.yaml entry (iac-reconcile-sweep,
-// kg-topology-sweep, kg-purge-sweep) via the declarative scheduler. Replaces the
-// 3 hand-wired Bun.cron files (SIO-1005, SIO-1104/5a, SIO-1135) -- cadence and
-// enablement now live in each schedule's YAML, not env vars. Backend-availability
-// preconditions (agent-memory/KG configured) are still checked before registering.
-startSchedules();
-
-// SIO-967/SIO-1645: mount the knowledge-graph MCP server IN-PROCESS (process-wide slot,
-// identity-aware port pre-flight; see knowledge-graph-server.ts). Fire-and-forget so module
-// evaluation is never blocked; the function never rejects.
-void mountKnowledgeGraphServer();
-
 const pruneLog = getLogger("agent:state-pruning");
 // SIO-958: session lifecycle visibility (why/when a conversation's session ends).
 const sessionLog = getLogger("agent:session-lifecycle");
@@ -187,6 +176,31 @@ export function ensureMcpConnected(): Promise<void> {
 	return mcpReady;
 }
 
+const refreshSchedulesOnMcpConnected = (): void => refreshSchedules();
+mcpEvents.on("mcp_connected", refreshSchedulesOnMcpConnected);
+
+// Mount the in-process graph endpoint first so its URL is present in the MCP config,
+// then attempt all configured MCP connections before the first scheduler pass. The
+// bridge emits the same readiness event after later health reconnects, so a schedule
+// disabled during cold start is re-evaluated without waiting for a user request.
+const agentStartup = (async (): Promise<void> => {
+	await mountKnowledgeGraphServer();
+	try {
+		await ensureMcpConnected();
+	} catch (error) {
+		getLogger("agent:startup").error(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"MCP startup connection failed; registering only schedules whose dependencies are ready",
+		);
+	} finally {
+		startSchedules();
+	}
+})();
+
+export function _waitForAgentStartupForTest(): Promise<void> {
+	return agentStartup;
+}
+
 // SIO-1113: Vite HMR disposes this module graph on reload; the bridge's health-poll
 // interval and the memoized connection promise must not outlive it. Orphaned poll
 // loops fail their reconnects against the closed Vite module runner ("Vite module
@@ -205,6 +219,7 @@ export function ensureMcpConnected(): Promise<void> {
 {
 	const hot = (import.meta as { hot?: { dispose(cb: () => void): void } }).hot;
 	hot?.dispose(() => {
+		mcpEvents.off("mcp_connected", refreshSchedulesOnMcpConnected);
 		stopHealthPolling();
 		mcpReady = null;
 	});

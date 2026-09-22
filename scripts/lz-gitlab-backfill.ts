@@ -2,17 +2,21 @@
 
 import {
 	createMcpClient,
+	getGraphStore,
 	importLandingZoneGitLabHistory,
+	type LandingZoneImportCheckpoint,
 	type LandingZoneImportOptions,
 	type LandingZoneImportResult,
 	landingZoneGitLabImportEnabled,
+	readLandingZoneGitLabImportCheckpoint,
 	stopHealthPolling,
 } from "../packages/agent/src/index.ts";
 import { resolveRepository } from "../packages/mcp-server-landing-zone-iac/src/tools/repositories.ts";
 
 export interface LandingZoneBackfillArgs {
 	repository: string;
-	startAt: string;
+	startAt?: string;
+	resume?: boolean;
 }
 
 const MAX_BACKFILL_STEPS = 1_000;
@@ -20,6 +24,7 @@ const MAX_BACKFILL_STEPS = 1_000;
 interface BackfillDependencies {
 	connect: (baseUrl: string) => Promise<void>;
 	ready: () => boolean;
+	readCheckpoint: (repository: string) => Promise<LandingZoneImportCheckpoint | undefined>;
 	importHistory: (options: LandingZoneImportOptions) => Promise<LandingZoneImportResult>;
 	write: (line: string) => void;
 	env: Record<string, string | undefined>;
@@ -34,13 +39,21 @@ function argumentValue(argv: string[], flag: string): string | undefined {
 export function parseBackfillArgs(argv: string[]): LandingZoneBackfillArgs {
 	const repository = argumentValue(argv, "--repository");
 	const startAt = argumentValue(argv, "--start-at");
-	if (!repository || !startAt || argv.length !== 4) {
-		throw new Error("Usage: bun scripts/lz-gitlab-backfill.ts --repository <allowlisted> --start-at <ISO timestamp>");
-	}
+	const resume = argv.includes("--resume") || startAt === undefined;
+	const validShape =
+		Boolean(repository) &&
+		((startAt !== undefined && !argv.includes("--resume") && argv.length === 4) ||
+			(startAt === undefined && ((argv.includes("--resume") && argv.length === 3) || argv.length === 2)));
+	if (!validShape)
+		throw new Error(
+			"Usage: bun scripts/lz-gitlab-backfill.ts --repository <allowlisted> [--start-at <ISO timestamp> | --resume]",
+		);
 	const resolvedRepository = resolveRepository(repository);
+	if (resume) return { repository: resolvedRepository.name, resume: true };
+	if (!startAt) throw new Error("--start-at must be provided when not resuming");
 	const parsed = new Date(startAt);
 	if (Number.isNaN(parsed.getTime())) throw new Error("--start-at must be a valid ISO timestamp");
-	return { repository: resolvedRepository.name, startAt: parsed.toISOString() };
+	return { repository: resolvedRepository.name, startAt: parsed.toISOString(), resume: false };
 }
 
 function safeSummary(args: LandingZoneBackfillArgs, result: LandingZoneImportResult) {
@@ -50,7 +63,7 @@ function safeSummary(args: LandingZoneBackfillArgs, result: LandingZoneImportRes
 		repository: args.repository,
 		outcomes: Object.fromEntries(Object.entries(outcomes).sort(([left], [right]) => left.localeCompare(right))),
 		checkpoint: {
-			updatedAfter: result.checkpoint?.updatedAfter ?? args.startAt,
+			updatedAfter: result.checkpoint?.updatedAfter ?? args.startAt ?? "",
 			inProgress: Boolean(result.checkpoint?.inProgress),
 			pendingCount: result.checkpoint?.pendingMrIids?.length ?? 0,
 		},
@@ -60,6 +73,7 @@ function safeSummary(args: LandingZoneBackfillArgs, result: LandingZoneImportRes
 const DEFAULT_DEPENDENCIES: BackfillDependencies = {
 	connect: async (baseUrl) => createMcpClient({ landingZoneIacUrl: baseUrl }),
 	ready: landingZoneGitLabImportEnabled,
+	readCheckpoint: async (repository) => readLandingZoneGitLabImportCheckpoint(await getGraphStore(), repository),
 	importHistory: importLandingZoneGitLabHistory,
 	write: (line) => process.stdout.write(`${line}\n`),
 	env: process.env,
@@ -73,7 +87,12 @@ export async function runLandingZoneGitLabBackfill(
 	if (!baseUrl) throw new Error("LANDING_ZONE_IAC_MCP_URL is required for the controlled backfill");
 	await dependencies.connect(baseUrl);
 	if (!dependencies.ready()) throw new Error("Landing Zone graph or required GitLab read tools are unavailable");
-	let options: LandingZoneImportOptions = { repository: args.repository, startAt: args.startAt };
+	const durableCheckpoint = args.resume ? await dependencies.readCheckpoint(args.repository) : undefined;
+	if (args.resume && !durableCheckpoint)
+		throw new Error(`No durable Landing Zone GitLab checkpoint exists for ${args.repository}`);
+	let options: LandingZoneImportOptions = durableCheckpoint
+		? { repository: args.repository, checkpoint: durableCheckpoint }
+		: { repository: args.repository, startAt: args.startAt };
 	const outcomes: LandingZoneImportResult["outcomes"] = [];
 	for (let step = 0; step < MAX_BACKFILL_STEPS; step++) {
 		const result = await dependencies.importHistory(options);

@@ -174,3 +174,67 @@ describe("GitLab direct merge request evidence", () => {
 		expect(requested).toEqual(["https://gitlab.example/api/v4/projects/group%2Fproject/merge_requests/7"]);
 	});
 });
+
+describe("GitLab deployment pagination", () => {
+	test("requests newest deployments first and follows a Link-only next page", async () => {
+		const requested: string[] = [];
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async (input: string | URL | Request) => {
+				requested.push(String(input));
+				return new Response(
+					JSON.stringify([
+						{
+							sha: "newest-sha",
+							status: "success",
+							updated_at: "2026-09-22T12:00:00.000Z",
+							deployable: { pipeline: { id: 99 } },
+						},
+					]),
+					{
+						headers: {
+							"x-page": "4",
+							"x-per-page": "20",
+							link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next"',
+						},
+					},
+				);
+			}) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20)).resolves.toEqual({
+			deployments: [
+				{
+					sha: "newest-sha",
+					status: "success",
+					updatedAt: "2026-09-22T12:00:00.000Z",
+					pipelineId: 99,
+				},
+			],
+			nextPage: 5,
+		});
+		expect(requested[0]).toContain("order_by=updated_at");
+		expect(requested[0]).toContain("sort=desc");
+	});
+
+	test.each([
+		["malformed", "not-a-page"],
+		["self-loop", "4"],
+	] as const)("rejects a %s deployment next-page cursor", async (_case, nextPage) => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: { "x-page": "4", "x-per-page": "20", "x-next-page": nextPage },
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20)).rejects.toThrow(
+			/valid X-Next-Page|advance beyond requested page/,
+		);
+	});
+});

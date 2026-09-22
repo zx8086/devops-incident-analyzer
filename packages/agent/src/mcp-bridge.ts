@@ -430,6 +430,7 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 
 	// SIO-608: Start periodic health polling
 	startHealthPolling();
+	for (const server of connectedServers) emitMcpConnected(server, "initial");
 }
 
 export function getConnectedServers(): string[] {
@@ -529,6 +530,30 @@ const UNREADY_WARN_THRESHOLD = 3;
 // SIO-780: per-process event bus for proxied server lifecycle events.
 // Frontend consumes via /api/events SSE endpoint (apps/web).
 export const mcpEvents = new EventEmitter();
+
+export interface McpConnectedEvent {
+	type: "mcp_connected";
+	server: string;
+	transition: "initial" | "reconnect" | "health-ready";
+}
+
+function emitMcpConnected(server: string, transition: McpConnectedEvent["transition"]): void {
+	const event: McpConnectedEvent = { type: "mcp_connected", server, transition };
+	try {
+		mcpEvents.emit("mcp_connected", event);
+	} catch (error) {
+		logger.warn(
+			{ serverName: server, error: error instanceof Error ? error.message : String(error) },
+			"mcp_connected listener threw; continuing bridge transition",
+		);
+	}
+}
+
+function markServerConnected(server: string, transition: McpConnectedEvent["transition"]): void {
+	if (connectedServers.has(server)) return;
+	connectedServers.add(server);
+	emitMcpConnected(server, transition);
+}
 
 export interface McpReplacedEvent {
 	type: "mcp_replaced";
@@ -748,7 +773,7 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 		allTools = [...allTools.filter((tool) => !staleTools.has(tool)), ...wrappedTools];
 
 		toolsByServer.set(name, wrappedTools);
-		connectedServers.add(name);
+		markServerConnected(name, "reconnect");
 		logger.info({ serverName: name, toolCount: tools.length }, "MCP server reconnected with tools");
 	} catch (error) {
 		// Self-heal: this module graph's runner is gone (see isClosedModuleRunnerError),
@@ -802,7 +827,7 @@ async function pollServerHealth(): Promise<void> {
 					if (!connectedServers.has(name)) {
 						const hasTools = (toolsByServer.get(name)?.length ?? 0) > 0;
 						if (hasTools) {
-							connectedServers.add(name);
+							markServerConnected(name, "health-ready");
 							logger.info({ serverName: name }, "MCP server back online (tools cached)");
 						} else {
 							await reconnectServer(name, url);
@@ -959,6 +984,9 @@ export function _setServerUrlsForTest(entries: Array<[string, string]>): void {
 }
 export function _resetUnreadyStreakForTest(): void {
 	unreadyStreak.clear();
+}
+export function _markServerConnectedForTest(server: string): void {
+	markServerConnected(server, "health-ready");
 }
 export function _getLoggerForTest(): typeof logger {
 	return logger;

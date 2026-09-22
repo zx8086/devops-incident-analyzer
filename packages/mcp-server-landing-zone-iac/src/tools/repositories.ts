@@ -231,6 +231,7 @@ export interface GitLabHistoricalPipeline {
 export interface GitLabDeployment {
 	sha: string;
 	status: string;
+	updatedAt: string;
 	pipelineId?: number;
 }
 
@@ -335,6 +336,7 @@ const GitLabDeploymentsResponseSchema = z.array(
 	z.object({
 		sha: z.string(),
 		status: z.string(),
+		updated_at: z.string(),
 		deployable: z.object({ pipeline: z.object({ id: z.number().int() }).optional() }).optional(),
 	}),
 );
@@ -404,10 +406,14 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 			throw new Error(`GitLab X-Per-Page ${responsePerPage} did not match requested page size ${perPage}`);
 	}
 
-	function nextPageFrom(response: Response): number | undefined {
+	function nextPageFrom(response: Response, requestedPage: number): number | undefined {
 		if (response.headers.get("X-Next-Page") === "") return undefined;
 		const headerPage = parseDecimalHeader(response.headers, "X-Next-Page", 1);
-		if (headerPage !== undefined) return headerPage;
+		if (headerPage !== undefined) {
+			if (headerPage <= requestedPage)
+				throw new Error(`GitLab X-Next-Page ${headerPage} did not advance beyond requested page ${requestedPage}`);
+			return headerPage;
+		}
 		const link = response.headers.get("link");
 		if (!link) return undefined;
 		const next = link
@@ -417,9 +423,12 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 		const target = next?.match(/^<([^>]+)>/)?.[1];
 		if (!target) return undefined;
 		const rawPage = new URL(target, apiRoot).searchParams.get("page");
-		if (rawPage === null || !/^\d+$/.test(rawPage) || Number(rawPage) < 1)
+		if (rawPage === null || !/^\d+$/.test(rawPage) || !Number.isSafeInteger(Number(rawPage)) || Number(rawPage) < 1)
 			throw new Error("GitLab response omitted a valid next-page link");
-		return Number(rawPage);
+		const nextPage = Number(rawPage);
+		if (nextPage <= requestedPage)
+			throw new Error(`GitLab next-page link ${nextPage} did not advance beyond requested page ${requestedPage}`);
+		return nextPage;
 	}
 
 	function shapeMergeRequest(
@@ -506,7 +515,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 			);
 			validatePageHeaders(response.headers, page, perPage);
 			const jobs = GitLabJobsResponseSchema.parse(await responseJson(response));
-			const nextPage = nextPageFrom(response);
+			const nextPage = nextPageFrom(response, page);
 			return {
 				jobs: jobs.map((job) => ({
 					id: job.id,
@@ -540,7 +549,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 			const mergeRequests = GitLabHistoricalMergeRequestsResponseSchema.parse(JSON.parse(text) as unknown).map(
 				shapeMergeRequest,
 			);
-			const nextPage = nextPageFrom(response);
+			const nextPage = nextPageFrom(response, page);
 			const totalHeader = response.headers.get("x-total");
 			const total = totalHeader === null ? undefined : parseDecimalHeader(response.headers, "X-Total", 0);
 			return { mergeRequests, ...(total !== undefined && { total }), ...(nextPage && { nextPage }) };
@@ -558,7 +567,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 			);
 			validatePageHeaders(response.headers, page, perPage);
 			const pipelines = GitLabHistoricalPipelinesResponseSchema.parse(await responseJson(response));
-			const nextPage = nextPageFrom(response);
+			const nextPage = nextPageFrom(response, page);
 			return {
 				pipelines: pipelines.map((pipeline) => ({
 					id: pipeline.id,
@@ -572,17 +581,19 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 		},
 		async projectDeployments(projectPath, page, perPage) {
 			const response = await responseFor(
-				`${projectApiPath(projectPath)}/deployments?${new URLSearchParams({ status: "success", page: String(page), per_page: String(perPage) }).toString()}`,
+				`${projectApiPath(projectPath)}/deployments?${new URLSearchParams({ status: "success", order_by: "updated_at", sort: "desc", page: String(page), per_page: String(perPage) }).toString()}`,
 			);
+			validatePageHeaders(response.headers, page, perPage);
 			const deployments = GitLabDeploymentsResponseSchema.parse(await responseJson(response)).map((deployment) => ({
 				sha: deployment.sha,
 				status: deployment.status,
+				updatedAt: deployment.updated_at,
 				...(deployment.deployable?.pipeline?.id && { pipelineId: deployment.deployable.pipeline.id }),
 			}));
-			const nextPage = response.headers.get("x-next-page");
+			const nextPage = nextPageFrom(response, page);
 			return {
 				deployments,
-				...(nextPage && /^\d+$/.test(nextPage) && Number(nextPage) > 0 && { nextPage: Number(nextPage) }),
+				...(nextPage && { nextPage }),
 			};
 		},
 	};

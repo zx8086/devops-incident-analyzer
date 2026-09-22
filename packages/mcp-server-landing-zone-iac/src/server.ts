@@ -140,6 +140,7 @@ function registerAll(server: McpServer, client: GitLabReadClient): void {
 			inputSchema: {
 				repository: RepositoryParam,
 				commitSha: z.string().min(1).max(128).describe("Exact merge commit SHA to correlate"),
+				page: z.number().int().positive().optional().describe("Resumable GitLab deployment page"),
 			},
 			annotations: READ_ONLY_ANNOTATIONS,
 		},

@@ -51,6 +51,8 @@ export interface HistoricalPipeline {
 export interface HistoricalDeployment {
 	sha: string;
 	status: string;
+	updatedAt: string;
+	pipelineId?: number;
 }
 
 export interface HistoricalProvenance {
@@ -74,6 +76,7 @@ export interface LandingZoneImportCheckpoint {
 	inProgress?: { upperBound: string; expectedTotal?: number; nextPage: number; seenMrIds: string[] };
 	pendingMrIids?: number[];
 	pendingCursor?: number;
+	pendingDeploymentPages?: Record<string, number>;
 }
 
 export interface LandingZoneImportDependencies {
@@ -101,10 +104,11 @@ export interface LandingZoneImportDependencies {
 		repository: string;
 		iid: number;
 	}) => Promise<{ pipelines: HistoricalPipeline[]; provenance?: HistoricalProvenance }>;
-	listDeployments?: (input: {
-		repository: string;
-		commitSha: string;
-	}) => Promise<{ deployments: HistoricalDeployment[]; provenance?: HistoricalProvenance }>;
+	listDeployments?: (input: { repository: string; commitSha: string; page?: number }) => Promise<{
+		deployments: HistoricalDeployment[];
+		nextPage?: number;
+		provenance?: HistoricalProvenance;
+	}>;
 	store: GraphStore;
 	writers: {
 		recordRepository: (store: GraphStore, record: LandingZoneRepositoryRecord) => Promise<void>;
@@ -249,7 +253,15 @@ function defaultDependencies(): LandingZoneImportDependencies {
 		listDeployments: async (input) =>
 			z
 				.object({
-					deployments: z.array(z.object({ sha: z.string().min(1), status: z.string().min(1) })),
+					deployments: z.array(
+						z.object({
+							sha: z.string().min(1),
+							status: z.string().min(1),
+							updatedAt: z.string().datetime(),
+							pipelineId: z.number().int().positive().optional(),
+						}),
+					),
+					nextPage: z.number().int().positive().optional(),
 					provenance: z
 						.object({ source: z.literal("gitlab"), retrievedAt: z.string().datetime(), truncated: z.boolean() })
 						.optional(),
@@ -273,21 +285,114 @@ export function landingZoneGitLabImportEnabled(
 	return graphAvailable && LANDING_ZONE_GITLAB_IMPORT_REQUIRED_TOOLS.every((name) => available.has(name));
 }
 
+type OutcomeEvidenceSource = "gitlab-deployment" | "gitlab-pipeline" | "gitlab-mr" | "live-state";
+
+interface OutcomeEvidence {
+	source: OutcomeEvidenceSource;
+	observedAt: string;
+	retrievedAt?: string;
+	commitSha?: string;
+	pipelineId?: string;
+	truncated: boolean;
+}
+
+function latestPipeline(pipelines: HistoricalPipeline[]): HistoricalPipeline | undefined {
+	return [...pipelines].sort((left, right) => {
+		const timeOrder = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+		return timeOrder === 0 ? right.id - left.id : timeOrder;
+	})[0];
+}
+
 function outcomeFor(
 	mr: HistoricalMergeRequest,
 	pipelines: HistoricalPipeline[],
 	deployments: HistoricalDeployment[],
 	commitSha: string,
-): LandingZoneImportOutcome {
-	if (mr.state === "opened") return "proposed";
-	if (mr.state === "closed") return "declined";
-	if (
-		mr.verifiedLiveState ||
-		deployments.some((deployment) => deployment.sha === commitSha && deployment.status === "success")
-	)
-		return "applied";
-	if (pipelines.some((pipeline) => pipeline.status === "failed")) return "pipeline-failed";
-	return "merged-unverified";
+	provenance: {
+		mr?: HistoricalProvenance;
+		pipelines?: HistoricalProvenance;
+		deployments?: HistoricalProvenance;
+	},
+): { outcome: LandingZoneImportOutcome; evidence: OutcomeEvidence } {
+	const truncated = Boolean(
+		provenance.mr?.truncated || provenance.pipelines?.truncated || provenance.deployments?.truncated,
+	);
+	const successfulDeployment = deployments.find(
+		(deployment) => deployment.sha === commitSha && deployment.status === "success",
+	);
+	if (mr.state === "opened") {
+		return {
+			outcome: "proposed",
+			evidence: {
+				source: "gitlab-mr",
+				observedAt: mr.updatedAt,
+				retrievedAt: provenance.mr?.retrievedAt,
+				commitSha,
+				truncated,
+			},
+		};
+	}
+	if (mr.state === "closed") {
+		return {
+			outcome: "declined",
+			evidence: {
+				source: "gitlab-mr",
+				observedAt: mr.updatedAt,
+				retrievedAt: provenance.mr?.retrievedAt,
+				commitSha,
+				truncated,
+			},
+		};
+	}
+	if (mr.verifiedLiveState) {
+		return {
+			outcome: "applied",
+			evidence: {
+				source: "live-state",
+				observedAt: provenance.mr?.retrievedAt ?? mr.updatedAt,
+				retrievedAt: provenance.mr?.retrievedAt,
+				commitSha,
+				truncated,
+			},
+		};
+	}
+	if (successfulDeployment) {
+		return {
+			outcome: "applied",
+			evidence: {
+				source: "gitlab-deployment",
+				observedAt: successfulDeployment.updatedAt,
+				retrievedAt: provenance.deployments?.retrievedAt,
+				commitSha: successfulDeployment.sha,
+				pipelineId: successfulDeployment.pipelineId ? String(successfulDeployment.pipelineId) : undefined,
+				truncated,
+			},
+		};
+	}
+	const currentPipeline = latestPipeline(pipelines);
+	if (currentPipeline) {
+		return {
+			outcome: currentPipeline.status === "failed" ? "pipeline-failed" : "merged-unverified",
+			evidence: {
+				source: "gitlab-pipeline",
+				observedAt: currentPipeline.updatedAt,
+				retrievedAt: provenance.pipelines?.retrievedAt,
+				commitSha,
+				pipelineId: String(currentPipeline.id),
+				truncated,
+			},
+		};
+	}
+	return {
+		outcome: "merged-unverified",
+		evidence: {
+			source: "gitlab-mr",
+			observedAt: mr.updatedAt,
+			retrievedAt: provenance.mr?.retrievedAt,
+			commitSha,
+			truncated,
+		},
+	};
 }
 
 export async function importLandingZoneGitLabHistory(
@@ -311,11 +416,16 @@ export async function importLandingZoneGitLabHistory(
 	let nextPage = options.checkpoint?.inProgress?.nextPage ?? 1;
 	let pendingMrIids = [...new Set(options.checkpoint?.pendingMrIids ?? [])];
 	let pendingCursor = options.checkpoint?.pendingCursor ?? 0;
+	const pendingDeploymentPages = { ...(options.checkpoint?.pendingDeploymentPages ?? {}) };
 	if (
 		pendingMrIids.length > MAX_PENDING_MERGE_REQUESTS ||
 		!pendingMrIids.every((iid) => Number.isInteger(iid) && iid > 0) ||
 		!Number.isInteger(pendingCursor) ||
-		pendingCursor < 0
+		pendingCursor < 0 ||
+		Object.entries(pendingDeploymentPages).some(
+			([iid, page]) =>
+				!/^\d+$/.test(iid) || !pendingMrIids.includes(Number(iid)) || !Number.isInteger(page) || page < 1,
+		)
 	) {
 		throw new Error(`Invalid bounded pending merge request queue for ${options.repository}`);
 	}
@@ -326,6 +436,7 @@ export async function importLandingZoneGitLabHistory(
 		...base,
 		pendingMrIids,
 		pendingCursor: pendingMrIids.length > 0 ? pendingCursor % pendingMrIids.length : 0,
+		pendingDeploymentPages,
 	});
 
 	const recordRepository = async (project: HistoricalProject, provenance?: HistoricalProvenance) => {
@@ -365,9 +476,22 @@ export async function importLandingZoneGitLabHistory(
 		if (!commitSha) throw new Error(`GitLab merge request ${mrId} did not provide a commit SHA`);
 		const pipelinePage = await resolvedDependencies.listPipelines({ repository: options.repository, iid: mr.iid });
 		const pipelines = pipelinePage.pipelines;
-		const deployments =
-			(await resolvedDependencies.listDeployments?.({ repository: options.repository, commitSha }))?.deployments ?? [];
-		const outcome = outcomeFor(mr, pipelines, deployments, commitSha);
+		const deploymentPageNumber = pendingDeploymentPages[String(mr.iid)] ?? 1;
+		const deploymentPage = await resolvedDependencies.listDeployments?.({
+			repository: options.repository,
+			commitSha,
+			page: deploymentPageNumber,
+		});
+		if (deploymentPage?.nextPage !== undefined && deploymentPage.nextPage <= deploymentPageNumber) {
+			throw new Error(`GitLab deployment cursor did not advance for ${options.repository} MR !${mr.iid}`);
+		}
+		const deployments = deploymentPage?.deployments ?? [];
+		const decision = outcomeFor(mr, pipelines, deployments, commitSha, {
+			mr: provenance,
+			pipelines: pipelinePage.provenance,
+			deployments: deploymentPage?.provenance,
+		});
+		const { outcome, evidence } = decision;
 		const terminal = outcome === "declined" || outcome === "applied";
 		if (!terminal && !pendingMrIids.includes(mr.iid) && pendingMrIids.length >= MAX_PENDING_MERGE_REQUESTS) {
 			throw new Error(`Pending merge request safety limit exceeded for ${options.repository}`);
@@ -379,9 +503,10 @@ export async function importLandingZoneGitLabHistory(
 			commitSha,
 			summary: mr.title,
 			createdAt: mr.createdAt,
-			lastSyncedAt: provenance?.retrievedAt,
-			source: provenance?.source,
-			truncated: provenance?.truncated,
+			lastSyncedAt: evidence.retrievedAt ?? provenance?.retrievedAt,
+			source: evidence.source,
+			truncated: evidence.truncated,
+			outcomeEvidence: evidence,
 			outcome,
 			mergeRequest: {
 				id: mrId,
@@ -421,9 +546,14 @@ export async function importLandingZoneGitLabHistory(
 				});
 			}
 		}
-		pendingMrIids = terminal
-			? pendingMrIids.filter((pendingIid) => pendingIid !== mr.iid)
-			: [...new Set([...pendingMrIids, mr.iid])];
+		if (terminal) {
+			pendingMrIids = pendingMrIids.filter((pendingIid) => pendingIid !== mr.iid);
+			delete pendingDeploymentPages[String(mr.iid)];
+		} else {
+			pendingMrIids = [...new Set([...pendingMrIids, mr.iid])];
+			if (deploymentPage?.nextPage) pendingDeploymentPages[String(mr.iid)] = deploymentPage.nextPage;
+			else delete pendingDeploymentPages[String(mr.iid)];
+		}
 	};
 
 	if (options.reconcilePending && pendingMrIids.length > 0) {
@@ -468,6 +598,7 @@ export async function importLandingZoneGitLabHistory(
 		}
 		expectedProjectId ??= pageProjectId;
 		if (page.total === undefined) {
+			await recordRepository(page.project, page.provenance);
 			if (nextPage !== 1) throw new Error("GitLab omitted the exact total after a historical window scan started");
 			const lowerMillis = Date.parse(updatedAfter);
 			const upperMillis = Date.parse(upperBound);
@@ -565,12 +696,12 @@ export async function runLandingZoneGitLabImportSweep(
 	let requiresCheckpoint = false;
 	for (const repository of repositories) {
 		if (repository.availability !== "active") continue;
-		const checkpoint = await dependencies.readCheckpoint?.(dependencies.store, repository.name);
-		if (!checkpoint) {
-			requiresCheckpoint = true;
-			continue;
-		}
 		try {
+			const checkpoint = await dependencies.readCheckpoint?.(dependencies.store, repository.name);
+			if (!checkpoint) {
+				requiresCheckpoint = true;
+				continue;
+			}
 			const result = await importLandingZoneGitLabHistory(
 				{ repository: repository.name, checkpoint, reconcilePending: true },
 				dependencies,

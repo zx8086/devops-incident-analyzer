@@ -225,23 +225,39 @@ export async function listMergeRequestPipelines(client: GitLabReadClient, input:
 
 export async function listProjectDeployments(
 	client: GitLabReadClient,
-	input: { repository: string; commitSha: string },
+	input: { repository: string; commitSha: string; page?: number },
 ) {
 	const repository = resolveRepository(input.repository);
 	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
 	if (!client.projectDeployments) throw new Error("GitLab deployments evidence is unavailable");
-	const { provenance } = await repositoryProvenance(client, repository);
+	const { project, provenance } = await repositoryProvenance(client, repository);
 	const deployments = [];
-	let page = 1;
+	let page = input.page ?? 1;
+	if (!Number.isInteger(page) || page < 1) throw new Error("page must be a positive integer");
 	let truncated = false;
+	let nextPage: number | undefined;
 	for (let read = 0; read < 3; read++) {
-		const result = await client.projectDeployments(repository.projectPath, page, 20);
+		const result = await client.projectDeployments(project.path, page, 20);
 		deployments.push(...result.deployments.filter((deployment) => deployment.sha === input.commitSha));
-		if (!result.nextPage) break;
+		if (deployments.length > 0 || !result.nextPage) {
+			nextPage = result.nextPage;
+			truncated = result.nextPage !== undefined;
+			break;
+		}
+		if (result.nextPage <= page) throw new Error("GitLab deployment cursor did not advance");
+		nextPage = result.nextPage;
+		if (read === 2) {
+			truncated = true;
+			break;
+		}
 		page = result.nextPage;
-		if (read === 2) truncated = true;
 	}
-	return { repository, deployments, provenance: { ...provenance, truncated } };
+	return {
+		repository,
+		deployments,
+		...(nextPage && { nextPage }),
+		provenance: { ...provenance, truncated },
+	};
 }
 
 export async function readPipelinePlan(client: GitLabReadClient, input: { repository: string; pipelineId: number }) {

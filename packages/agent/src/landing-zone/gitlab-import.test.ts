@@ -277,12 +277,56 @@ describe("importLandingZoneGitLabHistory", () => {
 			{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
 			{
 				...fixture.dependencies,
-				listDeployments: async () => ({ deployments: [{ sha: "commit-7", status: "success" }] }),
+				listDeployments: async () => ({
+					deployments: [{ sha: "commit-7", status: "success", updatedAt: "2026-09-03T00:02:00.000Z", pipelineId: 99 }],
+					provenance: { source: "gitlab" as const, retrievedAt: "2026-09-03T00:03:00.000Z", truncated: false },
+				}),
 			} as LandingZoneImportDependencies & {
-				listDeployments: () => Promise<{ deployments: Array<{ sha: string; status: string }> }>;
+				listDeployments: () => Promise<{
+					deployments: Array<{ sha: string; status: string; updatedAt: string; pipelineId: number }>;
+				}>;
 			},
 		);
 		expect(result.outcomes).toEqual(["applied"]);
+		expect(fixture.recorded.find((entry) => entry.type === "change")).toMatchObject({
+			value: {
+				source: "gitlab-deployment",
+				outcomeEvidence: {
+					source: "gitlab-deployment",
+					commitSha: "commit-7",
+					pipelineId: "99",
+					observedAt: "2026-09-03T00:02:00.000Z",
+					truncated: false,
+				},
+			},
+		});
+	});
+
+	test("uses the newest MR pipeline instead of allowing an old failure to dominate a successful retry", async () => {
+		const fixture = dependencies(
+			[mr()],
+			[
+				pipeline({ id: 99, status: "failed", updatedAt: "2026-09-03T00:01:00.000Z" }),
+				pipeline({ id: 100, status: "success", updatedAt: "2026-09-03T00:02:00.000Z" }),
+			],
+		);
+
+		const result = await importLandingZoneGitLabHistory(
+			{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
+			fixture.dependencies,
+		);
+
+		expect(result.outcomes).toEqual(["merged-unverified"]);
+		expect(fixture.recorded.find((entry) => entry.type === "change")).toMatchObject({
+			value: {
+				source: "gitlab-pipeline",
+				outcomeEvidence: {
+					source: "gitlab-pipeline",
+					pipelineId: "100",
+					observedAt: "2026-09-03T00:02:00.000Z",
+				},
+			},
+		});
 	});
 
 	test("keeps a stable repository ID when GitLab reports a renamed project path", async () => {
@@ -474,8 +518,8 @@ describe("importLandingZoneGitLabHistory", () => {
 				expect.objectContaining({
 					type: "change",
 					value: expect.objectContaining({
-						source: "gitlab",
-						lastSyncedAt: "2026-09-04T10:00:00.000Z",
+						source: "gitlab-pipeline",
+						lastSyncedAt: "2026-09-04T10:01:00.000Z",
 						truncated: true,
 					}),
 				}),
@@ -555,6 +599,25 @@ describe("importLandingZoneGitLabHistory", () => {
 		const result = await runLandingZoneGitLabImportSweep(undefined, scheduled);
 		expect(result.outcomes).toEqual(["merged-unverified"]);
 		expect(result.projectErrors).toEqual([{ repository: "aws-lz-ami", message: "GitLab unavailable" }]);
+	});
+
+	test("isolates a checkpoint read failure and continues with later repositories", async () => {
+		const fixture = dependencies([mr()]);
+		const scheduled: LandingZoneImportDependencies = {
+			...fixture.dependencies,
+			listRepositories: async () => [
+				{ name: "aws-lz-ami", availability: "active" },
+				{ name: "aws-lz-account-creator", availability: "active" },
+			],
+			readCheckpoint: async (_store, repository) => {
+				if (repository === "aws-lz-ami") throw new Error("Malformed checkpoint state");
+				return { projectId: "42", updatedAfter: "2026-09-01T00:00:00.000Z" };
+			},
+		};
+
+		const result = await runLandingZoneGitLabImportSweep(undefined, scheduled);
+		expect(result.outcomes).toEqual(["merged-unverified"]);
+		expect(result.projectErrors).toEqual([{ repository: "aws-lz-ami", message: "Malformed checkpoint state" }]);
 	});
 
 	test("keeps replay writes idempotent through stable GitLab entity keys", async () => {
@@ -638,7 +701,9 @@ describe("importLandingZoneGitLabHistory", () => {
 					directReads.push(iid);
 					return { project: PROJECT, mergeRequest: mr({ updatedAt: initialMr.updatedAt }) };
 				},
-				listDeployments: async () => ({ deployments: [{ sha: "commit-7", status: "success" }] }),
+				listDeployments: async () => ({
+					deployments: [{ sha: "commit-7", status: "success", updatedAt: "2026-09-04T00:00:00.000Z" }],
+				}),
 			},
 		);
 
@@ -647,6 +712,61 @@ describe("importLandingZoneGitLabHistory", () => {
 		expect(result.checkpoint?.pendingMrIids).toEqual([]);
 		const changes = first.recorded.filter((entry) => entry.type === "change");
 		expect(changes.at(-1)).toMatchObject({ value: { id: "gitlab:42:7", outcome: "applied" } });
+	});
+
+	test("persists a per-MR deployment cursor until an exact SHA beyond sixty newer deployments is found", async () => {
+		const deploymentPages: number[] = [];
+		let checkpoint = {
+			projectId: "42",
+			updatedAfter: "2026-09-01T00:00:00.000Z",
+			pendingMrIids: [7],
+			pendingCursor: 0,
+		};
+		for (let run = 0; run < 2; run++) {
+			const fixture = dependencies([], []);
+			const result = await importLandingZoneGitLabHistory(
+				{
+					repository: "aws-lz-account-creator",
+					checkpoint,
+					reconcilePending: true,
+					maxPages: 1,
+				},
+				{
+					...fixture.dependencies,
+					readMergeRequest: async () => ({ project: PROJECT, mergeRequest: mr() }),
+					listDeployments: async ({ page = 1 }) => {
+						deploymentPages.push(page);
+						if (page === 1) {
+							return {
+								deployments: [],
+								nextPage: 4,
+								provenance: {
+									source: "gitlab" as const,
+									retrievedAt: "2026-09-04T00:00:00.000Z",
+									truncated: true,
+								},
+							};
+						}
+						return {
+							deployments: [{ sha: "commit-7", status: "success", updatedAt: "2026-09-05T00:00:00.000Z" }],
+							provenance: {
+								source: "gitlab" as const,
+								retrievedAt: "2026-09-05T00:01:00.000Z",
+								truncated: false,
+							},
+						};
+					},
+				},
+			);
+			if (run === 0) {
+				expect(result.outcomes).toContain("merged-unverified");
+				expect(result.checkpoint?.pendingDeploymentPages).toEqual({ "7": 4 });
+			}
+			checkpoint = result.checkpoint as typeof checkpoint;
+		}
+
+		expect(deploymentPages).toEqual([1, 4]);
+		expect(checkpoint.pendingMrIids).toEqual([]);
 	});
 
 	test("persists pending reconciliation state while history pagination remains in progress", async () => {
@@ -761,6 +881,29 @@ describe("importLandingZoneGitLabHistory", () => {
 		expect(exact.checkpoint?.pendingMrIids).toEqual([7]);
 		expect(exact.outcomes).toEqual(["proposed"]);
 		expect(checkpoints).toHaveLength(1);
+	});
+
+	test("records the GitLab repository before persisting a missing-total split checkpoint", async () => {
+		let repositoryExists = false;
+		const fixture = dependencies([], []);
+		await importLandingZoneGitLabHistory(
+			{ repository: "aws-lz-account-creator", startAt: "2026-09-01T00:00:00.000Z", maxPages: 1 },
+			{
+				...fixture.dependencies,
+				listMergeRequests: async () => ({ project: PROJECT, mergeRequests: [] }),
+				recordCheckpoint: async () => {
+					if (!repositoryExists) throw new Error("checkpoint repository does not exist");
+				},
+				writers: {
+					...fixture.dependencies.writers,
+					recordRepository: async () => {
+						repositoryExists = true;
+					},
+				},
+			},
+		);
+
+		expect(repositoryExists).toBe(true);
 	});
 
 	test("fails closed when an exact total is unavailable at one-millisecond resolution", async () => {

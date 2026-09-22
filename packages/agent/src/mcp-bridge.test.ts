@@ -1,16 +1,33 @@
 // packages/agent/src/mcp-bridge.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import * as mcpBridge from "./mcp-bridge.ts";
 import {
 	_connectTimeoutForTest as connectTimeoutFor,
 	_getHealthPollTickForTest as getHealthPollTick,
 	_getHealthPollTimerForTest as getHealthPollTimer,
 	isClosedModuleRunnerError,
+	mcpEvents,
 	serializeMcpConnectError,
 	_startHealthPollingForTest as startHealthPolling,
 	stopHealthPolling,
 	_toolTimeoutForTest as toolTimeoutFor,
 	_withTimeoutForTest as withTimeout,
 } from "./mcp-bridge.ts";
+
+test("a connected-state transition emits once for scheduler readiness", () => {
+	const markConnected = (mcpBridge as unknown as Record<string, unknown>)._markServerConnectedForTest;
+	expect(markConnected).toBeFunction();
+	let events = 0;
+	const listener = () => events++;
+	mcpEvents.on("mcp_connected", listener);
+	try {
+		(markConnected as (server: string) => void)("scheduler-readiness-test-mcp");
+		(markConnected as (server: string) => void)("scheduler-readiness-test-mcp");
+		expect(events).toBe(1);
+	} finally {
+		mcpEvents.off("mcp_connected", listener);
+	}
+});
 
 // SIO-705: pino's default JSON serializer drops non-enumerable Error fields.
 // The styles-v3 production run logged `Failed to connect to MCP server` with

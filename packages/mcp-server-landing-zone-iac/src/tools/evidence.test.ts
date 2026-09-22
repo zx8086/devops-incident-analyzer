@@ -88,15 +88,40 @@ describe("representative evidence", () => {
 		const client = fakeClient();
 		client.projectDeployments = async () => ({
 			deployments: [
-				{ sha: "other-sha", status: "success" },
-				{ sha: "merge-sha", status: "success", pipelineId: 99 },
+				{ sha: "other-sha", status: "success", updatedAt: "2026-09-22T10:00:00.000Z" },
+				{ sha: "merge-sha", status: "success", updatedAt: "2026-09-22T11:00:00.000Z", pipelineId: 99 },
 			],
 		});
 		const result = await listProjectDeployments(client, {
 			repository: "aws-lz-account-creator",
 			commitSha: "merge-sha",
 		});
-		expect(result.deployments).toEqual([{ sha: "merge-sha", status: "success", pipelineId: 99 }]);
+		expect(result.deployments).toEqual([
+			{ sha: "merge-sha", status: "success", updatedAt: "2026-09-22T11:00:00.000Z", pipelineId: 99 },
+		]);
+	});
+
+	test("returns a resumable deployment cursor when the bounded exact-SHA search has more pages", async () => {
+		const client = fakeClient();
+		const pages: number[] = [];
+		client.projectDeployments = async (_project, page) => {
+			pages.push(page);
+			return {
+				deployments: [{ sha: `other-${page}`, status: "success", updatedAt: `2026-09-2${page}T10:00:00.000Z` }],
+				nextPage: page + 1,
+			};
+		};
+
+		const result = await listProjectDeployments(client, {
+			repository: "aws-lz-account-creator",
+			commitSha: "merge-sha",
+			page: 4,
+		});
+
+		expect(pages).toEqual([4, 5, 6]);
+		expect(result.deployments).toEqual([]);
+		expect(result.nextPage).toBe(7);
+		expect(result.provenance.truncated).toBe(true);
 	});
 	test("returns schema, generator, test, five active examples, and relevant open work", async () => {
 		const evidence = await findRepresentativeExamples(fakeClient(), {

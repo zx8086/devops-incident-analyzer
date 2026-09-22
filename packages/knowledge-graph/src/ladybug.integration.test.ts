@@ -111,6 +111,7 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", nextPage: 1, seenMrIds: ["42:7"] },
 			pendingMrIids: [7, 8],
 			pendingCursor: 1,
+			pendingDeploymentPages: { "7": 4 },
 		});
 		expect(await readLandingZoneGitLabImportCheckpoint(store, "aws-lz-account-creator")).toEqual({
 			projectId: "42",
@@ -118,6 +119,7 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", nextPage: 1, seenMrIds: ["42:7"] },
 			pendingMrIids: [7, 8],
 			pendingCursor: 1,
+			pendingDeploymentPages: { "7": 4 },
 		});
 	});
 
@@ -163,21 +165,56 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 				iid: "42",
 				webUrl: `${previousRepositoryPath}/-/merge_requests/42`,
 			},
-			outcome: "proposed",
+			outcome: "declined",
 			createdAt: "2026-09-22T15:00:00.000Z",
+			outcomeEvidence: {
+				source: "gitlab-mr",
+				observedAt: "2026-09-22T15:00:00.000Z",
+				retrievedAt: "2026-09-22T15:00:30.000Z",
+				truncated: false,
+			},
 		});
 		await recordLandingZoneChange(store, {
 			id: "change-42",
 			repositoryId,
 			rootId,
 			mergeRequest: { id: `${repositoryId}:42`, projectId: repositoryId, iid: "42", webUrl: mrUrl },
+			outcome: "proposed",
+			outcomeEvidence: {
+				source: "gitlab-mr",
+				observedAt: "2026-09-22T15:05:00.000Z",
+				retrievedAt: "2026-09-22T15:05:30.000Z",
+				truncated: false,
+			},
+		});
+		await recordLandingZoneChange(store, {
+			id: "change-42",
+			repositoryId,
+			rootId,
+			mergeRequest: { id: `${repositoryId}:42`, projectId: repositoryId, iid: "42", webUrl: mrUrl },
+			commitSha: "merge-sha",
 			outcome: "applied",
+			outcomeEvidence: {
+				source: "gitlab-deployment",
+				observedAt: "2026-09-22T15:10:00.000Z",
+				retrievedAt: "2026-09-22T15:10:30.000Z",
+				commitSha: "merge-sha",
+				pipelineId: "10",
+				truncated: false,
+			},
 		});
 		await recordLandingZoneChange(store, {
 			id: "change-42",
 			repositoryId,
 			rootId,
 			mergeRequest: { id: `${repositoryId}:42`, projectId: repositoryId, iid: "42", webUrl: mrUrl },
+			outcome: "proposed",
+			outcomeEvidence: {
+				source: "gitlab-mr",
+				observedAt: "2026-09-22T15:05:00.000Z",
+				retrievedAt: "2026-09-22T15:20:00.000Z",
+				truncated: false,
+			},
 		});
 		await recordPipeline(store, {
 			mrId: `${repositoryId}:42`,
@@ -227,6 +264,8 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		expect(history).toHaveLength(1);
 		expect(history[0]?.changeId).toBe("change-42");
 		expect(history[0]?.outcome).toBe("applied");
+		expect(history[0]?.outcomeEvidenceSource).toBe("gitlab-deployment");
+		expect(history[0]?.outcomeEvidenceSha).toBe("merge-sha");
 		expect(history[0]?.pipelineId).toBe("10");
 		expect(await standardsForRepository(store, repositoryPath)).toEqual([
 			{
