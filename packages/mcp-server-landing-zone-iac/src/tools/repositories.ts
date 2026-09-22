@@ -173,6 +173,7 @@ export function resolveRepository(alias: string): LandingZoneRepository {
 
 export interface GitLabProject {
 	id: number;
+	path: string;
 	defaultBranch: string;
 	headSha: string;
 	lastActivityAt: string;
@@ -206,7 +207,15 @@ export interface GitLabPipelineJob {
 	name: string;
 	status: string;
 	webUrl: string;
-	environmentName?: string;
+	deploymentTier?: string;
+}
+
+export function isVerifiedTerraformDeploymentJob(job: GitLabPipelineJob): boolean {
+	return (
+		job.status === "success" &&
+		Boolean(job.deploymentTier) &&
+		/(^|[-_:])(?:terraform[-_:])?apply($|[-_:])/i.test(job.name)
+	);
 }
 
 export interface GitLabHistoricalMergeRequest {
@@ -261,6 +270,7 @@ export interface Provenance {
 
 const GitLabProjectResponseSchema = z.object({
 	id: z.number().int(),
+	path_with_namespace: z.string(),
 	default_branch: z.string().nullable(),
 	last_activity_at: z.string(),
 });
@@ -282,7 +292,7 @@ const GitLabJobsResponseSchema = z.array(
 		name: z.string(),
 		status: z.string(),
 		web_url: z.string(),
-		environment: z.object({ name: z.string() }).nullable().optional(),
+		deployment_tier: z.string().nullable().optional(),
 	}),
 );
 const GitLabHistoricalMergeRequestsResponseSchema = z.array(
@@ -358,6 +368,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 				: [];
 			return {
 				id: project.id,
+				path: project.path_with_namespace,
 				defaultBranch,
 				headSha: commits[0]?.id ?? "",
 				lastActivityAt: project.last_activity_at,
@@ -416,7 +427,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 				name: job.name,
 				status: job.status,
 				webUrl: job.web_url,
-				...(job.environment?.name && { environmentName: job.environment.name }),
+				...(job.deployment_tier && { deploymentTier: job.deployment_tier }),
 			}));
 		},
 		jobTrace(projectPath, jobId) {
@@ -464,7 +475,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 						createdAt: pipeline.created_at,
 						updatedAt: pipeline.updated_at,
 						hasTerraformPlan: jobs.some((job) => /(^|[-_:])(terraform[-_:]?)?plan($|[-_:])/i.test(job.name)),
-						isVerifiedDeployment: jobs.some((job) => job.status === "success" && Boolean(job.environmentName)),
+						isVerifiedDeployment: jobs.some(isVerifiedTerraformDeploymentJob),
 					};
 				}),
 			);
@@ -508,8 +519,8 @@ export async function repositoryProvenance(
 		project,
 		provenance: {
 			source: "gitlab",
-			projectPath: repository.projectPath,
-			webUrl: `https://gitlab.com/${repository.projectPath}`,
+			projectPath: project.path,
+			webUrl: `https://gitlab.com/${project.path}`,
 			ref,
 			defaultBranch: project.defaultBranch,
 			retrievedAt: new Date().toISOString(),

@@ -10,7 +10,13 @@ import type { GitLabReadClient } from "./repositories.ts";
 function fakeClient(): GitLabReadClient {
 	return {
 		async project() {
-			return { id: 42, defaultBranch: "main", headSha: "abc123", lastActivityAt: "2026-09-22T08:00:00Z" };
+			return {
+				id: 42,
+				path: "pvhcorp/dhco/aws/aws-lz-renamed/account-creator",
+				defaultBranch: "main",
+				headSha: "abc123",
+				lastActivityAt: "2026-09-22T08:00:00Z",
+			};
 		},
 		async tree() {
 			return {
@@ -127,7 +133,11 @@ describe("representative evidence", () => {
 		});
 
 		expect(calls).toEqual([["pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator", "2026-09-01T00:00:00.000Z", 2, 10]]);
-		expect(result).toMatchObject({ project: { id: 42 }, nextPage: 3, mergeRequests: [{ commitSha: "abc123" }] });
+		expect(result).toMatchObject({
+			project: { id: 42, path: "pvhcorp/dhco/aws/aws-lz-renamed/account-creator" },
+			nextPage: 3,
+			mergeRequests: [{ commitSha: "abc123" }],
+		});
 	});
 
 	test("exposes deployment and plan signals without persisting plan content", async () => {
@@ -149,5 +159,22 @@ describe("representative evidence", () => {
 			expect.objectContaining({ id: 99, hasTerraformPlan: true, isVerifiedDeployment: true }),
 		]);
 		expect(JSON.stringify(result)).not.toContain("Plan: 2 to add");
+	});
+
+	test("does not treat an environment-only review job as a verified deployment", async () => {
+		const client = fakeClient();
+		client.mergeRequestPipelines = async () => [
+			{
+				id: 99,
+				status: "success",
+				webUrl: "https://gitlab.example/pipelines/99",
+				createdAt: "2026-09-03T00:00:00.000Z",
+				updatedAt: "2026-09-03T00:01:00.000Z",
+				hasTerraformPlan: true,
+				isVerifiedDeployment: false,
+			},
+		];
+		const result = await listMergeRequestPipelines(client, { repository: "aws-lz-account-creator", iid: 7 });
+		expect(result.pipelines[0]?.isVerifiedDeployment).toBe(false);
 	});
 });

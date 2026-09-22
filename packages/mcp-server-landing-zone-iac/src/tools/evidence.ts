@@ -140,7 +140,7 @@ export async function listHistoricalMergeRequests(
 	const result = await client.historicalMergeRequests(repository.projectPath, input.updatedAfter, page, perPage);
 	return {
 		repository,
-		project: { id: project.id, path: repository.projectPath, defaultBranch: project.defaultBranch, headSha: project.headSha },
+		project: { id: project.id, path: project.path, defaultBranch: project.defaultBranch, headSha: project.headSha },
 		mergeRequests: result.mergeRequests,
 		...(result.nextPage && { nextPage: result.nextPage }),
 		provenance,

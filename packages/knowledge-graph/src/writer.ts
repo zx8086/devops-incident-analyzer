@@ -53,6 +53,7 @@ export interface EntityGraph {
 export interface LandingZoneRepositoryRecord {
 	group: GitLabGroupNode;
 	repository: RepositoryNode;
+	provenance?: { source: string; retrievedAt: string; truncated: boolean };
 }
 
 export async function recordLandingZoneRepository(
@@ -63,11 +64,11 @@ export async function recordLandingZoneRepository(
 	const group = GitLabGroupNodeSchema.parse({ ...record.group, lastSyncedAt });
 	const repository = RepositoryNodeSchema.parse({ ...record.repository, lastSyncedAt });
 	await store.run(
-		"MERGE (g:GitLabGroup {id: $id}) SET g.path = $path, g.name = coalesce($name, g.name), g.webUrl = coalesce($webUrl, g.webUrl), g.lastSyncedAt = $lastSyncedAt",
-		{ id: group.id, path: group.path, name: group.name ?? null, webUrl: group.webUrl ?? null, lastSyncedAt },
+		"MERGE (g:GitLabGroup {id: $id}) SET g.path = $path, g.name = coalesce($name, g.name), g.webUrl = coalesce($webUrl, g.webUrl), g.lastSyncedAt = $lastSyncedAt, g.source = coalesce($source, g.source), g.evidenceTruncated = coalesce($evidenceTruncated, g.evidenceTruncated)",
+		{ id: group.id, path: group.path, name: group.name ?? null, webUrl: group.webUrl ?? null, lastSyncedAt, source: record.provenance?.source ?? null, evidenceTruncated: record.provenance?.truncated ?? null },
 	);
 	await store.run(
-		"MERGE (r:Repository {id: $id}) SET r.groupId = $groupId, r.path = $path, r.name = coalesce($name, r.name), r.defaultBranch = coalesce($defaultBranch, r.defaultBranch), r.webUrl = coalesce($webUrl, r.webUrl), r.commitSha = coalesce($commitSha, r.commitSha), r.lastSyncedAt = $lastSyncedAt",
+		"MERGE (r:Repository {id: $id}) SET r.groupId = $groupId, r.path = $path, r.name = coalesce($name, r.name), r.defaultBranch = coalesce($defaultBranch, r.defaultBranch), r.webUrl = coalesce($webUrl, r.webUrl), r.commitSha = coalesce($commitSha, r.commitSha), r.lastSyncedAt = $lastSyncedAt, r.source = coalesce($source, r.source), r.evidenceTruncated = coalesce($evidenceTruncated, r.evidenceTruncated)",
 		{
 			id: repository.id,
 			groupId: repository.groupId,
@@ -77,6 +78,8 @@ export async function recordLandingZoneRepository(
 			webUrl: repository.webUrl ?? null,
 			commitSha: repository.commitSha ?? null,
 			lastSyncedAt,
+			source: record.provenance?.source ?? null,
+			evidenceTruncated: record.provenance?.truncated ?? null,
 		},
 	);
 	await store.run(
@@ -153,6 +156,9 @@ export interface LandingZoneChangeRecord {
 	threadId?: string;
 	summary?: string;
 	createdAt?: string;
+	lastSyncedAt?: string;
+	source?: string;
+	truncated?: boolean;
 	mergeRequest?: {
 		id: string;
 		projectId: string;
@@ -166,12 +172,15 @@ export interface LandingZoneChangeRecord {
 export async function recordLandingZoneChange(store: GraphStore, change: LandingZoneChangeRecord): Promise<void> {
 	if (!change.id || !change.repositoryId) return;
 	await store.run(
-		"MERGE (c:ConfigChange {id: $id}) SET c.workflow = coalesce($workflow, c.workflow), c.summary = coalesce($summary, c.summary), c.createdAt = coalesce(c.createdAt, $createdAt), c.outcome = CASE WHEN $outcome IS NULL THEN coalesce(c.outcome, 'proposed') WHEN c.outcome = 'applied' THEN c.outcome WHEN $outcome = 'proposed' AND c.outcome IS NOT NULL THEN c.outcome ELSE $outcome END",
+		"MERGE (c:ConfigChange {id: $id}) SET c.workflow = coalesce($workflow, c.workflow), c.summary = coalesce($summary, c.summary), c.createdAt = coalesce(c.createdAt, $createdAt), c.lastSyncedAt = coalesce($lastSyncedAt, c.lastSyncedAt), c.source = coalesce($source, c.source), c.evidenceTruncated = coalesce($evidenceTruncated, c.evidenceTruncated), c.outcome = CASE WHEN $outcome IS NULL THEN coalesce(c.outcome, 'proposed') WHEN c.outcome = 'applied' THEN c.outcome WHEN $outcome = 'proposed' AND c.outcome IS NOT NULL THEN c.outcome ELSE $outcome END",
 		{
 			id: change.id,
 			workflow: change.workflow ?? null,
 			summary: change.summary ?? null,
 			createdAt: change.createdAt ?? new Date().toISOString(),
+			lastSyncedAt: change.lastSyncedAt ?? null,
+			source: change.source ?? null,
+			evidenceTruncated: change.truncated ?? null,
 			outcome: change.outcome ?? null,
 		},
 	);
@@ -222,6 +231,9 @@ export async function recordLandingZoneChange(store: GraphStore, change: Landing
 export interface TerraformPlanRecord {
 	pipelineId: string;
 	plan: TerraformPlanNode;
+	source?: string;
+	lastSyncedAt?: string;
+	truncated?: boolean;
 }
 
 export async function recordTerraformPlan(store: GraphStore, input: TerraformPlanRecord): Promise<void> {
@@ -229,13 +241,16 @@ export async function recordTerraformPlan(store: GraphStore, input: TerraformPla
 	const plan = TerraformPlanNodeSchema.parse(input.plan);
 	await store.run("MERGE (p:Pipeline {id: $pipelineId})", { pipelineId: input.pipelineId });
 	await store.run(
-		"MERGE (tp:TerraformPlan {id: $id}) SET tp.status = coalesce($status, tp.status), tp.summary = coalesce($summary, tp.summary), tp.artifactUrl = coalesce($artifactUrl, tp.artifactUrl), tp.createdAt = coalesce(tp.createdAt, $createdAt)",
+		"MERGE (tp:TerraformPlan {id: $id}) SET tp.status = coalesce($status, tp.status), tp.summary = coalesce($summary, tp.summary), tp.artifactUrl = coalesce($artifactUrl, tp.artifactUrl), tp.createdAt = coalesce(tp.createdAt, $createdAt), tp.source = coalesce($source, tp.source), tp.lastSyncedAt = coalesce($lastSyncedAt, tp.lastSyncedAt), tp.evidenceTruncated = coalesce($evidenceTruncated, tp.evidenceTruncated)",
 		{
 			id: plan.id,
 			status: plan.status ?? null,
 			summary: plan.summary ?? null,
 			artifactUrl: plan.artifactUrl ?? null,
 			createdAt: plan.createdAt ?? new Date().toISOString(),
+			source: input.source ?? null,
+			lastSyncedAt: input.lastSyncedAt ?? null,
+			evidenceTruncated: input.truncated ?? null,
 		},
 	);
 	await store.run(
@@ -713,6 +728,9 @@ interface PipelineRecordBase {
 	status?: string;
 	url?: string;
 	updatedAt?: string;
+	lastSyncedAt?: string;
+	source?: string;
+	truncated?: boolean;
 }
 
 export type PipelineRecord =
@@ -725,13 +743,16 @@ export async function recordPipeline(store: GraphStore, pipeline: PipelineRecord
 	if (pipeline.mrId && !pipeline.createdAt) throw new Error("Landing Zone pipelines require createdAt");
 	const mrId = pipeline.mrId ?? pipeline.mrUrl;
 	await store.run(
-		"MERGE (pl:Pipeline {id: $id}) SET pl.status = coalesce($status, pl.status), pl.url = coalesce($url, pl.url), pl.createdAt = coalesce(pl.createdAt, $createdAt), pl.updatedAt = coalesce($updatedAt, pl.updatedAt)",
+		"MERGE (pl:Pipeline {id: $id}) SET pl.status = coalesce($status, pl.status), pl.url = coalesce($url, pl.url), pl.createdAt = coalesce(pl.createdAt, $createdAt), pl.updatedAt = coalesce($updatedAt, pl.updatedAt), pl.lastSyncedAt = coalesce($lastSyncedAt, pl.lastSyncedAt), pl.source = coalesce($source, pl.source), pl.evidenceTruncated = coalesce($evidenceTruncated, pl.evidenceTruncated)",
 		{
 			id,
 			status: pipeline.status ?? null,
 			url: pipeline.url ?? null,
 			createdAt: pipeline.createdAt ?? null,
 			updatedAt: pipeline.updatedAt ?? null,
+			lastSyncedAt: pipeline.lastSyncedAt ?? null,
+			source: pipeline.source ?? null,
+			evidenceTruncated: pipeline.truncated ?? null,
 		},
 	);
 	await store.run(

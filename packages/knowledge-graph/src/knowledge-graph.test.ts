@@ -285,6 +285,8 @@ describe("Landing Zone graph writers", () => {
 			threadId: "thread-42",
 			summary: "Add example account",
 			createdAt: "2026-09-22T15:00:00.000Z",
+			lastSyncedAt: "2026-09-22T15:01:00.000Z",
+			source: "gitlab",
 			mergeRequest: {
 				id: "101:42",
 				projectId: "101",
@@ -303,6 +305,8 @@ describe("Landing Zone graph writers", () => {
 		expect(changeWrite?.cypher).toContain("c.outcome = CASE");
 		expect(changeWrite?.cypher).toContain("WHEN c.outcome = 'applied' THEN c.outcome");
 		expect(changeWrite?.cypher).toContain("WHEN $outcome = 'proposed'");
+		expect(changeWrite?.params?.source).toBe("gitlab");
+		expect(changeWrite?.params?.lastSyncedAt).toBe("2026-09-22T15:01:00.000Z");
 	});
 
 	test("recordTerraformPlan and recordGovernanceBinding attach outcomes and standards with stable identities", async () => {

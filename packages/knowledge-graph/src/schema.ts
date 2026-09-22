@@ -273,6 +273,9 @@ export const PipelineNodeSchema = z
 		url: z.string().optional(),
 		createdAt: z.string().optional(),
 		updatedAt: z.string().optional(),
+		lastSyncedAt: z.string().optional(),
+		source: z.string().optional(),
+		evidenceTruncated: z.boolean().optional(),
 	})
 	.strict();
 // SIO-1038: verbatim per-turn user prompt. text holds the RAW, untruncated prompt.
@@ -294,6 +297,8 @@ export const GitLabGroupNodeSchema = z
 		name: z.string().optional(),
 		webUrl: z.string().optional(),
 		lastSyncedAt: z.string().optional(),
+		source: z.string().optional(),
+		evidenceTruncated: z.boolean().optional(),
 	})
 	.strict();
 export const RepositoryNodeSchema = z
@@ -306,6 +311,8 @@ export const RepositoryNodeSchema = z
 		webUrl: z.string().optional(),
 		commitSha: z.string().optional(),
 		lastSyncedAt: z.string().optional(),
+		source: z.string().optional(),
+		evidenceTruncated: z.boolean().optional(),
 	})
 	.strict();
 export const TerraformRootNodeSchema = z
@@ -341,6 +348,9 @@ export const TerraformPlanNodeSchema = z
 		summary: z.string().optional(),
 		artifactUrl: z.string().optional(),
 		createdAt: z.string().optional(),
+		lastSyncedAt: z.string().optional(),
+		source: z.string().optional(),
+		evidenceTruncated: z.boolean().optional(),
 	})
 	.strict();
 export const StandardNodeSchema = z
@@ -564,7 +574,7 @@ export const MIGRATIONS: readonly string[] = [
 	// EXISTING graphs gain those columns via the tolerant ALTER_MIGRATIONS below
 	// (CREATE ... IF NOT EXISTS no-ops on an existing table, so it cannot add them).
 	"CREATE NODE TABLE IF NOT EXISTS ElasticDeployment(name STRING, ecId STRING, region STRING, PRIMARY KEY(name))",
-	"CREATE NODE TABLE IF NOT EXISTS ConfigChange(id STRING, workflow STRING, filePath STRING, summary STRING, createdAt STRING, outcome STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS ConfigChange(id STRING, workflow STRING, filePath STRING, summary STRING, createdAt STRING, lastSyncedAt STRING, source STRING, evidenceTruncated BOOLEAN, outcome STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS MergeRequest(url STRING, webUrl STRING, projectId STRING, iid STRING, lastSyncedAt STRING, PRIMARY KEY(url))",
 	"CREATE REL TABLE IF NOT EXISTS CHANGED_BY(FROM ElasticDeployment TO ConfigChange)",
 	"CREATE REL TABLE IF NOT EXISTS PROPOSED_IN(FROM ConfigChange TO MergeRequest)",
@@ -574,7 +584,7 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE NODE TABLE IF NOT EXISTS StackInstance(id STRING, deployment STRING, stack STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS Workflow(name STRING, PRIMARY KEY(name))",
 	"CREATE NODE TABLE IF NOT EXISTS Session(threadId STRING, PRIMARY KEY(threadId))",
-	"CREATE NODE TABLE IF NOT EXISTS Pipeline(id STRING, status STRING, url STRING, createdAt STRING, updatedAt STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS Pipeline(id STRING, status STRING, url STRING, createdAt STRING, updatedAt STRING, lastSyncedAt STRING, source STRING, evidenceTruncated BOOLEAN, PRIMARY KEY(id))",
 	// SIO-1038: verbatim per-turn user prompt. text holds the RAW, untruncated prompt.
 	"CREATE NODE TABLE IF NOT EXISTS Prompt(id STRING, text STRING, agent STRING, createdAt STRING, PRIMARY KEY(id))",
 	"CREATE REL TABLE IF NOT EXISTS USES_MODULE(FROM Stack TO Module)",
@@ -587,12 +597,12 @@ export const MIGRATIONS: readonly string[] = [
 	// SIO-1038: a turn's Prompt -> the Session (thread) it was asked in.
 	"CREATE REL TABLE IF NOT EXISTS PROMPTED_IN(FROM Prompt TO Session)",
 	// SIO-1867: PVH Landing Zone repository, Terraform, plan, and governance graph.
-	"CREATE NODE TABLE IF NOT EXISTS GitLabGroup(id STRING, path STRING, name STRING, webUrl STRING, lastSyncedAt STRING, PRIMARY KEY(id))",
-	"CREATE NODE TABLE IF NOT EXISTS Repository(id STRING, groupId STRING, path STRING, name STRING, defaultBranch STRING, webUrl STRING, commitSha STRING, lastSyncedAt STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS GitLabGroup(id STRING, path STRING, name STRING, webUrl STRING, lastSyncedAt STRING, source STRING, evidenceTruncated BOOLEAN, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS Repository(id STRING, groupId STRING, path STRING, name STRING, defaultBranch STRING, webUrl STRING, commitSha STRING, lastSyncedAt STRING, source STRING, evidenceTruncated BOOLEAN, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS TerraformRoot(id STRING, repositoryId STRING, path STRING, managesAccounts BOOLEAN, lastSyncedAt STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS TerraformModule(id STRING, repositoryId STRING, path STRING, name STRING, lastSyncedAt STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS SharedModule(id STRING, source STRING, version STRING, lastSyncedAt STRING, PRIMARY KEY(id))",
-	"CREATE NODE TABLE IF NOT EXISTS TerraformPlan(id STRING, status STRING, summary STRING, artifactUrl STRING, createdAt STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS TerraformPlan(id STRING, status STRING, summary STRING, artifactUrl STRING, createdAt STRING, lastSyncedAt STRING, source STRING, evidenceTruncated BOOLEAN, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS Standard(id STRING, title STRING, status STRING, url STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS ADR(id STRING, title STRING, status STRING, url STRING, PRIMARY KEY(id))",
 	"CREATE REL TABLE IF NOT EXISTS CONTAINS(FROM GitLabGroup TO Repository)",
@@ -663,12 +673,25 @@ export const ALTER_MIGRATIONS: readonly string[] = [
 	// incident's report (or when a learn-from match is confirmed). "" = uncurated.
 	"ALTER TABLE Incident ADD ticketKey STRING DEFAULT ''",
 	"ALTER TABLE ConfigChange ADD outcome STRING DEFAULT 'proposed'",
+	"ALTER TABLE ConfigChange ADD lastSyncedAt STRING DEFAULT ''",
+	"ALTER TABLE ConfigChange ADD source STRING DEFAULT ''",
+	"ALTER TABLE ConfigChange ADD evidenceTruncated BOOLEAN DEFAULT false",
 	"ALTER TABLE MergeRequest ADD webUrl STRING DEFAULT ''",
 	"ALTER TABLE MergeRequest ADD projectId STRING DEFAULT ''",
 	"ALTER TABLE MergeRequest ADD iid STRING DEFAULT ''",
 	"ALTER TABLE MergeRequest ADD lastSyncedAt STRING DEFAULT ''",
 	"ALTER TABLE Pipeline ADD createdAt STRING DEFAULT ''",
 	"ALTER TABLE Pipeline ADD updatedAt STRING DEFAULT ''",
+	"ALTER TABLE Pipeline ADD lastSyncedAt STRING DEFAULT ''",
+	"ALTER TABLE Pipeline ADD source STRING DEFAULT ''",
+	"ALTER TABLE Pipeline ADD evidenceTruncated BOOLEAN DEFAULT false",
+	"ALTER TABLE GitLabGroup ADD source STRING DEFAULT ''",
+	"ALTER TABLE GitLabGroup ADD evidenceTruncated BOOLEAN DEFAULT false",
+	"ALTER TABLE Repository ADD source STRING DEFAULT ''",
+	"ALTER TABLE Repository ADD evidenceTruncated BOOLEAN DEFAULT false",
+	"ALTER TABLE TerraformPlan ADD lastSyncedAt STRING DEFAULT ''",
+	"ALTER TABLE TerraformPlan ADD source STRING DEFAULT ''",
+	"ALTER TABLE TerraformPlan ADD evidenceTruncated BOOLEAN DEFAULT false",
 	"ALTER TABLE ElasticDeployment ADD ecId STRING DEFAULT ''",
 	"ALTER TABLE ElasticDeployment ADD region STRING DEFAULT ''",
 	// SIO-1104 (5a): lifecycle columns for the topology-managed rel tables on graphs

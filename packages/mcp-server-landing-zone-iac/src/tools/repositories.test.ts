@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
 	type GitLabReadClient,
+	isVerifiedTerraformDeploymentJob,
 	LANDING_ZONE_REPOSITORIES,
 	readRepositoryFiles,
 	resolveRepository,
@@ -83,5 +84,28 @@ describe("Landing Zone repository allowlist", () => {
 		expect(result.files[0]?.content).not.toContain("aws-secret");
 		expect(result.files[0]?.content).not.toContain("gitlab-secret");
 		expect(result.files[0]?.content).not.toContain("oauth-secret");
+	});
+});
+
+describe("verified Terraform deployment evidence", () => {
+	test.each([
+		["review app with an environment", { id: 1, name: "review", status: "success", webUrl: "https://gitlab.com/jobs/1", deploymentTier: "development" }],
+		["verification job with an environment", { id: 2, name: "verify", status: "success", webUrl: "https://gitlab.com/jobs/2", deploymentTier: "production" }],
+		["generic environment job", { id: 3, name: "deploy-preview", status: "success", webUrl: "https://gitlab.com/jobs/3", deploymentTier: "staging" }],
+		["failed apply", { id: 4, name: "terraform-apply", status: "failed", webUrl: "https://gitlab.com/jobs/4", deploymentTier: "production" }],
+	] as const)("rejects %s", (_label, job) => {
+		expect(isVerifiedTerraformDeploymentJob(job)).toBe(false);
+	});
+
+	test("accepts a successful Terraform apply deployment", () => {
+		expect(
+			isVerifiedTerraformDeploymentJob({
+				id: 5,
+				name: "terraform-apply",
+				status: "success",
+				webUrl: "https://gitlab.com/jobs/5",
+				deploymentTier: "production",
+			}),
+		).toBe(true);
 	});
 });
