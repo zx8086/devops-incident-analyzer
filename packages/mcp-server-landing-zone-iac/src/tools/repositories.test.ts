@@ -297,6 +297,10 @@ describe("GitLab deployment pagination", () => {
 			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next,"',
 		],
 		[
+			"an underscore in a registered relation token",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next_"',
+		],
+		[
 			"a valid relation mixed with an invalid token",
 			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next bad!"',
 		],

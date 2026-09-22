@@ -444,7 +444,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 
 	function parseLinkHeader(value: string): Array<{ target: string; relations: string[] }> {
 		const tokenCharacter = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]$/;
-		const registeredRelation = /^[A-Za-z][A-Za-z0-9._-]*$/;
+		const registeredRelation = /^[A-Za-z][A-Za-z0-9.-]*$/;
 		const absoluteUriScheme = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 		const isControlCharacter = (character: string): boolean => {
 			const code = character.charCodeAt(0);
