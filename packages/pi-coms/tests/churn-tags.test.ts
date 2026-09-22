@@ -4,7 +4,9 @@ import type { AwsClient } from "../scripts/monitor/checks/alarms.ts";
 import {
 	buildArn,
 	DEFAULT_CHURN_TAG_KEYS,
+	isChurnEligibleRule,
 	lookupChurnOwned,
+	parseChurnRulePatterns,
 	parseChurnTagKeys,
 } from "../scripts/monitor/checks/churn-tags.ts";
 
@@ -84,6 +86,41 @@ describe("parseChurnTagKeys", () => {
 		// groups so Karpenter can find them -- not a mark of something Karpenter
 		// created. Including it would hide stable infrastructure.
 		expect([...DEFAULT_CHURN_TAG_KEYS]).not.toContain("karpenter.sh/discovery");
+	});
+});
+
+describe("isChurnEligibleRule (SIO-1868, Greptile P1 on #884)", () => {
+	// Ownership is a property of the RESOURCE, not the rule. Classifying on the
+	// tag alone suppressed every rule that fires on a Karpenter node, including
+	// live SecurityHub rules. Eligibility is per rule, defaulting to required-tags.
+	test("the org required-tags rule is eligible whatever hash it carries", () => {
+		expect(isChurnEligibleRule("OrgConfigRule-required-tags-lf3sbwf9")).toBe(true);
+		expect(isChurnEligibleRule("required-tags")).toBe(true);
+	});
+
+	test("a security rule is NOT eligible", () => {
+		// Live in eu-mendix-platform-prd and in the 2026-09-21 digest.
+		expect(isChurnEligibleRule("securityhub-ec2-instance-multiple-eni-check-dd68747e")).toBe(false);
+		expect(isChurnEligibleRule("restricted-rdp")).toBe(false);
+		expect(isChurnEligibleRule("encrypted-volumes")).toBe(false);
+	});
+
+	test("an empty pattern list disables classification rather than matching all", () => {
+		// The same kill-switch direction as an empty tag-key list; matching
+		// everything would be the dangerous reading.
+		expect(isChurnEligibleRule("OrgConfigRule-required-tags-x", [])).toBe(false);
+	});
+
+	test("matching ignores case and accepts an explicit override list", () => {
+		expect(isChurnEligibleRule("OrgConfigRule-REQUIRED-TAGS-x")).toBe(true);
+		expect(isChurnEligibleRule("my-custom-rule", ["my-custom"])).toBe(true);
+		expect(isChurnEligibleRule("other-rule", ["my-custom"])).toBe(false);
+	});
+
+	test("parseChurnRulePatterns: unset yields the default, empty disables", () => {
+		expect(parseChurnRulePatterns(undefined)).toEqual(["required-tags"]);
+		expect(parseChurnRulePatterns("")).toEqual([]);
+		expect(parseChurnRulePatterns(" a , b ")).toEqual(["a", "b"]);
 	});
 });
 

@@ -388,22 +388,49 @@ export function suppressionReviewFromJournal(
 ): SuppressionReviewEntry[] {
 	const byPattern = new Map<string, { matches: number; sampleKeys: string[] }>();
 	for (const e of ledger) byPattern.set(e.pattern, { matches: 0, sampleKeys: [] });
+	// Greptile P2 on #884: a drop whose `suppressed_by` has no ledger row was
+	// counted against nothing and vanished. The compliance check's churn
+	// classification suppresses under a synthetic label with no row by design, so
+	// the review reported "the ledger is empty; nothing is being masked" while it
+	// was actively hiding findings -- the exact blind spot this report exists to
+	// prevent. Journal-only labels are therefore synthesised into entries.
+	const synthetic = new Map<string, { matches: number; sampleKeys: string[]; reason: string }>();
 	for (const r of rows) {
-		let payload: { suppressed_by?: unknown; dedup_key?: unknown };
+		let payload: { suppressed_by?: unknown; dedup_key?: unknown; reason?: unknown };
 		try {
 			payload = JSON.parse(r.payload);
 		} catch {
 			continue;
 		}
-		const entry = typeof payload.suppressed_by === "string" ? byPattern.get(payload.suppressed_by) : undefined;
-		if (!entry) continue;
+		if (typeof payload.suppressed_by !== "string") continue;
+		const label = payload.suppressed_by;
+		let entry = byPattern.get(label);
+		if (!entry) {
+			const existing = synthetic.get(label);
+			entry = existing ?? {
+				matches: 0,
+				sampleKeys: [],
+				reason: typeof payload.reason === "string" ? payload.reason : "(no reason recorded)",
+			};
+			if (!existing) synthetic.set(label, entry as { matches: number; sampleKeys: string[]; reason: string });
+		}
 		entry.matches++;
 		const key = typeof payload.dedup_key === "string" ? payload.dedup_key : null;
 		if (key && entry.sampleKeys.length < REVIEW_SAMPLE_CAP && !entry.sampleKeys.includes(key)) {
 			entry.sampleKeys.push(key);
 		}
 	}
-	return ledger.map((e) => ({ ...e, ...(byPattern.get(e.pattern) ?? { matches: 0, sampleKeys: [] }) }));
+	const fromLedger = ledger.map((e) => ({ ...e, ...(byPattern.get(e.pattern) ?? { matches: 0, sampleKeys: [] }) }));
+	// `created_at` is the ledger's field and there is no row to read it from, so
+	// the synthesised entry says where it came from instead of inventing a date.
+	const fromJournal = [...synthetic.entries()].map(([pattern, v]) => ({
+		pattern,
+		reason: v.reason,
+		created_at: "in code, not the ledger",
+		matches: v.matches,
+		sampleKeys: v.sampleKeys,
+	}));
+	return [...fromLedger, ...fromJournal];
 }
 
 // The anti-masking counterweight to the ledger: what each suppression ate in

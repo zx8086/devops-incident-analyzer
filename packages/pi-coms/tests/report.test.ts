@@ -465,6 +465,61 @@ describe("checkErrorCountsFromJournal", () => {
 	});
 });
 
+describe("suppressionReviewFromJournal: synthetic labels (SIO-1868)", () => {
+	// Greptile P2 on #884: a drop whose suppressed_by has no ledger row used to be
+	// counted against nothing and vanish, so the review printed "the ledger is
+	// empty; nothing is being masked" while churn findings were actively hidden --
+	// the exact blind spot this report exists to prevent.
+	const churnRows = (n: number) =>
+		Array.from({ length: n }, (_, i) => ({
+			payload: JSON.stringify({
+				dedup_key: `compliance:OrgConfigRule-required-tags-x:eni-${i}`,
+				suppressed_by: "churn-tag:autoscaler-owned",
+				reason: "resource carries an autoscaler ownership tag",
+			}),
+		}));
+
+	test("a journal-only label becomes its own review entry", () => {
+		const entries = suppressionReviewFromJournal([], churnRows(3));
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatchObject({
+			pattern: "churn-tag:autoscaler-owned",
+			reason: "resource carries an autoscaler ownership tag",
+			matches: 3,
+		});
+		expect(entries[0]?.sampleKeys.length).toBeGreaterThan(0);
+	});
+
+	test("an empty ledger with churn drops no longer reports nothing is masked", () => {
+		const text = formatSuppressionReview({
+			accountId: "654654584630",
+			windowDays: 7,
+			entries: suppressionReviewFromJournal([], churnRows(3)),
+		});
+		expect(text).not.toContain("nothing is being masked");
+		expect(text).toContain("churn-tag:autoscaler-owned");
+	});
+
+	test("a genuinely empty window still reports an empty ledger", () => {
+		// The counterweight: the quiet message must survive for the real case.
+		const text = formatSuppressionReview({
+			accountId: "654654584630",
+			windowDays: 7,
+			entries: suppressionReviewFromJournal([], []),
+		});
+		expect(text).toContain("nothing is being masked");
+	});
+
+	test("ledger rows still match their own drops and keep their created_at", () => {
+		const ledger = [{ pattern: "alarm:flap-%", reason: "acked", created_at: "2026-01-01T00:00:00.000Z" }];
+		const rows = [{ payload: JSON.stringify({ dedup_key: "alarm:flap-cpu", suppressed_by: "alarm:flap-%" }) }];
+		const entries = suppressionReviewFromJournal(ledger, [...rows, ...churnRows(2)]);
+		expect(entries).toHaveLength(2);
+		expect(entries[0]).toMatchObject({ pattern: "alarm:flap-%", matches: 1, created_at: "2026-01-01T00:00:00.000Z" });
+		expect(entries[1]).toMatchObject({ pattern: "churn-tag:autoscaler-owned", matches: 2 });
+	});
+});
+
 describe("notablesFromJournal", () => {
 	const row = (payload: unknown) => ({ payload: JSON.stringify(payload) });
 

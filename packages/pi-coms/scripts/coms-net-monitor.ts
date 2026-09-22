@@ -45,7 +45,7 @@ import {
 import { s3Store, saveCheckpoint, statePrefix } from "./monitor/checkpoint.ts";
 import { checkAlarms, describeAllAlarms, isScalingTrigger } from "./monitor/checks/alarms.ts";
 import { certRegions, checkCerts, checkListenerCerts } from "./monitor/checks/certs.ts";
-import { parseChurnTagKeys } from "./monitor/checks/churn-tags.ts";
+import { parseChurnRulePatterns, parseChurnTagKeys } from "./monitor/checks/churn-tags.ts";
 import { checkCompliance } from "./monitor/checks/compliance.ts";
 import { COST_DEFAULTS, checkCost } from "./monitor/checks/cost.ts";
 import { checkDbEvents } from "./monitor/checks/db-events.ts";
@@ -261,6 +261,10 @@ const SUPPRESSIONS_FILE =
 // repo's kill-switch convention); an explicitly empty value turns the whole
 // classification off without touching the check.
 const CHURN_TAG_KEYS = parseChurnTagKeys(process.env.PI_MONITOR_CHURN_TAGS);
+// Which rules may be classified as churn. Ownership is a property of the
+// resource, not the rule: a security rule firing on a churning node is still a
+// security finding, so the default is required-tags only.
+const CHURN_RULE_PATTERNS = parseChurnRulePatterns(process.env.PI_MONITOR_CHURN_RULES);
 // SIO-1745: the root volume dies with the instance, and a userdata-affecting
 // change (pi_model among them) replaces it. Derived from the bundle uri the
 // host already has, so enabling this adds no userdata variable -- which would
@@ -746,6 +750,7 @@ function main(): void {
 					checkCompliance(config, state, {
 						taggingClient: tagging,
 						churnTagKeys: CHURN_TAG_KEYS,
+						churnRulePatterns: CHURN_RULE_PATTERNS,
 						region,
 						accountId: ACCOUNT_ID,
 					}),

@@ -38,6 +38,37 @@ export const DEFAULT_CHURN_TAG_KEYS = [
 // more scrutiny than a digest line. Add them per account via
 // PI_MONITOR_CHURN_TAGS if that judgement changes.
 
+// Which RULES may have their findings classified as churn. Ownership is a
+// property of the resource, not of the rule: "this node churns" justifies
+// ignoring a tagging violation on it, and does NOT justify ignoring a security
+// finding on it. Without this gate a SecurityHub rule firing on a Karpenter node
+// was silently dropped (Greptile P1 on PR #884) -- and
+// securityhub-ec2-instance-multiple-eni-check is live in eu-mendix-platform-prd,
+// so that was a real hole, not a hypothetical one.
+//
+// Matched as a case-insensitive substring against the Config rule name. The
+// default covers the org required-tags rule whatever hash suffix it carries
+// (OrgConfigRule-required-tags-lf3sbwf9 today) plus the AWS-managed
+// `required-tags` name.
+export const DEFAULT_CHURN_RULE_PATTERNS = ["required-tags"] as const;
+
+export function parseChurnRulePatterns(raw: string | undefined): string[] {
+	if (raw === undefined) return [...DEFAULT_CHURN_RULE_PATTERNS];
+	return raw
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+}
+
+export function isChurnEligibleRule(rule: string, patterns?: string[]): boolean {
+	const list = patterns ?? [...DEFAULT_CHURN_RULE_PATTERNS];
+	// An empty list disables classification outright rather than matching
+	// everything: the same kill-switch direction as an empty tag-key list.
+	if (list.length === 0) return false;
+	const r = rule.toLowerCase();
+	return list.some((p) => r.includes(p.toLowerCase()));
+}
+
 export function parseChurnTagKeys(raw: string | undefined): string[] {
 	if (raw === undefined) return [...DEFAULT_CHURN_TAG_KEYS];
 	const keys = raw

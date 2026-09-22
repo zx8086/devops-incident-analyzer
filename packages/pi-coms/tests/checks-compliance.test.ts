@@ -254,6 +254,7 @@ function fakeTaggingFor(churnIds: string[]) {
 
 const CHURN_OPTS = {
 	churnTagKeys: ["karpenter.sh/nodepool", "eks:eni:owner"],
+	churnRulePatterns: ["required-tags"],
 	region: "eu-central-1",
 	accountId: "654654584630",
 };
@@ -367,6 +368,40 @@ describe("checkCompliance churn classification (SIO-1868)", () => {
 			expect(ids).toContain("eni-karpenter");
 			state.close();
 		}
+	});
+
+	test("a rule OTHER than required-tags is never classified as churn", async () => {
+		// Greptile P1 on #884. Ownership is a property of the resource, not the
+		// rule: "this node churns" justifies ignoring a tagging violation on it and
+		// does NOT justify ignoring a security finding on it. Before the rule gate,
+		// securityhub-ec2-instance-multiple-eni-check -- live in
+		// eu-mendix-platform-prd, and in the 2026-09-21 digest for this exact
+		// instance -- was silently dropped on any Karpenter-owned node.
+		const state = new MonitorState(":memory:");
+		const rule = "securityhub-ec2-instance-multiple-eni-check-dd68747e";
+		await checkCompliance(fakeTypedClient([], rule) as never, state, { now: NOW });
+		const findings = await checkCompliance(
+			fakeTypedClient([{ type: "AWS::EC2::Instance", id: "i-041d9a5923d4351a3" }], rule) as never,
+			state,
+			{ now: NOW + 1000, ...CHURN_OPTS, taggingClient: fakeTaggingFor(["i-041d9a5923d4351a3"]) as never },
+		);
+		expect(findings.map((f) => (f.evidence as { resourceId?: string }).resourceId)).toContain("i-041d9a5923d4351a3");
+		// And it was not merely reported: nothing was suppressed at all.
+		expect(state.journalRows(60_000, "suppressed_finding")).toHaveLength(0);
+		state.close();
+	});
+
+	test("an empty rule-pattern list disables classification entirely", async () => {
+		const state = new MonitorState(":memory:");
+		await baselined(state, fakeTypedClient([]));
+		const findings = await checkCompliance(fakeTypedClient([{ type: ENI, id: "eni-karpenter" }]) as never, state, {
+			now: NOW + 1000,
+			...CHURN_OPTS,
+			churnRulePatterns: [],
+			taggingClient: fakeTaggingFor(["eni-karpenter"]) as never,
+		});
+		expect(findings.map((f) => (f.evidence as { resourceId?: string }).resourceId)).toContain("eni-karpenter");
+		state.close();
 	});
 
 	test("a resource type with no ARN mapping is reported unclassified", async () => {

@@ -9,7 +9,7 @@ import { errorMessage } from "../errors.ts";
 import type { Finding } from "../report.ts";
 import type { MonitorState } from "../state.ts";
 import type { AwsClient } from "./alarms.ts";
-import { buildArn, lookupChurnOwned } from "./churn-tags.ts";
+import { buildArn, isChurnEligibleRule, lookupChurnOwned } from "./churn-tags.ts";
 import { diffSnapshot } from "./resource-drift.ts";
 
 // SIO-1740: a Config rule flipping a resource to NON_COMPLIANT was only visible
@@ -55,6 +55,9 @@ export type CheckComplianceOpts = {
 	// not been given a tagging client keeps reporting every pair.
 	taggingClient?: AwsClient;
 	churnTagKeys?: string[];
+	// Rules eligible for churn classification. Omitted means the default
+	// (required-tags only); an empty array disables classification.
+	churnRulePatterns?: string[];
 	region?: string;
 	accountId?: string;
 };
@@ -149,7 +152,15 @@ async function classifyChurn(
 	for (const f of findings) {
 		if (f.severity !== "warn") continue;
 		const ev = f.evidence as Partial<PairEvidence>;
-		if (!ev.resourceType || !ev.resourceId) continue;
+		if (!ev.resourceType || !ev.resourceId || !ev.rule) continue;
+		// Greptile P1 on #884: ownership is a property of the RESOURCE, not of the
+		// rule, so classifying on the tag alone suppressed every rule that fires on
+		// a Karpenter node -- including securityhub-ec2-instance-multiple-eni-check,
+		// which is live in eu-mendix-platform-prd and was in the 2026-09-21 digest.
+		// "This node churns" justifies ignoring a tagging violation on it; it does
+		// not justify ignoring a security finding on it. Eligibility is therefore
+		// per RULE, and the default matches only required-tags rules.
+		if (!isChurnEligibleRule(ev.rule, opts.churnRulePatterns)) continue;
 		const arn = buildArn(opts.region, opts.accountId, ev.resourceType, ev.resourceId);
 		// An unmappable resource type is reported unclassified: the safe direction.
 		if (arn) candidates.set(ev.resourceId, { finding: f, arn });
