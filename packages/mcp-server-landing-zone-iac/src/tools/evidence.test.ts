@@ -51,7 +51,7 @@ function fakeClient(): GitLabReadClient {
 			return "Plan: 2 to add, 0 to change, 0 to destroy.";
 		},
 		async historicalMergeRequests() {
-			return { mergeRequests: [] };
+			return { mergeRequests: [], total: 0 };
 		},
 		async mergeRequestPipelines() {
 			return [];
@@ -109,7 +109,7 @@ describe("representative evidence", () => {
 		const calls: unknown[][] = [];
 		client.historicalMergeRequests = async (...args) => {
 			calls.push(args);
-			return {
+		return {
 				mergeRequests: [
 					{
 						iid: 7,
@@ -120,8 +120,9 @@ describe("representative evidence", () => {
 						updatedAt: "2026-09-03T00:00:00.000Z",
 						commitSha: "abc123",
 					},
-				],
-				nextPage: 3,
+			],
+			total: 1,
+			nextPage: 3,
 			};
 		};
 

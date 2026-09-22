@@ -148,6 +148,7 @@ export async function listHistoricalMergeRequests(
 		repository,
 		project: { id: project.id, path: project.path, defaultBranch: project.defaultBranch, headSha: project.headSha },
 		mergeRequests: result.mergeRequests,
+		total: result.total,
 		...(result.nextPage && { nextPage: result.nextPage }),
 		provenance,
 	};

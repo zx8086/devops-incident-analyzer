@@ -58,8 +58,9 @@ export interface LandingZoneRepositoryRecord {
 
 export interface LandingZoneGitLabImportProgress {
 	upperBound: string;
+	expectedTotal: number;
+	nextPage: number;
 	seenMrIds: string[];
-	completedScan: boolean;
 }
 
 export interface LandingZoneGitLabImportCheckpoint {
@@ -84,9 +85,12 @@ export async function readLandingZoneGitLabImportCheckpoint(
 		const parsed = JSON.parse(rows[0].state) as LandingZoneGitLabImportProgress;
 		if (
 			typeof parsed.upperBound !== "string" ||
+			!Number.isInteger(parsed.expectedTotal) ||
+			parsed.expectedTotal < 0 ||
+			!Number.isInteger(parsed.nextPage) ||
+			parsed.nextPage < 1 ||
 			!Array.isArray(parsed.seenMrIds) ||
-			!parsed.seenMrIds.every((id) => typeof id === "string") ||
-			typeof parsed.completedScan !== "boolean"
+			!parsed.seenMrIds.every((id) => typeof id === "string")
 		) {
 			throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
 		}

@@ -108,12 +108,12 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		});
 		await recordLandingZoneGitLabImportCheckpoint(store, "42", {
 			updatedAfter: "2026-09-03T00:00:00.000Z",
-			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", seenMrIds: ["42:7"], completedScan: false },
+			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", expectedTotal: 1, nextPage: 1, seenMrIds: ["42:7"] },
 		});
 		expect(await readLandingZoneGitLabImportCheckpoint(store, "aws-lz-account-creator")).toEqual({
 			projectId: "42",
 			updatedAfter: "2026-09-03T00:00:00.000Z",
-			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", seenMrIds: ["42:7"], completedScan: false },
+			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", expectedTotal: 1, nextPage: 1, seenMrIds: ["42:7"] },
 		});
 	});
 

@@ -253,7 +253,7 @@ export interface GitLabReadClient {
 		updatedBefore: string | undefined,
 		page: number,
 		perPage: number,
-	): Promise<{ mergeRequests: GitLabHistoricalMergeRequest[]; nextPage?: number }>;
+	): Promise<{ mergeRequests: GitLabHistoricalMergeRequest[]; total: number; nextPage?: number }>;
 	mergeRequestPipelines(projectPath: string, iid: number): Promise<GitLabHistoricalPipeline[]>;
 }
 
@@ -463,7 +463,9 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 				}),
 			);
 			const nextPage = Number(response.headers.get("x-next-page"));
-			return { mergeRequests, ...(Number.isInteger(nextPage) && nextPage > 0 && { nextPage }) };
+			const total = Number(response.headers.get("x-total"));
+			if (!Number.isInteger(total) || total < 0) throw new Error("GitLab historical merge request response omitted a valid X-Total header");
+			return { mergeRequests, total, ...(Number.isInteger(nextPage) && nextPage > 0 && { nextPage }) };
 		},
 		async mergeRequestPipelines(projectPath, iid) {
 			const pipelines = GitLabHistoricalPipelinesResponseSchema.parse(
