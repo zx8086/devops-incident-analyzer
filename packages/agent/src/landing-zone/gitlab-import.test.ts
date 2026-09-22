@@ -436,12 +436,23 @@ describe("importLandingZoneGitLabHistory", () => {
 	});
 
 	test("records an older recovery boundary even when a later anchor already exists", () => {
-		const anchor = (backfillStartAt: string) => ({
+		const anchor = (backfillStartAt: string, projectPath = PROJECT.path) => ({
 			text: "Landing Zone GitLab import recovery anchor",
-			annotations: { backfill_start_at: backfillStartAt },
+			annotations: { backfill_start_at: backfillStartAt, project_path: projectPath },
 		});
-		expect(recoveryAnchorNeedsWrite([anchor("2026-09-10T00:00:00.000Z")], "2026-09-01T00:00:00.000Z")).toBe(true);
-		expect(recoveryAnchorNeedsWrite([anchor("2026-08-01T00:00:00.000Z")], "2026-09-01T00:00:00.000Z")).toBe(false);
+		expect(
+			recoveryAnchorNeedsWrite([anchor("2026-09-10T00:00:00.000Z")], "2026-09-01T00:00:00.000Z", PROJECT.path),
+		).toBe(true);
+		expect(
+			recoveryAnchorNeedsWrite([anchor("2026-08-01T00:00:00.000Z")], "2026-09-01T00:00:00.000Z", PROJECT.path),
+		).toBe(false);
+		expect(
+			recoveryAnchorNeedsWrite(
+				[anchor("2026-08-01T00:00:00.000Z", "pvhcorp/dhco/aws/old/account-creator")],
+				"2026-09-01T00:00:00.000Z",
+				PROJECT.path,
+			),
+		).toBe(true);
 	});
 
 	test("persists a reset checkpoint when GitLab's fixed-window total changes", async () => {

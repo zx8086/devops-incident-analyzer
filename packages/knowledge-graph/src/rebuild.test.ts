@@ -155,20 +155,23 @@ describe("SIO-1867 rebuild: Landing Zone GitLab import anchor", () => {
 				{
 					repository: "aws-lz-account-creator",
 					projectId: "42",
-					projectPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
-					backfillStartAt: "2026-09-10T00:00:00.000Z",
+					projectPath: "pvhcorp/dhco/aws/old/aws-lz-account-creator",
+					backfillStartAt: "2026-09-01T00:00:00.000Z",
+					recordedAt: "2026-09-10T00:00:00.000Z",
 				},
 				{
 					repository: "aws-lz-account-creator",
 					projectId: "42",
 					projectPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
-					backfillStartAt: "2026-09-01T00:00:00.000Z",
+					backfillStartAt: "2026-09-10T00:00:00.000Z",
+					recordedAt: "2026-09-20T00:00:00.000Z",
 				},
 				{
 					repository: "aws-lz-network-core",
 					projectId: "84",
 					projectPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-network-core",
 					backfillStartAt: "2026-09-05T00:00:00.000Z",
+					recordedAt: "2026-09-05T00:00:00.000Z",
 				},
 			]),
 		).toEqual([
@@ -177,12 +180,14 @@ describe("SIO-1867 rebuild: Landing Zone GitLab import anchor", () => {
 				projectId: "42",
 				projectPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
 				backfillStartAt: "2026-09-01T00:00:00.000Z",
+				recordedAt: "2026-09-20T00:00:00.000Z",
 			},
 			{
 				repository: "aws-lz-network-core",
 				projectId: "84",
 				projectPath: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-network-core",
 				backfillStartAt: "2026-09-05T00:00:00.000Z",
+				recordedAt: "2026-09-05T00:00:00.000Z",
 			},
 		]);
 	});

@@ -182,19 +182,32 @@ export interface LandingZoneImportStartRecord {
 	projectId: string;
 	projectPath: string;
 	backfillStartAt: string;
+	recordedAt?: string;
 }
 
 export function earliestLandingZoneImportStarts(
 	records: ReadonlyArray<LandingZoneImportStartRecord>,
 ): LandingZoneImportStartRecord[] {
-	const earliestByProject = new Map<string, LandingZoneImportStartRecord>();
+	const recoveredByProject = new Map<string, LandingZoneImportStartRecord>();
 	for (const record of records) {
-		const current = earliestByProject.get(record.projectId);
-		if (!current || Date.parse(record.backfillStartAt) < Date.parse(current.backfillStartAt)) {
-			earliestByProject.set(record.projectId, record);
+		const current = recoveredByProject.get(record.projectId);
+		if (!current) {
+			recoveredByProject.set(record.projectId, record);
+			continue;
 		}
+		const earliestStart =
+			Date.parse(record.backfillStartAt) < Date.parse(current.backfillStartAt)
+				? record.backfillStartAt
+				: current.backfillStartAt;
+		const currentRecordedAt = Date.parse(current.recordedAt ?? "");
+		const recordRecordedAt = Date.parse(record.recordedAt ?? "");
+		const latestMetadata =
+			Number.isFinite(recordRecordedAt) && (!Number.isFinite(currentRecordedAt) || recordRecordedAt > currentRecordedAt)
+				? record
+				: current;
+		recoveredByProject.set(record.projectId, { ...latestMetadata, backfillStartAt: earliestStart });
 	}
-	return [...earliestByProject.values()];
+	return [...recoveredByProject.values()];
 }
 
 export function landingZoneImportStartFromAnnotations(a: AnnotationMap): LandingZoneImportStartRecord | null {
@@ -205,6 +218,7 @@ export function landingZoneImportStartFromAnnotations(a: AnnotationMap): Landing
 		projectId: a.project_id,
 		projectPath: a.project_path,
 		backfillStartAt: a.backfill_start_at as string,
+		...(z.string().datetime().safeParse(a.recorded_at).success && { recordedAt: a.recorded_at }),
 	};
 }
 

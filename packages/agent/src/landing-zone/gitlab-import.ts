@@ -231,11 +231,14 @@ function parseToolPayload(value: unknown): unknown {
 export function recoveryAnchorNeedsWrite(
 	existing: ReadonlyArray<{ annotations: Record<string, string> }>,
 	backfillStartAt: string,
+	projectPath: string,
 ): boolean {
 	const requestedStart = Date.parse(backfillStartAt);
 	return !existing.some((hit) => {
 		const existingStart = Date.parse(hit.annotations.backfill_start_at ?? "");
-		return Number.isFinite(existingStart) && existingStart <= requestedStart;
+		return (
+			hit.annotations.project_path === projectPath && Number.isFinite(existingStart) && existingStart <= requestedStart
+		);
 	});
 }
 
@@ -265,7 +268,8 @@ function defaultDependencies(): LandingZoneImportDependencies {
 				allSessions: true,
 				deterministic: true,
 			});
-			if (!recoveryAnchorNeedsWrite(existing, checkpoint.backfillStartAt)) return;
+			if (!recoveryAnchorNeedsWrite(existing, checkpoint.backfillStartAt, checkpoint.repositoryPath)) return;
+			const recordedAt = new Date().toISOString();
 			const recorded = await recordAgentFactNow(
 				"landing-zone-terraform",
 				`Landing Zone GitLab import recovery anchor for ${repository} from ${checkpoint.backfillStartAt}`,
@@ -273,6 +277,7 @@ function defaultDependencies(): LandingZoneImportDependencies {
 					...annotations,
 					project_path: checkpoint.repositoryPath,
 					backfill_start_at: checkpoint.backfillStartAt,
+					recorded_at: recordedAt,
 				},
 			);
 			if (!recorded && selectedBackend() === "agent-memory") {
