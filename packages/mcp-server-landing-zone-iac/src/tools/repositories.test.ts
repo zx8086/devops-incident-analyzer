@@ -257,6 +257,24 @@ describe("GitLab deployment pagination", () => {
 		await expect(client.projectDeployments?.("group/project", 4, 20)).resolves.toMatchObject({ nextPage: 5 });
 	});
 
+	test("accepts a valid absolute extension relation URI beside next", async () => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async () =>
+				new Response("[]", {
+					headers: {
+						"x-page": "4",
+						"x-per-page": "20",
+						link: '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="https://relations.example/custom next"',
+					},
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(client.projectDeployments?.("group/project", 4, 20)).resolves.toMatchObject({ nextPage: 5 });
+	});
+
 	test.each([
 		[
 			"unterminated relation quote",
@@ -274,6 +292,19 @@ describe("GitLab deployment pagination", () => {
 			"malformed relation parameter",
 			"<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel",
 		],
+		[
+			"punctuation in a registered relation token",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next,"',
+		],
+		[
+			"a valid relation mixed with an invalid token",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="next bad!"',
+		],
+		[
+			"a malformed extension relation URI",
+			'<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel="https://"',
+		],
+		["an empty relation token", '<https://gitlab.example/api/v4/projects/group%2Fproject/deployments?page=5>; rel=""'],
 	] as const)("rejects a structurally malformed Link header with %s", async (_case, link) => {
 		const client = createGitLabReadClient({
 			baseUrl: "https://gitlab.example",

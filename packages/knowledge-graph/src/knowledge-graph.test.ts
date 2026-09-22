@@ -160,6 +160,7 @@ describe("schema", () => {
 
 	test("ALTER_MIGRATIONS add the outcome + EC columns for pre-existing graphs", () => {
 		expect(ALTER_MIGRATIONS.some((m) => m.includes("ConfigChange ADD outcome"))).toBe(true);
+		expect(ALTER_MIGRATIONS.some((m) => m.includes("ConfigChange ADD outcomeOrderKey"))).toBe(true);
 		expect(ALTER_MIGRATIONS.some((m) => m.includes("ElasticDeployment ADD ecId"))).toBe(true);
 		expect(ALTER_MIGRATIONS.some((m) => m.includes("ElasticDeployment ADD region"))).toBe(true);
 	});
@@ -336,7 +337,10 @@ describe("Landing Zone graph writers", () => {
 		const changeWrite = store.calls.find((call) => call.cypher.includes("MERGE (c:ConfigChange"));
 		expect(changeWrite?.cypher).toContain("c.createdAt = coalesce(c.createdAt, $createdAt)");
 		expect(changeWrite?.cypher).toContain("c.outcome = CASE");
-		expect(changeWrite?.cypher).toContain("$outcomeObservedAt >= c.outcomeObservedAt");
+		expect(changeWrite?.cypher).toContain("$outcomeObservedAt > c.outcomeObservedAt");
+		expect(changeWrite?.cypher).toContain("$outcomeRetrievedAt > c.outcomeRetrievedAt");
+		expect(changeWrite?.cypher).toContain("$outcomeOrderKey >= c.outcomeOrderKey");
+		expect(changeWrite?.cypher).toContain("c.outcomeOrderKey = CASE");
 		expect(changeWrite?.params?.source).toBe("gitlab-deployment");
 		expect(changeWrite?.params?.lastSyncedAt).toBe("2026-09-22T15:01:00.000Z");
 		expect(changeWrite?.params).toMatchObject({
@@ -347,6 +351,8 @@ describe("Landing Zone graph writers", () => {
 			outcomeEvidenceSha: "merge-sha",
 			outcomeEvidencePipelineId: "9001",
 			outcomeEvidenceTruncated: false,
+			outcomeOrderKey:
+				'[4,"applied","gitlab-deployment","merge-sha","9001","merge-sha","gitlab-deployment","2026-09-22T15:01:00.000Z",null,false]',
 		});
 	});
 

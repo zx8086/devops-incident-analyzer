@@ -444,9 +444,21 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 
 	function parseLinkHeader(value: string): Array<{ target: string; relations: string[] }> {
 		const tokenCharacter = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]$/;
+		const registeredRelation = /^[A-Za-z][A-Za-z0-9._-]*$/;
+		const absoluteUriScheme = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 		const isControlCharacter = (character: string): boolean => {
 			const code = character.charCodeAt(0);
 			return code <= 31 || code === 127;
+		};
+		const isValidRelation = (relation: string): boolean => {
+			if (registeredRelation.test(relation)) return true;
+			if (!absoluteUriScheme.test(relation)) return false;
+			try {
+				new URL(relation);
+				return true;
+			} catch {
+				return false;
+			}
 		};
 		return linkParts(value).map((part) => {
 			let cursor = 0;
@@ -512,7 +524,7 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 					if (sawRelation) throw new Error("GitLab response contained duplicate Link relation parameters");
 					sawRelation = true;
 					const parsedRelations = parameterValue.split(/\s+/).filter(Boolean);
-					if (parsedRelations.length === 0)
+					if (parsedRelations.length === 0 || parsedRelations.some((relation) => !isValidRelation(relation)))
 						throw new Error("GitLab response contained a malformed Link relation parameter");
 					relations.push(...parsedRelations);
 				}

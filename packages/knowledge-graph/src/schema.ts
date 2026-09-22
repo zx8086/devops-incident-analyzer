@@ -261,6 +261,7 @@ export const ConfigChangeNodeSchema = z
 		outcomeEvidenceSha: z.string().optional(),
 		outcomeEvidencePipelineId: z.string().optional(),
 		outcomeEvidenceTruncated: z.boolean().optional(),
+		outcomeOrderKey: z.string().optional(),
 	})
 	.strict();
 // SIO-965: three-layer IaC writer boundary shapes.
@@ -581,7 +582,7 @@ export const MIGRATIONS: readonly string[] = [
 	// EXISTING graphs gain those columns via the tolerant ALTER_MIGRATIONS below
 	// (CREATE ... IF NOT EXISTS no-ops on an existing table, so it cannot add them).
 	"CREATE NODE TABLE IF NOT EXISTS ElasticDeployment(name STRING, ecId STRING, region STRING, PRIMARY KEY(name))",
-	"CREATE NODE TABLE IF NOT EXISTS ConfigChange(id STRING, workflow STRING, filePath STRING, summary STRING, commitSha STRING, createdAt STRING, lastSyncedAt STRING, source STRING, evidenceTruncated BOOLEAN, outcome STRING, outcomeObservedAt STRING, outcomeRetrievedAt STRING, outcomeEvidenceSource STRING, outcomeEvidenceSha STRING, outcomeEvidencePipelineId STRING, outcomeEvidenceTruncated BOOLEAN, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS ConfigChange(id STRING, workflow STRING, filePath STRING, summary STRING, commitSha STRING, createdAt STRING, lastSyncedAt STRING, source STRING, evidenceTruncated BOOLEAN, outcome STRING, outcomeObservedAt STRING, outcomeRetrievedAt STRING, outcomeEvidenceSource STRING, outcomeEvidenceSha STRING, outcomeEvidencePipelineId STRING, outcomeEvidenceTruncated BOOLEAN, outcomeOrderKey STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS MergeRequest(url STRING, webUrl STRING, projectId STRING, iid STRING, lastSyncedAt STRING, PRIMARY KEY(url))",
 	"CREATE REL TABLE IF NOT EXISTS CHANGED_BY(FROM ElasticDeployment TO ConfigChange)",
 	"CREATE REL TABLE IF NOT EXISTS PROPOSED_IN(FROM ConfigChange TO MergeRequest)",
@@ -690,6 +691,7 @@ export const ALTER_MIGRATIONS: readonly string[] = [
 	"ALTER TABLE ConfigChange ADD outcomeEvidenceSha STRING DEFAULT ''",
 	"ALTER TABLE ConfigChange ADD outcomeEvidencePipelineId STRING DEFAULT ''",
 	"ALTER TABLE ConfigChange ADD outcomeEvidenceTruncated BOOLEAN DEFAULT false",
+	"ALTER TABLE ConfigChange ADD outcomeOrderKey STRING DEFAULT ''",
 	"ALTER TABLE MergeRequest ADD webUrl STRING DEFAULT ''",
 	"ALTER TABLE MergeRequest ADD projectId STRING DEFAULT ''",
 	"ALTER TABLE MergeRequest ADD iid STRING DEFAULT ''",

@@ -368,7 +368,7 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		await store.close();
 	});
 
-	test("Landing Zone applied replay preserves newer evidence and deterministically accepts an equal observation", async () => {
+	test("Landing Zone applied replay preserves newer evidence and orders equal observations by retrieval time", async () => {
 		const store = new LadybugStore(join(dir, "lz-applied-replay-order"));
 		await store.init();
 		await recordLandingZoneRepository(store, {
@@ -471,6 +471,129 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 				evidenceTruncated: false,
 			},
 		]);
+		await store.close();
+	});
+
+	test("Landing Zone equal applied observations converge across reverse insertion order and reject older retrievals", async () => {
+		const store = new LadybugStore(join(dir, "lz-applied-total-order"));
+		await store.init();
+		await recordLandingZoneRepository(store, {
+			group: { id: "gitlab-group:pvhcorp", path: "pvhcorp" },
+			repository: {
+				id: "gitlab-project:42",
+				groupId: "gitlab-group:pvhcorp",
+				path: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+				name: "aws-lz-account-creator",
+			},
+		});
+		type AppliedEvent = {
+			commitSha: string;
+			source: string;
+			evidenceSource: "gitlab-deployment" | "live-state";
+			observedAt: string;
+			retrievedAt: string;
+			pipelineId: string;
+			truncated: boolean;
+		};
+		const writeApplied = (id: string, event: AppliedEvent) =>
+			recordLandingZoneChange(store, {
+				id,
+				repositoryId: "gitlab-project:42",
+				commitSha: event.commitSha,
+				lastSyncedAt: event.retrievedAt,
+				source: event.source,
+				truncated: event.truncated,
+				outcome: "applied",
+				outcomeEvidence: {
+					source: event.evidenceSource,
+					observedAt: event.observedAt,
+					retrievedAt: event.retrievedAt,
+					commitSha: event.commitSha,
+					pipelineId: event.pipelineId,
+					truncated: event.truncated,
+				},
+			});
+		const readApplied = async (id: string) =>
+			(
+				await store.run<{
+					outcome: string;
+					observedAt: string;
+					retrievedAt: string;
+					commitSha: string;
+					lastSyncedAt: string;
+					source: string;
+					evidenceTruncated: boolean;
+					evidenceSource: string;
+					sha: string;
+					pipelineId: string;
+					truncated: boolean;
+				}>(
+					"MATCH (c:ConfigChange {id: $id}) RETURN c.outcome AS outcome, c.outcomeObservedAt AS observedAt, c.outcomeRetrievedAt AS retrievedAt, c.commitSha AS commitSha, c.lastSyncedAt AS lastSyncedAt, c.source AS source, c.evidenceTruncated AS evidenceTruncated, c.outcomeEvidenceSource AS evidenceSource, c.outcomeEvidenceSha AS sha, c.outcomeEvidencePipelineId AS pipelineId, c.outcomeEvidenceTruncated AS truncated",
+					{ id },
+				)
+			)[0];
+
+		const liveStateEvent: AppliedEvent = {
+			commitSha: "live-state-sha",
+			source: "live-state-check",
+			evidenceSource: "live-state",
+			observedAt: "2026-09-22T17:00:00.000Z",
+			retrievedAt: "2026-09-22T17:01:00.000Z",
+			pipelineId: "100",
+			truncated: false,
+		};
+		const deploymentEvent: AppliedEvent = {
+			commitSha: "deployment-sha",
+			source: "gitlab-deployment-page",
+			evidenceSource: "gitlab-deployment",
+			observedAt: "2026-09-22T17:00:00.000Z",
+			retrievedAt: "2026-09-22T17:01:00.000Z",
+			pipelineId: "200",
+			truncated: true,
+		};
+		await writeApplied("equal-forward", liveStateEvent);
+		await writeApplied("equal-forward", deploymentEvent);
+		await writeApplied("equal-reverse", deploymentEvent);
+		await writeApplied("equal-reverse", liveStateEvent);
+
+		const expectedDeployment = {
+			outcome: "applied",
+			observedAt: deploymentEvent.observedAt,
+			retrievedAt: deploymentEvent.retrievedAt,
+			commitSha: deploymentEvent.commitSha,
+			lastSyncedAt: deploymentEvent.retrievedAt,
+			source: deploymentEvent.source,
+			evidenceTruncated: deploymentEvent.truncated,
+			evidenceSource: deploymentEvent.evidenceSource,
+			sha: deploymentEvent.commitSha,
+			pipelineId: deploymentEvent.pipelineId,
+			truncated: deploymentEvent.truncated,
+		};
+		expect(await readApplied("equal-forward")).toEqual(expectedDeployment);
+		expect(await readApplied("equal-reverse")).toEqual(expectedDeployment);
+
+		const newerRetrieval: AppliedEvent = {
+			...deploymentEvent,
+			commitSha: "newer-retrieval-sha",
+			retrievedAt: "2026-09-22T17:02:00.000Z",
+			pipelineId: "300",
+		};
+		const olderRetrieval: AppliedEvent = {
+			...deploymentEvent,
+			commitSha: "older-retrieval-sha",
+			retrievedAt: "2026-09-22T17:01:30.000Z",
+			pipelineId: "999",
+		};
+		await writeApplied("retrieval-order", newerRetrieval);
+		await writeApplied("retrieval-order", olderRetrieval);
+		expect(await readApplied("retrieval-order")).toEqual({
+			...expectedDeployment,
+			commitSha: newerRetrieval.commitSha,
+			retrievedAt: newerRetrieval.retrievedAt,
+			lastSyncedAt: newerRetrieval.retrievedAt,
+			sha: newerRetrieval.commitSha,
+			pipelineId: newerRetrieval.pipelineId,
+		});
 		await store.close();
 	});
 

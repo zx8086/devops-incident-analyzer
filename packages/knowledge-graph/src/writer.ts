@@ -368,6 +368,30 @@ export interface LandingZoneChangeRecord {
 	};
 }
 
+const LANDING_ZONE_EVIDENCE_AUTHORITY = {
+	"gitlab-mr": 1,
+	"gitlab-pipeline": 2,
+	"live-state": 3,
+	"gitlab-deployment": 4,
+} as const;
+
+function landingZoneOutcomeOrderKey(change: LandingZoneChangeRecord, evidenceTruncated: boolean): string {
+	const evidenceSource = change.outcomeEvidence?.source;
+	const authorityRank = evidenceSource ? LANDING_ZONE_EVIDENCE_AUTHORITY[evidenceSource] : 0;
+	return JSON.stringify([
+		authorityRank,
+		change.outcome ?? null,
+		evidenceSource ?? null,
+		change.outcomeEvidence?.commitSha ?? null,
+		change.outcomeEvidence?.pipelineId ?? null,
+		change.commitSha ?? null,
+		change.source ?? null,
+		change.lastSyncedAt ?? null,
+		change.truncated ?? null,
+		evidenceTruncated,
+	]);
+}
+
 export async function recordLandingZoneChange(store: GraphStore, change: LandingZoneChangeRecord): Promise<void> {
 	if (!change.id || !change.repositoryId) return;
 	const now = new Date().toISOString();
@@ -378,10 +402,13 @@ export async function recordLandingZoneChange(store: GraphStore, change: Landing
 		change.createdAt ??
 		now;
 	const outcomeRetrievedAt = change.outcomeEvidence?.retrievedAt ?? change.lastSyncedAt ?? outcomeObservedAt;
-	const acceptsOutcome =
-		"(($outcome = 'applied' AND ($outcomeEvidenceSource = 'gitlab-deployment' OR $outcomeEvidenceSource = 'live-state') AND (c.outcome IS NULL OR c.outcome = '' OR c.outcome <> 'applied' OR c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt)) OR ($outcome <> 'applied' AND (c.outcome IS NULL OR c.outcome = '' OR c.outcome <> 'applied') AND (c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt >= c.outcomeObservedAt)))";
+	const outcomeEvidenceTruncated = change.outcomeEvidence?.truncated ?? change.truncated ?? false;
+	const outcomeOrderKey = landingZoneOutcomeOrderKey(change, outcomeEvidenceTruncated);
+	const outcomeIsAtLeastAsNew =
+		"(c.outcomeObservedAt IS NULL OR c.outcomeObservedAt = '' OR $outcomeObservedAt > c.outcomeObservedAt OR ($outcomeObservedAt = c.outcomeObservedAt AND (c.outcomeRetrievedAt IS NULL OR c.outcomeRetrievedAt = '' OR $outcomeRetrievedAt > c.outcomeRetrievedAt OR ($outcomeRetrievedAt = c.outcomeRetrievedAt AND (c.outcomeOrderKey IS NULL OR c.outcomeOrderKey = '' OR $outcomeOrderKey >= c.outcomeOrderKey)))))";
+	const acceptsOutcome = `(($outcome = 'applied' AND ($outcomeEvidenceSource = 'gitlab-deployment' OR $outcomeEvidenceSource = 'live-state') AND ((c.outcome IS NULL OR c.outcome = '' OR c.outcome <> 'applied') OR ${outcomeIsAtLeastAsNew})) OR ($outcome <> 'applied' AND (c.outcome IS NULL OR c.outcome = '' OR c.outcome <> 'applied') AND ${outcomeIsAtLeastAsNew}))`;
 	await store.run(
-		`MERGE (c:ConfigChange {id: $id}) WITH c, ${acceptsOutcome} AS acceptsOutcome SET c.workflow = coalesce($workflow, c.workflow), c.summary = coalesce($summary, c.summary), c.createdAt = coalesce(c.createdAt, $createdAt), c.commitSha = CASE WHEN acceptsOutcome THEN $commitSha ELSE c.commitSha END, c.lastSyncedAt = CASE WHEN acceptsOutcome THEN $lastSyncedAt ELSE c.lastSyncedAt END, c.source = CASE WHEN acceptsOutcome THEN $source ELSE c.source END, c.evidenceTruncated = CASE WHEN acceptsOutcome THEN $evidenceTruncated ELSE c.evidenceTruncated END, c.outcome = CASE WHEN acceptsOutcome THEN $outcome ELSE c.outcome END, c.outcomeRetrievedAt = CASE WHEN acceptsOutcome THEN $outcomeRetrievedAt ELSE c.outcomeRetrievedAt END, c.outcomeEvidenceSource = CASE WHEN acceptsOutcome THEN $outcomeEvidenceSource ELSE c.outcomeEvidenceSource END, c.outcomeEvidenceSha = CASE WHEN acceptsOutcome THEN $outcomeEvidenceSha ELSE c.outcomeEvidenceSha END, c.outcomeEvidencePipelineId = CASE WHEN acceptsOutcome THEN $outcomeEvidencePipelineId ELSE c.outcomeEvidencePipelineId END, c.outcomeEvidenceTruncated = CASE WHEN acceptsOutcome THEN $outcomeEvidenceTruncated ELSE c.outcomeEvidenceTruncated END, c.outcomeObservedAt = CASE WHEN acceptsOutcome THEN $outcomeObservedAt ELSE c.outcomeObservedAt END`,
+		`MERGE (c:ConfigChange {id: $id}) WITH c, ${acceptsOutcome} AS acceptsOutcome SET c.workflow = coalesce($workflow, c.workflow), c.summary = coalesce($summary, c.summary), c.createdAt = coalesce(c.createdAt, $createdAt), c.commitSha = CASE WHEN acceptsOutcome THEN $commitSha ELSE c.commitSha END, c.lastSyncedAt = CASE WHEN acceptsOutcome THEN $lastSyncedAt ELSE c.lastSyncedAt END, c.source = CASE WHEN acceptsOutcome THEN $source ELSE c.source END, c.evidenceTruncated = CASE WHEN acceptsOutcome THEN $evidenceTruncated ELSE c.evidenceTruncated END, c.outcome = CASE WHEN acceptsOutcome THEN $outcome ELSE c.outcome END, c.outcomeRetrievedAt = CASE WHEN acceptsOutcome THEN $outcomeRetrievedAt ELSE c.outcomeRetrievedAt END, c.outcomeEvidenceSource = CASE WHEN acceptsOutcome THEN $outcomeEvidenceSource ELSE c.outcomeEvidenceSource END, c.outcomeEvidenceSha = CASE WHEN acceptsOutcome THEN $outcomeEvidenceSha ELSE c.outcomeEvidenceSha END, c.outcomeEvidencePipelineId = CASE WHEN acceptsOutcome THEN $outcomeEvidencePipelineId ELSE c.outcomeEvidencePipelineId END, c.outcomeEvidenceTruncated = CASE WHEN acceptsOutcome THEN $outcomeEvidenceTruncated ELSE c.outcomeEvidenceTruncated END, c.outcomeObservedAt = CASE WHEN acceptsOutcome THEN $outcomeObservedAt ELSE c.outcomeObservedAt END, c.outcomeOrderKey = CASE WHEN acceptsOutcome THEN $outcomeOrderKey ELSE c.outcomeOrderKey END`,
 		{
 			id: change.id,
 			workflow: change.workflow ?? null,
@@ -397,7 +424,8 @@ export async function recordLandingZoneChange(store: GraphStore, change: Landing
 			outcomeEvidenceSource: change.outcomeEvidence?.source ?? null,
 			outcomeEvidenceSha: change.outcomeEvidence?.commitSha ?? null,
 			outcomeEvidencePipelineId: change.outcomeEvidence?.pipelineId ?? null,
-			outcomeEvidenceTruncated: change.outcomeEvidence?.truncated ?? change.truncated ?? false,
+			outcomeEvidenceTruncated,
+			outcomeOrderKey,
 		},
 	);
 	await store.run(
