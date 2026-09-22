@@ -4,6 +4,7 @@ import {
 	listHistoricalMergeRequests,
 	listMergeRequestPipelines,
 	listProjectDeployments,
+	readMergeRequest,
 	readPipelinePlan,
 } from "./evidence.ts";
 import type { GitLabReadClient } from "./repositories.ts";
@@ -43,10 +44,12 @@ function fakeClient(): GitLabReadClient {
 			return ["accounts/app-2.yml"];
 		},
 		async pipelineJobs() {
-			return [
-				{ id: 10, name: "validate", status: "success", webUrl: "https://gitlab.example/jobs/10" },
-				{ id: 11, name: "terraform-plan", status: "success", webUrl: "https://gitlab.example/jobs/11" },
-			];
+			return {
+				jobs: [
+					{ id: 10, name: "validate", status: "success", webUrl: "https://gitlab.example/jobs/10" },
+					{ id: 11, name: "terraform-plan", status: "success", webUrl: "https://gitlab.example/jobs/11" },
+				],
+			};
 		},
 		async jobTrace() {
 			return "Plan: 2 to add, 0 to change, 0 to destroy.";
@@ -55,12 +58,32 @@ function fakeClient(): GitLabReadClient {
 			return { mergeRequests: [], total: 0 };
 		},
 		async mergeRequestPipelines() {
-			return [];
+			return { pipelines: [] };
+		},
+		async mergeRequest() {
+			return {
+				iid: 7,
+				title: "Add account",
+				state: "opened",
+				webUrl: "https://gitlab.example/mr/7",
+				createdAt: "2026-09-02T00:00:00.000Z",
+				updatedAt: "2026-09-03T00:00:00.000Z",
+				commitSha: "head-7",
+			};
 		},
 	};
 }
 
 describe("representative evidence", () => {
+	test("returns a direct MR with live project provenance", async () => {
+		const result = await readMergeRequest(fakeClient(), { repository: "aws-lz-account-creator", iid: 7 });
+
+		expect(result).toMatchObject({
+			project: { id: 42, path: "pvhcorp/dhco/aws/aws-lz-renamed/account-creator" },
+			mergeRequest: { iid: 7, state: "opened", commitSha: "head-7" },
+			provenance: { source: "gitlab", projectPath: "pvhcorp/dhco/aws/aws-lz-renamed/account-creator" },
+		});
+	});
 	test("filters bounded successful deployment evidence to the exact commit SHA", async () => {
 		const client = fakeClient();
 		client.projectDeployments = async () => ({
@@ -160,39 +183,57 @@ describe("representative evidence", () => {
 
 	test("exposes deployment and plan signals without persisting plan content", async () => {
 		const client = fakeClient();
-		client.mergeRequestPipelines = async () => [
-			{
-				id: 99,
-				status: "success",
-				webUrl: "https://gitlab.example/pipelines/99",
-				createdAt: "2026-09-03T00:00:00.000Z",
-				updatedAt: "2026-09-03T00:01:00.000Z",
-				hasTerraformPlan: true,
-				isVerifiedDeployment: true,
-			},
-		];
+		client.mergeRequestPipelines = async (_project, _iid, page) => ({
+			pipelines: [
+				{
+					id: 99,
+					status: "success",
+					webUrl: "https://gitlab.example/pipelines/99",
+					createdAt: "2026-09-03T00:00:00.000Z",
+					updatedAt: "2026-09-03T00:01:00.000Z",
+				},
+			],
+			...(page === 1 && { nextPage: 2 }),
+		});
+		client.pipelineJobs = async (_project, pipelineId, page) => ({
+			jobs: [
+				{
+					id: pipelineId * 10 + page,
+					name: page === 1 ? "validate" : "terraform-plan",
+					status: "success",
+					webUrl: `https://gitlab.example/jobs/${pipelineId * 10 + page}`,
+				},
+			],
+			...(page === 1 && { nextPage: 2 }),
+		});
 
 		const result = await listMergeRequestPipelines(client, { repository: "aws-lz-account-creator", iid: 7 });
-		expect(result.pipelines).toEqual([
-			expect.objectContaining({ id: 99, hasTerraformPlan: true, isVerifiedDeployment: true }),
-		]);
+		expect(result.pipelines).toHaveLength(2);
+		expect(result.pipelines[0]).toMatchObject({ id: 99, planJobs: [{ id: 992, status: "success" }] });
 		expect(JSON.stringify(result)).not.toContain("Plan: 2 to add");
 	});
 
-	test("does not treat an environment-only review job as a verified deployment", async () => {
+	test("marks pipeline and job evidence truncated when either page cap is reached", async () => {
 		const client = fakeClient();
-		client.mergeRequestPipelines = async () => [
-			{
-				id: 99,
-				status: "success",
-				webUrl: "https://gitlab.example/pipelines/99",
-				createdAt: "2026-09-03T00:00:00.000Z",
-				updatedAt: "2026-09-03T00:01:00.000Z",
-				hasTerraformPlan: true,
-				isVerifiedDeployment: false,
-			},
-		];
+		client.mergeRequestPipelines = async (_project, _iid, page) => ({
+			pipelines: [
+				{
+					id: page,
+					status: "success",
+					webUrl: `https://gitlab.example/pipelines/${page}`,
+					createdAt: "2026-09-03T00:00:00.000Z",
+					updatedAt: "2026-09-03T00:01:00.000Z",
+				},
+			],
+			nextPage: page + 1,
+		});
+		client.pipelineJobs = async (_project, _pipeline, page) => ({
+			jobs: [{ id: page, name: "terraform-plan", status: "success", webUrl: `https://gitlab.example/jobs/${page}` }],
+			nextPage: page + 1,
+		});
 		const result = await listMergeRequestPipelines(client, { repository: "aws-lz-account-creator", iid: 7 });
-		expect(result.pipelines[0]?.isVerifiedDeployment).toBe(false);
+		expect(result.pipelines).toHaveLength(3);
+		expect(result.pipelines[0]?.planJobs).toHaveLength(3);
+		expect(result.provenance.truncated).toBe(true);
 	});
 });

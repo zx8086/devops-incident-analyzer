@@ -30,6 +30,14 @@ const log = getLogger("agent:schedules");
 
 let started = false;
 
+export function refreshSchedules(): void {
+	// MCP tools connect lazily after this module's first registration pass. Re-run
+	// the same idempotent global-slot registration so tool-aware backend gates see
+	// the live registry instead of permanently retaining module-load state.
+	started = false;
+	startSchedules();
+}
+
 export function startSchedules(): void {
 	// Module load can run more than once under HMR; register once per module instance.
 	// SIO-1468: cross-graph protection (a dev-server restart that closes the Vite module

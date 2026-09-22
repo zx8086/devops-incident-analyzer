@@ -10,6 +10,7 @@ const mockStreamEvents = mock(() => ({
 }));
 
 const mockUpdateState = mock(() => Promise.resolve());
+const mockRegisterSchedules = mock(() => []);
 // SIO-1687: records what pruneThreadState stashed as the evidence TOC.
 const mockSetEvidenceToc = mock((_threadId: string, _toc?: string) => undefined);
 const mockGetState = mock(() =>
@@ -193,7 +194,7 @@ mock.module("@devops-agent/agent", () => ({
 	// real repo root (harmless; loadSchedules/loadWorkflows below are gitagent-bridge stubs so no
 	// real YAML is read), registerSchedules is a no-op stub since the schedules map is empty here.
 	getWorkspaceRoot: mock(() => "/tmp"),
-	registerSchedules: mock(() => []),
+	registerSchedules: mockRegisterSchedules,
 	selectedBackend: mock(() => "file" as const),
 	// SIO-1124: the /api/tickets routes import these from this same specifier.
 	getTicketProvider: mock(() => undefined),
@@ -312,7 +313,13 @@ mock.module("@langchain/core/messages", () => ({
 	},
 }));
 
-const { invokeAgent, pruneThreadState } = await import("./agent.ts");
+const { ensureMcpConnected, invokeAgent, pruneThreadState } = await import("./agent.ts");
+
+test("refreshes schedule readiness after the lazy MCP connection completes", async () => {
+	const registrationsBeforeConnect = mockRegisterSchedules.mock.calls.length;
+	await ensureMcpConnected();
+	expect(mockRegisterSchedules.mock.calls.length).toBeGreaterThan(registrationsBeforeConnect);
+});
 
 describe("invokeAgent", () => {
 	test("merges compliance metadata into streamEvents config", async () => {

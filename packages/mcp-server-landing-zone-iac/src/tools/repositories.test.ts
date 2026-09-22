@@ -2,7 +2,6 @@ import { describe, expect, mock, test } from "bun:test";
 import {
 	createGitLabReadClient,
 	type GitLabReadClient,
-	isVerifiedTerraformDeploymentJob,
 	LANDING_ZONE_REPOSITORIES,
 	readRepositoryFiles,
 	resolveRepository,
@@ -88,73 +87,90 @@ describe("Landing Zone repository allowlist", () => {
 	});
 });
 
-describe("verified Terraform deployment evidence", () => {
-	test.each([
-		[
-			"review app with an environment",
-			{ id: 1, name: "review", status: "success", webUrl: "https://gitlab.com/jobs/1", deploymentTier: "development" },
-		],
-		[
-			"verification job with an environment",
-			{ id: 2, name: "verify", status: "success", webUrl: "https://gitlab.com/jobs/2", deploymentTier: "production" },
-		],
-		[
-			"generic environment job",
-			{
-				id: 3,
-				name: "deploy-preview",
-				status: "success",
-				webUrl: "https://gitlab.com/jobs/3",
-				deploymentTier: "staging",
-			},
-		],
-		[
-			"failed apply",
-			{
-				id: 4,
-				name: "terraform-apply",
-				status: "failed",
-				webUrl: "https://gitlab.com/jobs/4",
-				deploymentTier: "production",
-			},
-		],
-	] as const)("rejects %s", (_label, job) => {
-		expect(isVerifiedTerraformDeploymentJob(job)).toBe(false);
-	});
-
-	test("accepts a successful Terraform apply deployment", () => {
-		expect(
-			isVerifiedTerraformDeploymentJob({
-				id: 5,
-				name: "terraform-apply",
-				status: "success",
-				webUrl: "https://gitlab.com/jobs/5",
-				deploymentTier: "production",
-			}),
-		).toBe(true);
-	});
-});
-
 describe("GitLab historical merge request pagination", () => {
-	test.each([null, ""])("rejects a response without a trustworthy X-Total header: %p", async (totalHeader) => {
+	test("reports an unavailable exact total without inventing one", async () => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 1_000,
+			fetchImpl: (async () => new Response("[]")) as unknown as typeof fetch,
+		});
+
+		const result = await client.historicalMergeRequests(
+			"pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
+			"2026-09-01T00:00:00.000Z",
+			undefined,
+			1,
+			20,
+		);
+
+		expect(result.total).toBeUndefined();
+	});
+
+	test.each(["", "1.0", "+1", "1e2", "-1"])("rejects a non-decimal X-Total header: %s", async (total) => {
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 1_000,
+			fetchImpl: (async () => new Response("[]", { headers: { "x-total": total } })) as unknown as typeof fetch,
+		});
+
+		await expect(
+			client.historicalMergeRequests("project", "2026-09-01T00:00:00.000Z", undefined, 1, 20),
+		).rejects.toThrow("valid X-Total");
+	});
+
+	test("rejects pagination headers that do not describe the requested page", async () => {
 		const client = createGitLabReadClient({
 			baseUrl: "https://gitlab.example",
 			timeoutMs: 100,
 			maxResponseBytes: 1_000,
 			fetchImpl: (async () =>
 				new Response("[]", {
-					headers: totalHeader === null ? undefined : { "x-total": totalHeader },
+					headers: { "x-total": "0", "x-page": "2", "x-per-page": "20" },
 				})) as unknown as typeof fetch,
 		});
 
 		await expect(
-			client.historicalMergeRequests(
-				"pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
-				"2026-09-01T00:00:00.000Z",
-				undefined,
-				1,
-				20,
-			),
-		).rejects.toThrow("omitted a valid X-Total header");
+			client.historicalMergeRequests("project", "2026-09-01T00:00:00.000Z", undefined, 1, 20),
+		).rejects.toThrow("X-Page");
+	});
+});
+
+describe("GitLab direct merge request evidence", () => {
+	test("reads bounded metadata from the official single-MR endpoint", async () => {
+		const requested: string[] = [];
+		const client = createGitLabReadClient({
+			baseUrl: "https://gitlab.example",
+			timeoutMs: 100,
+			maxResponseBytes: 10_000,
+			fetchImpl: (async (input: string | URL | Request) => {
+				requested.push(String(input));
+				return new Response(
+					JSON.stringify({
+						iid: 7,
+						title: "Add account",
+						state: "merged",
+						web_url: "https://gitlab.example/project/-/merge_requests/7",
+						created_at: "2026-09-02T00:00:00.000Z",
+						updated_at: "2026-09-03T00:00:00.000Z",
+						merge_commit_sha: "merge-7",
+						sha: "head-7",
+					}),
+				);
+			}) as unknown as typeof fetch,
+		});
+
+		await expect(client.mergeRequest("group/project", 7)).resolves.toEqual({
+			iid: 7,
+			title: "Add account",
+			state: "merged",
+			webUrl: "https://gitlab.example/project/-/merge_requests/7",
+			createdAt: "2026-09-02T00:00:00.000Z",
+			updatedAt: "2026-09-03T00:00:00.000Z",
+			mergeCommitSha: "merge-7",
+			commitSha: "head-7",
+		});
+		expect(requested).toEqual(["https://gitlab.example/api/v4/projects/group%2Fproject/merge_requests/7"]);
 	});
 });

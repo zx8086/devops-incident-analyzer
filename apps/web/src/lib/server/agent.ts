@@ -39,7 +39,7 @@ import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
 import { DEFAULT_AGENT_ID, describeAgent, graphFor } from "./graph-registry.ts";
 import { getKnowledgeGraphMcpUrl, mountKnowledgeGraphServer } from "./knowledge-graph-server.ts";
-import { startSchedules } from "./schedules.ts";
+import { refreshSchedules, startSchedules } from "./schedules.ts";
 import { pipelineNodeNames } from "./topology.ts";
 
 // SIO-849/SIO-850: wire the lifecycle teardown (open_memory_pr) and bootstrap
@@ -180,7 +180,9 @@ function getMcpConfig() {
 
 export function ensureMcpConnected(): Promise<void> {
 	if (!mcpReady) {
-		mcpReady = createMcpClient(getMcpConfig());
+		mcpReady = createMcpClient(getMcpConfig()).then(() => {
+			refreshSchedules();
+		});
 	}
 	return mcpReady;
 }

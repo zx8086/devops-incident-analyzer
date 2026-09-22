@@ -58,7 +58,7 @@ export interface LandingZoneRepositoryRecord {
 
 export interface LandingZoneGitLabImportProgress {
 	upperBound: string;
-	expectedTotal: number;
+	expectedTotal?: number;
 	nextPage: number;
 	seenMrIds: string[];
 }
@@ -67,6 +67,24 @@ export interface LandingZoneGitLabImportCheckpoint {
 	projectId: string;
 	updatedAfter: string;
 	inProgress?: LandingZoneGitLabImportProgress;
+	pendingMrIids?: number[];
+	pendingCursor?: number;
+}
+
+const MAX_PENDING_MERGE_REQUESTS = 1_000;
+
+function validImportProgress(value: unknown): value is LandingZoneGitLabImportProgress {
+	if (typeof value !== "object" || value === null) return false;
+	const progress = value as Partial<LandingZoneGitLabImportProgress>;
+	return (
+		typeof progress.upperBound === "string" &&
+		(progress.expectedTotal === undefined ||
+			(Number.isInteger(progress.expectedTotal) && Number(progress.expectedTotal) >= 0)) &&
+		Number.isInteger(progress.nextPage) &&
+		Number(progress.nextPage) >= 1 &&
+		Array.isArray(progress.seenMrIds) &&
+		progress.seenMrIds.every((id) => typeof id === "string")
+	);
 }
 
 export async function readLandingZoneGitLabImportCheckpoint(
@@ -81,22 +99,50 @@ export async function readLandingZoneGitLabImportCheckpoint(
 	const projectId = rows[0]?.id?.replace("gitlab-project:", "");
 	if (!updatedAfter || !projectId) return undefined;
 	let inProgress: LandingZoneGitLabImportProgress | undefined;
+	let pendingMrIids: number[] = [];
+	let pendingCursor = 0;
 	if (rows[0]?.state) {
-		const parsed = JSON.parse(rows[0].state) as LandingZoneGitLabImportProgress;
-		if (
-			typeof parsed.upperBound !== "string" ||
-			!Number.isInteger(parsed.expectedTotal) ||
-			parsed.expectedTotal < 0 ||
-			!Number.isInteger(parsed.nextPage) ||
-			parsed.nextPage < 1 ||
-			!Array.isArray(parsed.seenMrIds) ||
-			!parsed.seenMrIds.every((id) => typeof id === "string")
-		) {
+		const parsed = JSON.parse(rows[0].state) as unknown;
+		const legacyProgress = validImportProgress(parsed) ? parsed : undefined;
+		const state =
+			typeof parsed === "object" && parsed !== null
+				? (parsed as { inProgress?: unknown; pendingMrIids?: unknown; pendingCursor?: unknown })
+				: undefined;
+		if (legacyProgress) {
+			inProgress = legacyProgress;
+		} else if (state) {
+			if (state.inProgress !== undefined && !validImportProgress(state.inProgress))
+				throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+			inProgress = state.inProgress as LandingZoneGitLabImportProgress | undefined;
+			if (state.pendingMrIids !== undefined) {
+				if (
+					!Array.isArray(state.pendingMrIids) ||
+					state.pendingMrIids.length > MAX_PENDING_MERGE_REQUESTS ||
+					!state.pendingMrIids.every((iid) => Number.isInteger(iid) && Number(iid) > 0)
+				)
+					throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+				pendingMrIids = state.pendingMrIids as number[];
+			}
+			if (state.pendingCursor !== undefined) {
+				if (
+					!Number.isInteger(state.pendingCursor) ||
+					Number(state.pendingCursor) < 0 ||
+					Number(state.pendingCursor) >= Math.max(1, pendingMrIids.length)
+				)
+					throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
+				pendingCursor = Number(state.pendingCursor);
+			}
+		} else {
 			throw new Error(`Invalid GitLab import checkpoint state for ${repository}`);
 		}
-		inProgress = parsed;
 	}
-	return { projectId, updatedAfter, ...(inProgress && { inProgress }) };
+	return {
+		projectId,
+		updatedAfter,
+		...(inProgress && { inProgress }),
+		...(pendingMrIids.length > 0 && { pendingMrIids }),
+		...(pendingMrIids.length > 0 && { pendingCursor }),
+	};
 }
 
 export async function recordLandingZoneGitLabImportCheckpoint(
@@ -104,13 +150,29 @@ export async function recordLandingZoneGitLabImportCheckpoint(
 	projectId: string,
 	checkpoint: Omit<LandingZoneGitLabImportCheckpoint, "projectId">,
 ): Promise<void> {
+	if (
+		(checkpoint.pendingMrIids?.length ?? 0) > MAX_PENDING_MERGE_REQUESTS ||
+		!(checkpoint.pendingMrIids ?? []).every((iid) => Number.isInteger(iid) && iid > 0) ||
+		!Number.isInteger(checkpoint.pendingCursor ?? 0) ||
+		(checkpoint.pendingCursor ?? 0) < 0 ||
+		(checkpoint.pendingCursor ?? 0) >= Math.max(1, checkpoint.pendingMrIids?.length ?? 0)
+	) {
+		throw new Error("Invalid bounded GitLab pending merge request queue");
+	}
 	await store.run(
 		"MATCH (r:Repository {id: $repositoryId}) SET r.gitlabImportUpdatedAfter = $updatedAfter, r.gitlabImportCheckpointedAt = $checkpointedAt, r.gitlabImportState = $state",
 		{
 			repositoryId: `gitlab-project:${projectId}`,
 			updatedAfter: checkpoint.updatedAfter,
 			checkpointedAt: new Date().toISOString(),
-			state: checkpoint.inProgress ? JSON.stringify(checkpoint.inProgress) : "",
+			state:
+				checkpoint.inProgress || (checkpoint.pendingMrIids?.length ?? 0) > 0
+					? JSON.stringify({
+							...(checkpoint.inProgress && { inProgress: checkpoint.inProgress }),
+							pendingMrIids: checkpoint.pendingMrIids ?? [],
+							pendingCursor: checkpoint.pendingCursor ?? 0,
+						})
+					: "",
 		},
 	);
 }

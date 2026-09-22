@@ -10,6 +10,7 @@ import {
 	listMergeRequestPipelines,
 	listOpenChanges,
 	listProjectDeployments,
+	readMergeRequest,
 	readPipelinePlan,
 } from "./tools/evidence.ts";
 import {
@@ -106,10 +107,23 @@ function registerAll(server: McpServer, client: GitLabReadClient): void {
 	);
 
 	server.registerTool(
+		"lz_read_merge_request",
+		{
+			description: "Read bounded current metadata for one approved Landing Zone review record.",
+			inputSchema: {
+				repository: RepositoryParam,
+				iid: z.number().int().positive().describe("GitLab merge request IID"),
+			},
+			annotations: READ_ONLY_ANNOTATIONS,
+		},
+		async (args) => readMergeRequest(client, args).then(textResult).catch(errorResult),
+	);
+
+	server.registerTool(
 		"lz_list_merge_request_pipelines",
 		{
 			description:
-				"List bounded pipeline metadata for a historical review record, including verified deployment and Terraform-plan signals without plan content.",
+				"List bounded CI pipeline and Terraform plan-job metadata for one review record without plan content.",
 			inputSchema: {
 				repository: RepositoryParam,
 				iid: z.number().int().positive().describe("GitLab merge request IID"),

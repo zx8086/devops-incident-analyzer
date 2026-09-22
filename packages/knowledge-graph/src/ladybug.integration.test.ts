@@ -108,16 +108,20 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		});
 		await recordLandingZoneGitLabImportCheckpoint(store, "42", {
 			updatedAfter: "2026-09-03T00:00:00.000Z",
-			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", expectedTotal: 1, nextPage: 1, seenMrIds: ["42:7"] },
+			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", nextPage: 1, seenMrIds: ["42:7"] },
+			pendingMrIids: [7, 8],
+			pendingCursor: 1,
 		});
 		expect(await readLandingZoneGitLabImportCheckpoint(store, "aws-lz-account-creator")).toEqual({
 			projectId: "42",
 			updatedAfter: "2026-09-03T00:00:00.000Z",
-			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", expectedTotal: 1, nextPage: 1, seenMrIds: ["42:7"] },
+			inProgress: { upperBound: "2026-09-04T00:00:00.000Z", nextPage: 1, seenMrIds: ["42:7"] },
+			pendingMrIids: [7, 8],
+			pendingCursor: 1,
 		});
 	});
 
-	test("Landing Zone repository model is idempotent and queryable", async () => {
+	test("Landing Zone reader returns one current applied outcome after an MR-stable proposed transition", async () => {
 		const store = new LadybugStore(join(dir, "lz-repository-model"));
 		await store.init();
 		const repositoryPath = "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator";
@@ -221,6 +225,7 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		expect(await accountManagingRoots(store, repositoryPath)).toEqual([{ rootId, rootPath: ".", repositoryPath }]);
 		const history = await repositoryChangeHistory(store, repositoryPath);
 		expect(history).toHaveLength(1);
+		expect(history[0]?.changeId).toBe("change-42");
 		expect(history[0]?.outcome).toBe("applied");
 		expect(history[0]?.pipelineId).toBe("10");
 		expect(await standardsForRepository(store, repositoryPath)).toEqual([

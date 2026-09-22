@@ -207,15 +207,6 @@ export interface GitLabPipelineJob {
 	name: string;
 	status: string;
 	webUrl: string;
-	deploymentTier?: string;
-}
-
-export function isVerifiedTerraformDeploymentJob(job: GitLabPipelineJob): boolean {
-	return (
-		job.status === "success" &&
-		Boolean(job.deploymentTier) &&
-		/(^|[-_:])(?:terraform[-_:])?apply($|[-_:])/i.test(job.name)
-	);
 }
 
 export interface GitLabHistoricalMergeRequest {
@@ -235,8 +226,6 @@ export interface GitLabHistoricalPipeline {
 	webUrl: string;
 	createdAt: string;
 	updatedAt: string;
-	hasTerraformPlan: boolean;
-	isVerifiedDeployment: boolean;
 }
 
 export interface GitLabDeployment {
@@ -251,7 +240,12 @@ export interface GitLabReadClient {
 	readFile(projectPath: string, path: string, ref?: string): Promise<GitLabFile>;
 	openChanges(projectPath: string): Promise<GitLabOpenChange[]>;
 	changePaths(projectPath: string, iid: number): Promise<string[]>;
-	pipelineJobs(projectPath: string, pipelineId: number): Promise<GitLabPipelineJob[]>;
+	pipelineJobs(
+		projectPath: string,
+		pipelineId: number,
+		page: number,
+		perPage: number,
+	): Promise<{ jobs: GitLabPipelineJob[]; nextPage?: number }>;
 	jobTrace(projectPath: string, jobId: number): Promise<string>;
 	historicalMergeRequests(
 		projectPath: string,
@@ -259,8 +253,14 @@ export interface GitLabReadClient {
 		updatedBefore: string | undefined,
 		page: number,
 		perPage: number,
-	): Promise<{ mergeRequests: GitLabHistoricalMergeRequest[]; total: number; nextPage?: number }>;
-	mergeRequestPipelines(projectPath: string, iid: number): Promise<GitLabHistoricalPipeline[]>;
+	): Promise<{ mergeRequests: GitLabHistoricalMergeRequest[]; total?: number; nextPage?: number }>;
+	mergeRequest(projectPath: string, iid: number): Promise<GitLabHistoricalMergeRequest>;
+	mergeRequestPipelines(
+		projectPath: string,
+		iid: number,
+		page: number,
+		perPage: number,
+	): Promise<{ pipelines: GitLabHistoricalPipeline[]; nextPage?: number }>;
 	projectDeployments?(
 		projectPath: string,
 		page: number,
@@ -307,7 +307,6 @@ const GitLabJobsResponseSchema = z.array(
 		name: z.string(),
 		status: z.string(),
 		web_url: z.string(),
-		deployment_tier: z.string().nullable().optional(),
 	}),
 );
 const GitLabHistoricalMergeRequestsResponseSchema = z.array(
@@ -322,6 +321,7 @@ const GitLabHistoricalMergeRequestsResponseSchema = z.array(
 		sha: z.string(),
 	}),
 );
+const GitLabHistoricalMergeRequestResponseSchema = GitLabHistoricalMergeRequestsResponseSchema.element;
 const GitLabHistoricalPipelinesResponseSchema = z.array(
 	z.object({
 		id: z.number().int(),
@@ -373,8 +373,68 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 		return JSON.parse(await request(path)) as unknown;
 	}
 
+	async function responseJson(response: Response): Promise<unknown> {
+		const text = await response.text();
+		if (Buffer.byteLength(text, "utf8") > options.maxResponseBytes) {
+			throw new Error(`GitLab response exceeded ${options.maxResponseBytes} bytes`);
+		}
+		return JSON.parse(text) as unknown;
+	}
+
 	function projectApiPath(projectPath: string): string {
 		return `/projects/${encodeURIComponent(projectPath)}`;
+	}
+
+	function parseDecimalHeader(headers: Headers, name: string, minimum: number): number | undefined {
+		const raw = headers.get(name);
+		if (raw === null) return undefined;
+		if (!/^\d+$/.test(raw)) throw new Error(`GitLab response omitted a valid ${name} header`);
+		const value = Number(raw);
+		if (!Number.isSafeInteger(value) || value < minimum)
+			throw new Error(`GitLab response omitted a valid ${name} header`);
+		return value;
+	}
+
+	function validatePageHeaders(headers: Headers, page: number, perPage: number): void {
+		const responsePage = parseDecimalHeader(headers, "X-Page", 1);
+		if (responsePage !== undefined && responsePage !== page)
+			throw new Error(`GitLab X-Page ${responsePage} did not match requested page ${page}`);
+		const responsePerPage = parseDecimalHeader(headers, "X-Per-Page", 1);
+		if (responsePerPage !== undefined && responsePerPage !== perPage)
+			throw new Error(`GitLab X-Per-Page ${responsePerPage} did not match requested page size ${perPage}`);
+	}
+
+	function nextPageFrom(response: Response): number | undefined {
+		if (response.headers.get("X-Next-Page") === "") return undefined;
+		const headerPage = parseDecimalHeader(response.headers, "X-Next-Page", 1);
+		if (headerPage !== undefined) return headerPage;
+		const link = response.headers.get("link");
+		if (!link) return undefined;
+		const next = link
+			.split(",")
+			.map((part) => part.trim())
+			.find((part) => /;\s*rel="?next"?\s*$/i.test(part));
+		const target = next?.match(/^<([^>]+)>/)?.[1];
+		if (!target) return undefined;
+		const rawPage = new URL(target, apiRoot).searchParams.get("page");
+		if (rawPage === null || !/^\d+$/.test(rawPage) || Number(rawPage) < 1)
+			throw new Error("GitLab response omitted a valid next-page link");
+		return Number(rawPage);
+	}
+
+	function shapeMergeRequest(
+		mr: z.infer<typeof GitLabHistoricalMergeRequestResponseSchema>,
+	): GitLabHistoricalMergeRequest {
+		return {
+			iid: mr.iid,
+			title: mr.title,
+			state: mr.state,
+			webUrl: mr.web_url,
+			createdAt: mr.created_at,
+			updatedAt: mr.updated_at,
+			...(mr.merge_commit_sha && { mergeCommitSha: mr.merge_commit_sha }),
+			commitSha: mr.sha,
+		};
 	}
 
 	return {
@@ -440,17 +500,22 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 			);
 			return change.changes.slice(0, 500).map((item) => item.new_path);
 		},
-		async pipelineJobs(projectPath, pipelineId) {
-			const jobs = GitLabJobsResponseSchema.parse(
-				await json(`${projectApiPath(projectPath)}/pipelines/${pipelineId}/jobs?per_page=100`),
+		async pipelineJobs(projectPath, pipelineId, page, perPage) {
+			const response = await responseFor(
+				`${projectApiPath(projectPath)}/pipelines/${pipelineId}/jobs?${new URLSearchParams({ page: String(page), per_page: String(perPage) }).toString()}`,
 			);
-			return jobs.map((job) => ({
-				id: job.id,
-				name: job.name,
-				status: job.status,
-				webUrl: job.web_url,
-				...(job.deployment_tier && { deploymentTier: job.deployment_tier }),
-			}));
+			validatePageHeaders(response.headers, page, perPage);
+			const jobs = GitLabJobsResponseSchema.parse(await responseJson(response));
+			const nextPage = nextPageFrom(response);
+			return {
+				jobs: jobs.map((job) => ({
+					id: job.id,
+					name: job.name,
+					status: job.status,
+					webUrl: job.web_url,
+				})),
+				...(nextPage && { nextPage }),
+			};
 		},
 		jobTrace(projectPath, jobId) {
 			return request(`${projectApiPath(projectPath)}/jobs/${jobId}/trace`);
@@ -471,52 +536,45 @@ export function createGitLabReadClient(options: GitLabClientOptions): GitLabRead
 			if (Buffer.byteLength(text, "utf8") > options.maxResponseBytes) {
 				throw new Error(`GitLab response exceeded ${options.maxResponseBytes} bytes`);
 			}
+			validatePageHeaders(response.headers, page, perPage);
 			const mergeRequests = GitLabHistoricalMergeRequestsResponseSchema.parse(JSON.parse(text) as unknown).map(
-				(mr) => ({
-					iid: mr.iid,
-					title: mr.title,
-					state: mr.state,
-					webUrl: mr.web_url,
-					createdAt: mr.created_at,
-					updatedAt: mr.updated_at,
-					...(mr.merge_commit_sha && { mergeCommitSha: mr.merge_commit_sha }),
-					commitSha: mr.sha,
-				}),
+				shapeMergeRequest,
 			);
-			const nextPage = Number(response.headers.get("x-next-page"));
+			const nextPage = nextPageFrom(response);
 			const totalHeader = response.headers.get("x-total");
-			if (totalHeader === null || totalHeader.trim() === "") {
-				throw new Error("GitLab historical merge request response omitted a valid X-Total header");
-			}
-			const total = Number(totalHeader);
-			if (!Number.isInteger(total) || total < 0)
-				throw new Error("GitLab historical merge request response omitted a valid X-Total header");
-			return { mergeRequests, total, ...(Number.isInteger(nextPage) && nextPage > 0 && { nextPage }) };
+			const total = totalHeader === null ? undefined : parseDecimalHeader(response.headers, "X-Total", 0);
+			return { mergeRequests, ...(total !== undefined && { total }), ...(nextPage && { nextPage }) };
 		},
-		async mergeRequestPipelines(projectPath, iid) {
-			const pipelines = GitLabHistoricalPipelinesResponseSchema.parse(
-				await json(`${projectApiPath(projectPath)}/merge_requests/${iid}/pipelines?per_page=20`),
+		async mergeRequest(projectPath, iid) {
+			return shapeMergeRequest(
+				GitLabHistoricalMergeRequestResponseSchema.parse(
+					await json(`${projectApiPath(projectPath)}/merge_requests/${iid}`),
+				),
 			);
-			return Promise.all(
-				pipelines.slice(0, 20).map(async (pipeline) => {
-					const jobs = await this.pipelineJobs(projectPath, pipeline.id);
-					return {
-						id: pipeline.id,
-						status: pipeline.status,
-						webUrl: pipeline.web_url,
-						createdAt: pipeline.created_at,
-						updatedAt: pipeline.updated_at,
-						hasTerraformPlan: jobs.some((job) => /(^|[-_:])(terraform[-_:]?)?plan($|[-_:])/i.test(job.name)),
-						isVerifiedDeployment: jobs.some(isVerifiedTerraformDeploymentJob),
-					};
-				}),
+		},
+		async mergeRequestPipelines(projectPath, iid, page, perPage) {
+			const response = await responseFor(
+				`${projectApiPath(projectPath)}/merge_requests/${iid}/pipelines?${new URLSearchParams({ page: String(page), per_page: String(perPage) }).toString()}`,
 			);
+			validatePageHeaders(response.headers, page, perPage);
+			const pipelines = GitLabHistoricalPipelinesResponseSchema.parse(await responseJson(response));
+			const nextPage = nextPageFrom(response);
+			return {
+				pipelines: pipelines.map((pipeline) => ({
+					id: pipeline.id,
+					status: pipeline.status,
+					webUrl: pipeline.web_url,
+					createdAt: pipeline.created_at,
+					updatedAt: pipeline.updated_at,
+				})),
+				...(nextPage && { nextPage }),
+			};
 		},
 		async projectDeployments(projectPath, page, perPage) {
 			const response = await responseFor(
 				`${projectApiPath(projectPath)}/deployments?${new URLSearchParams({ status: "success", page: String(page), per_page: String(perPage) }).toString()}`,
 			);
-			const deployments = GitLabDeploymentsResponseSchema.parse(await response.json()).map((deployment) => ({
+			const deployments = GitLabDeploymentsResponseSchema.parse(await responseJson(response)).map((deployment) => ({
 				sha: deployment.sha,
 				status: deployment.status,
 				...(deployment.deployable?.pipeline?.id && { pipelineId: deployment.deployable.pipeline.id }),
