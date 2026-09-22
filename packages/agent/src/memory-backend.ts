@@ -258,14 +258,15 @@ async function ensureUserAndSession(
 	name: string,
 	userMetadata: AnnotationMap,
 	sessionAnnotations: AnnotationMap,
+	signal?: AbortSignal,
 ): Promise<void> {
 	if (!ensuredUsers.has(userId)) {
-		await c.ensureUser(userId, name, userMetadata);
+		await c.ensureUser(userId, name, userMetadata, signal);
 		ensuredUsers.add(userId);
 	}
 	const key = sessionKey(userId, sessionId);
 	if (!ensuredSessions.has(key)) {
-		await c.ensureSession(userId, sessionId, { annotations: sessionAnnotations });
+		await c.ensureSession(userId, sessionId, { annotations: sessionAnnotations, signal });
 		ensuredSessions.add(key);
 	}
 }
@@ -285,9 +286,10 @@ async function ensureUserAndSessionForRead(
 	name: string,
 	userMetadata: AnnotationMap,
 	sessionAnnotations: AnnotationMap,
+	signal?: AbortSignal,
 ): Promise<void> {
 	try {
-		await ensureUserAndSession(c, userId, sessionId, name, userMetadata, sessionAnnotations);
+		await ensureUserAndSession(c, userId, sessionId, name, userMetadata, sessionAnnotations, signal);
 	} catch (error) {
 		if (isTransientBackendFailure(error)) return;
 		throw error;
@@ -723,7 +725,7 @@ export async function searchAgentMemory(
 	// IDENTIFIER-keyed recall (by mr_url/pipeline_id/config_change_id) where a query string would
 	// rank the target out of the top-k window before the filter applies. The passed `query` is
 	// ignored in this mode. See docs/architecture/agent-memory.md "Retrieval: TWO modes".
-	opts?: { allSessions?: boolean; deterministic?: boolean },
+	opts?: { allSessions?: boolean; deterministic?: boolean; signal?: AbortSignal },
 ): Promise<MemorySearchHit[]> {
 	if (selectedBackend() !== "agent-memory") return [];
 	const userId = resolveUserId(agentName);
@@ -739,12 +741,14 @@ export async function searchAgentMemory(
 			agentName,
 			{ agent: agentName, role: resolveRole(agentName) },
 			{ agent: agentName },
+			opts?.signal,
 		);
 		const hits = await c.searchMemory(ref, deterministic ? "" : query, {
 			allSessions: opts?.allSessions ?? true,
 			// In deterministic mode the client omits relevant_k; passing it here is harmless (ignored).
 			...(deterministic ? {} : { relevantK: limit }),
 			...(filter && Object.keys(filter).length > 0 ? { annotations: filter } : {}),
+			signal: opts?.signal,
 		});
 		// SIO-991: a success log carrying the Couchbase coordinates (userId/sessionId/blockIds) so a
 		// recall can be traced to the exact memory-block documents in Capella, and an empty hit is no
@@ -772,6 +776,7 @@ export async function searchAgentMemory(
 			...(h.sessionId && { sessionId: h.sessionId }),
 		}));
 	} catch (error) {
+		if (opts?.signal?.aborted) throw error;
 		if (isTransientBackendFailure(error)) {
 			noteBackendUnavailable("search", error);
 			return [];

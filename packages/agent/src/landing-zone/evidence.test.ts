@@ -77,10 +77,22 @@ describe("parallel Landing Zone evidence collection", () => {
 
 	test("times out a stuck optional collector into an unavailable result", async () => {
 		const stuck = collectors([]);
-		stuck.memory = () => new Promise<EvidenceItem[]>(() => {});
+		let collectorSignal: AbortSignal | undefined;
+		let aborted = false;
+		stuck.memory = (collectorContext) => {
+			collectorSignal = collectorContext.signal;
+			return new Promise<EvidenceItem[]>((_resolve, reject) => {
+				collectorContext.signal?.addEventListener("abort", () => {
+					aborted = true;
+					reject(collectorContext.signal?.reason);
+				});
+			});
+		};
 		const result = await collectEvidenceSource("memory", context, stuck, 5);
 		expect(result.status).toBe("unavailable");
 		expect(result.reason).toContain("timed out");
+		expect(aborted).toBe(true);
+		expect(collectorSignal?.aborted).toBe(true);
 	});
 
 	test("preserves successful GitLab repositories when a sibling read fails", async () => {
@@ -99,17 +111,21 @@ describe("parallel Landing Zone evidence collection", () => {
 
 	test("queries the knowledge graph before producing observed evidence", async () => {
 		const calls: Record<string, unknown>[] = [];
-		const result = await collectKnowledgeGraphEvidence(context, [
+		const configs: { signal?: AbortSignal }[] = [];
+		const controller = new AbortController();
+		const result = await collectKnowledgeGraphEvidence({ ...context, signal: controller.signal }, [
 			{
 				name: "kg_run_cypher",
-				invoke: async (input) => {
+				invoke: async (input, config) => {
 					calls.push(input);
+					configs.push(config ?? {});
 					return { rows: [] };
 				},
 			},
 		]);
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.cypher).toContain("MATCH (n)");
+		expect(configs[0]?.signal).toBe(controller.signal);
 		expect(result[0]?.status).toBe("observed");
 	});
 });

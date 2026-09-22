@@ -23,6 +23,7 @@ export interface EvidenceCollectionContext {
 	selectedKnowledge: string[];
 	awsLiveStateRelevant: boolean;
 	awsLiveStateAuthorized: boolean;
+	signal?: AbortSignal;
 }
 
 export type EvidenceCollector = (context: EvidenceCollectionContext) => Promise<EvidenceItem[]>;
@@ -32,7 +33,7 @@ const COLLECTOR_TIMEOUT_MS = 5_000;
 
 interface EvidenceTool {
 	name: string;
-	invoke(input: Record<string, unknown>): Promise<unknown>;
+	invoke(input: Record<string, unknown>, config?: { signal?: AbortSignal }): Promise<unknown>;
 }
 
 function textFromMessages(messages: BaseMessage[]): string {
@@ -62,10 +63,10 @@ function evidence(
 	};
 }
 
-async function invokeTool(name: string, input: Record<string, unknown>): Promise<unknown> {
+async function invokeTool(name: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
 	const tool = getToolsForDataSource("landing-zone-iac").find((candidate) => candidate.name === name);
 	if (!tool) throw new Error(`${name} is not connected`);
-	return tool.invoke(input);
+	return tool.invoke(input, { signal });
 }
 
 function unavailableGitLabEvidence(repository: string, reason: string): EvidenceItem {
@@ -81,12 +82,12 @@ function unavailableGitLabEvidence(repository: string, reason: string): Evidence
 
 export async function collectGitLabEvidence(
 	context: EvidenceCollectionContext,
-	invoke: (name: string, input: Record<string, unknown>) => Promise<unknown> = invokeTool,
+	invoke: (name: string, input: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown> = invokeTool,
 ): Promise<EvidenceItem[]> {
 	if (context.repositories.length === 0) throw new Error("no repository scope was resolved");
 	const results = await Promise.allSettled(
 		context.repositories.map(async (repository) => {
-			const result = await invoke("lz_find_representative_examples", { repository, limit: 5 });
+			const result = await invoke("lz_find_representative_examples", { repository, limit: 5 }, context.signal);
 			return evidence("gitlab", `gitlab:${repository}`, JSON.stringify(result), { repository, path: "." });
 		}),
 	);
@@ -108,11 +109,14 @@ export async function collectKnowledgeGraphEvidence(
 ): Promise<EvidenceItem[]> {
 	const tool = tools.find((candidate) => candidate.name === "kg_run_cypher");
 	if (!tool) throw new Error("knowledge graph query tool is not connected");
-	const result = await tool.invoke({
-		cypher:
-			"MATCH (n) WHERE n:Vpc OR n:Subnet OR n:DnsRecord OR n:ConfigChange RETURN labels(n) AS labels, coalesce(n.id, n.name, n.accountId, '') AS identifier LIMIT 25",
-		params: {},
-	});
+	const result = await tool.invoke(
+		{
+			cypher:
+				"MATCH (n) WHERE n:Vpc OR n:Subnet OR n:DnsRecord OR n:ConfigChange RETURN labels(n) AS labels, coalesce(n.id, n.name, n.accountId, '') AS identifier LIMIT 25",
+			params: {},
+		},
+		{ signal: context.signal },
+	);
 	return [
 		evidence("knowledge-graph", "knowledge-graph:landing-zone", JSON.stringify(result), {
 			graphEntityId: (context.repositories.join(",") || "landing-zone").slice(0, 512),
@@ -120,13 +124,24 @@ export async function collectKnowledgeGraphEvidence(
 	];
 }
 
-function withCollectorTimeout<T>(promise: Promise<T>, source: EvidenceSource, timeoutMs: number): Promise<T> {
+function withCollectorTimeout<T>(
+	collector: EvidenceCollector,
+	context: EvidenceCollectionContext,
+	source: EvidenceSource,
+	timeoutMs: number,
+): Promise<T> {
+	const controller = new AbortController();
+	const timeoutError = new Error(`${source} collector timed out after ${timeoutMs}ms`);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<T>((_resolve, reject) => {
-		timer = setTimeout(() => reject(new Error(`${source} collector timed out after ${timeoutMs}ms`)), timeoutMs);
+		timer = setTimeout(() => {
+			controller.abort(timeoutError);
+			reject(timeoutError);
+		}, timeoutMs);
 		timer.unref?.();
 	});
-	return Promise.race([promise, timeout]).finally(() => {
+	const collection = collector({ ...context, signal: controller.signal }) as Promise<T>;
+	return Promise.race([collection, timeout]).finally(() => {
 		if (timer) clearTimeout(timer);
 	});
 }
@@ -154,7 +169,9 @@ export const DEFAULT_LANDING_ZONE_COLLECTORS: LandingZoneEvidenceCollectors = {
 		throw new Error("AWS live-state collector is not configured");
 	},
 	memory: async (context) => {
-		const hits = await searchAgentMemory("landing-zone-terraform", context.query, {}, 5);
+		const hits = await searchAgentMemory("landing-zone-terraform", context.query, {}, 5, {
+			signal: context.signal,
+		});
 		return hits.map((hit, index) =>
 			evidence("memory", `memory:${hit.blockId ?? index}`, hit.text, {
 				memoryBlockId: hit.blockId ?? `result-${index}`,
@@ -197,7 +214,7 @@ export async function collectEvidenceSource(
 		return {
 			source,
 			status: "collected",
-			evidence: await withCollectorTimeout(collectors[source](context), source, timeoutMs),
+			evidence: await withCollectorTimeout<EvidenceItem[]>(collectors[source], context, source, timeoutMs),
 		};
 	} catch (error) {
 		return {
