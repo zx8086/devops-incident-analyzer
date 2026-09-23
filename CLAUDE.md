@@ -265,7 +265,7 @@ The skills poll `repos/{owner}/{repo}/commits/<SHA>/check-runs` (lowercase `stat
 
 ### Code
 - **No emojis** in code, logs, comments, or output
-- **Tailwind CSS only** -- no custom CSS in `<style>` blocks (exception: MarkdownRenderer for dynamic HTML)
+- **Tailwind CSS only** -- no custom CSS in `<style>` blocks (exceptions, both for HTML the app does not author: MarkdownRenderer for dynamic HTML, and `embedHtml` in `apps/web/src/lib/server/archify/render.ts`, which injects a fit rule into the vendored Archify document shown in a sandboxed srcdoc iframe, where Tailwind is not loaded, SIO-1878)
 - Svelte 5 runes ($state, $derived, $effect, $props) for frontend
 - Named exports preferred
 - Zod for all runtime validation, no `.default()` in config schemas
