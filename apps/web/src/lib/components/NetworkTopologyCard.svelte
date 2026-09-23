@@ -76,7 +76,9 @@ function resetView() {
 
 function focusableToolbarButtons(): HTMLButtonElement[] {
 	if (!dialogEl) return [];
-	return Array.from(dialogEl.querySelectorAll("button"));
+	// SIO-1879: only visible buttons. The Map toolbar stays mounted (hidden) while the Diagram tab
+	// shows, and a hidden last button let Tab walk straight out of the dialog.
+	return Array.from(dialogEl.querySelectorAll("button")).filter((b) => b.offsetParent !== null);
 }
 
 async function toggleExpanded() {
@@ -185,7 +187,7 @@ $effect(() => {
         {topology.nodes.length} nodes · {topology.edges.length} links · {topology.sources.join(", ")}
       </span>
     </div>
-    <ArchifyDiagram view="network" {topology} bind:tab={diagramTab} />
+    <ArchifyDiagram view="network" {topology} bind:tab={diagramTab} {expanded} onToggleExpand={toggleExpanded} />
     <div class={[expanded ? "relative min-h-0 flex-1" : "relative", diagramTab !== "map" && "hidden"]}>
       <div
         bind:this={container}
