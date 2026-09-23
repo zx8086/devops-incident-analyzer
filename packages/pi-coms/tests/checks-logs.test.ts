@@ -6,6 +6,7 @@ import {
 	collapseTraceEvents,
 	logSignature,
 	logsWindow,
+	stripLogPrefix,
 	summariseLogSample,
 } from "../scripts/monitor/checks/logs.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
@@ -256,6 +257,60 @@ describe("checkLogs scope tolerance (SIO-1592)", () => {
 // Live on eu-oit-prd: four findings in one log group all read "3 error-pattern
 // event(s) in /ecs/fargate/catalog-prd-log-group". They are DISTINCT signatures
 // (so collapsing them would lose signal) and the digest could not tell them apart.
+describe("stripLogPrefix (SIO-1874)", () => {
+	// Both strings are verbatim from live journals on 2026-09-23. A stripper
+	// tested against ONE producer format is untested, so both real shapes are
+	// pinned here.
+	const QUARKUS =
+		"2026-09-22 10:39:37,736 ERROR f7b06144c52da311f3efd9c68f15145c 128552bcaa91de80 context= [com.pvh.listsapi.service.impl.UserServiceImpl] (executor-thread-316) Failed to update sold to dependent data";
+	const SPRING =
+		"2026-09-22T10:39:11.020Z trace_id=6ab25ace4231834e5353a57a1e7b09cb span_id=8b553a2e03eaa2cd ERROR 1 --- [Container#1-582] c.p.b.n.m.UserNotificationSubscriber : Failed to process message";
+
+	test("strips the Quarkus timestamp, level, trace and span ids", () => {
+		const out = stripLogPrefix(QUARKUS);
+		expect(out.startsWith("[com.pvh.listsapi.service.impl.UserServiceImpl]")).toBe(true);
+		expect(out).toContain("Failed to update sold to dependent data");
+		expect(out).not.toContain("f7b06144c52da311f3efd9c68f15145c");
+	});
+
+	test("strips the Spring Boot trace_id=/span_id= form and the sequence number", () => {
+		const out = stripLogPrefix(SPRING);
+		expect(out.startsWith("[Container#1-582]")).toBe(true);
+		expect(out).toContain("Failed to process message");
+		expect(out).not.toContain("6ab25ace4231834e5353a57a1e7b09cb");
+	});
+
+	test("recovers real message characters, which is the whole point", () => {
+		// 76 of 188 characters were ids on eu-oit-prd; those characters were
+		// pushing the message past the excerpt cap.
+		expect(stripLogPrefix(QUARKUS).length).toBeLessThan(QUARKUS.length - 60);
+	});
+
+	test("a line with no recognisable prefix is left alone", () => {
+		// A bare stack frame must never be eaten by best-effort stripping.
+		const frame = "at org.springframework.jdbc.core.JdbcTemplate.translateException(JdbcTemplate.java:1538)";
+		expect(stripLogPrefix(frame)).toBe(frame);
+		const exc = 'java.lang.NullPointerException: Cannot invoke "java.util.UUID.toString()"';
+		expect(stripLogPrefix(exc)).toBe(exc);
+	});
+
+	test("a populated context= is kept; only the empty one is dropped", () => {
+		const kept = "context=tenant-42 [com.pvh.Svc] boom";
+		expect(stripLogPrefix(kept)).toContain("context=tenant-42");
+	});
+
+	test("an ids-only line returns the original rather than an empty string", () => {
+		const idsOnly = "2026-09-22 10:39:37,736 ERROR f7b06144c52da311f3efd9c68f15145c";
+		expect(stripLogPrefix(idsOnly)).not.toBe("");
+	});
+
+	test("a hex-looking WORD in the message is not mistaken for an id", () => {
+		// CORRELATION_ID is anchored, so it can only ever eat a LEADING token.
+		const msg = "deadbeefdeadbeef is the checksum we expected";
+		expect(stripLogPrefix(msg)).toBe(msg);
+	});
+});
+
 describe("summariseLogSample", () => {
 	test("keeps a short message whole", () => {
 		expect(summariseLogSample("NullPointerException at Foo.bar")).toBe("NullPointerException at Foo.bar");
