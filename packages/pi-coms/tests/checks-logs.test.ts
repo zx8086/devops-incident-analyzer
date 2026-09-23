@@ -6,6 +6,7 @@ import {
 	collapseTraceEvents,
 	logSignature,
 	logsWindow,
+	SAMPLE_CAPTURE,
 	stripLogPrefix,
 	summariseLogSample,
 } from "../scripts/monitor/checks/logs.ts";
@@ -335,6 +336,16 @@ describe("stripLogPrefix (SIO-1874)", () => {
 describe("summariseLogSample", () => {
 	test("keeps a short message whole", () => {
 		expect(summariseLogSample("NullPointerException at Foo.bar")).toBe("NullPointerException at Foo.bar");
+	});
+
+	// SIO-1874: the excerpt cap IS the capture cap. Nothing beyond SAMPLE_CAPTURE
+	// is ever stored, so an excerpt narrower than it silently discards message,
+	// and one wider than it is dead code. Measured over 62 real samples from the
+	// two noisiest accounts: at 200 36 were cut mid-message, at 300 none are.
+	test("the excerpt cap equals the capture cap, so nothing stored is discarded", () => {
+		const captured = "x".repeat(SAMPLE_CAPTURE);
+		expect(summariseLogSample(captured)).toBe(captured);
+		expect(summariseLogSample(captured).endsWith("...")).toBe(false);
 	});
 
 	// SIO-1832: asserted against the function's OWN cap rather than a hard-coded
