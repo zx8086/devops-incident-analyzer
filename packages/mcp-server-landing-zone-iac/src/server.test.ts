@@ -38,7 +38,7 @@ function enabledConfig(): Config {
 		write: {
 			enabled: true,
 			token: "separate-write-token",
-			reviewToken: "approved-review-token",
+			reviewSecret: "review-signing-secret-at-least-32-bytes",
 			allowedProjects: [projectPath],
 			allowedPathPrefixes: { [projectPath]: ["accounts/"] },
 			backendProjects: [],
@@ -129,10 +129,19 @@ describe("Landing Zone MCP server", () => {
 			name: "lz_watch_pipeline",
 			arguments: { repository: "aws-lz-account-creator", projectId: 42, iid: 7, pipelineId: 99 },
 		});
+		const successfulCalls = [...calls];
+		calls.length = 0;
+		const unrelated = await mcpClient.callTool({
+			name: "lz_watch_pipeline",
+			arguments: { repository: "aws-lz-account-creator", projectId: 42, iid: 7, pipelineId: 123 },
+		});
 		await mcpClient.close();
 
 		expect(result.isError).not.toBe(true);
-		expect(calls).toEqual(["mergeRequestPipelines", "pipelineJobs", "pipelineJobs", "jobTrace"]);
+		expect(successfulCalls).toEqual(["mergeRequestPipelines", "pipelineJobs", "pipelineJobs", "jobTrace"]);
 		expect(JSON.stringify(result.content)).toContain("1 to add, 0 to change, 0 to destroy");
+		expect(unrelated.isError).toBe(true);
+		expect(JSON.stringify(unrelated.content)).toContain("does not belong to merge request");
+		expect(calls).toEqual(["mergeRequestPipelines", "pipelineJobs"]);
 	});
 });

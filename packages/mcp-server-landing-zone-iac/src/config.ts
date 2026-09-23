@@ -23,7 +23,7 @@ export const ConfigSchema = z
 		write: z.object({
 			enabled: z.boolean(),
 			token: z.string().min(1).optional(),
-			reviewToken: z.string().min(1).optional(),
+			reviewSecret: z.string().min(32).optional(),
 			allowedProjects: z.array(z.string().min(1)),
 			allowedPathPrefixes: z.record(z.string(), z.array(PathPrefixSchema).min(1)),
 			backendProjects: z.array(z.string().min(1)),
@@ -40,13 +40,17 @@ export const ConfigSchema = z
 				message: "write token must be separate from the read credential",
 			});
 		}
-		if (!config.write.reviewToken)
-			context.addIssue({ code: "custom", path: ["write", "reviewToken"], message: "review token is required" });
-		if (config.write.reviewToken && config.write.reviewToken === config.write.token) {
+		if (!config.write.reviewSecret)
 			context.addIssue({
 				code: "custom",
-				path: ["write", "reviewToken"],
-				message: "review token must be separate from the GitLab write credential",
+				path: ["write", "reviewSecret"],
+				message: "review signing secret is required",
+			});
+		if (config.write.reviewSecret && config.write.reviewSecret === config.write.token) {
+			context.addIssue({
+				code: "custom",
+				path: ["write", "reviewSecret"],
+				message: "review signing secret must be separate from the GitLab write credential",
 			});
 		}
 		if (config.write.allowedProjects.length === 0)
@@ -110,7 +114,7 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
 		write: {
 			enabled: env.LANDING_ZONE_WRITE_ENABLED === "true",
 			token: env.LANDING_ZONE_GITLAB_WRITE_TOKEN || undefined,
-			reviewToken: env.LANDING_ZONE_WRITE_REVIEW_TOKEN || undefined,
+			reviewSecret: env.LANDING_ZONE_WRITE_REVIEW_SECRET || undefined,
 			allowedProjects: commaList(env.LANDING_ZONE_WRITE_PROJECTS),
 			allowedPathPrefixes: pathAllowlist(env.LANDING_ZONE_WRITE_PATHS),
 			backendProjects: commaList(env.LANDING_ZONE_WRITE_BACKEND_PROJECTS),

@@ -1,29 +1,108 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { Config } from "../config.ts";
 import {
 	commitAllowedFiles,
 	createAllowedBranch,
 	createGitLabWriteClient,
+	createReviewToken,
 	type GitLabWriteClient,
 	openAllowedMergeRequest,
+	type ReviewManifest,
 } from "./write.ts";
 
 const repository = "aws-lz-account-creator";
 const projectPath = "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator";
 const baseSha = "a".repeat(40);
 const branchSha = "b".repeat(40);
+const commitSha = "c".repeat(40);
 const fileSha = "d".repeat(40);
 const fileCommitSha = "e".repeat(40);
-const reviewToken = "approved-review-token";
+const reviewSecret = "review-signing-secret-at-least-32-bytes";
+const defaultContent = "application_name: prod";
 
 const policy: Config["write"] = {
 	enabled: true,
 	token: "write-token",
-	reviewToken,
+	reviewSecret,
 	allowedProjects: [projectPath],
 	allowedPathPrefixes: { [projectPath]: ["accounts/"] },
 	backendProjects: [],
 };
+
+function sha256(content: string): string {
+	return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function reviewManifest(
+	overrides: Partial<ReviewManifest> & {
+		file?: { path: string; content: string; expectedFileSha: string | null };
+	} = {},
+): ReviewManifest {
+	const file = overrides.file ?? { path: "accounts/prod.yml", content: defaultContent, expectedFileSha: null };
+	const issuedAt = new Date();
+	return {
+		approvalId: "11111111-1111-4111-8111-111111111111",
+		issuedAt: issuedAt.toISOString(),
+		expiresAt: new Date(issuedAt.getTime() + 10 * 60_000).toISOString(),
+		repository,
+		projectId: 42,
+		baseBranch: "main",
+		baseSha,
+		targetBranch: "agent/landing-zone/change",
+		changeSummary: "Add the reviewed account request",
+		backendChangeApproved: false,
+		mergeRequest: {
+			title: "Add reviewed account request",
+			evidence: ["accounts/schema.json at base SHA"],
+			validationResults: ["generator validation passed"],
+			riskSummary: "No destructive resources expected.",
+			expectedPlanShape: "One account module addition; no replacement or deletion.",
+		},
+		...overrides,
+		files: overrides.files ?? [
+			{ path: file.path, contentSha256: sha256(file.content), expectedFileSha: file.expectedFileSha },
+		],
+	};
+}
+
+function approvedCommon(manifest: ReviewManifest) {
+	return {
+		repository: manifest.repository,
+		projectId: manifest.projectId,
+		baseBranch: manifest.baseBranch,
+		baseSha: manifest.baseSha,
+		targetBranch: manifest.targetBranch,
+		changeSummary: manifest.changeSummary,
+		reviewManifest: manifest,
+		reviewToken: createReviewToken(reviewSecret, manifest),
+	};
+}
+
+function reviewedCommit(input: {
+	path?: string;
+	content?: string;
+	expectedFileSha?: string | null;
+	backendChangeApproved?: boolean;
+}) {
+	const file = {
+		path: input.path ?? "accounts/prod.yml",
+		content: input.content ?? defaultContent,
+		expectedFileSha: input.expectedFileSha ?? null,
+	};
+	const manifest = reviewManifest({ file, backendChangeApproved: input.backendChangeApproved ?? false });
+	return {
+		...approvedCommon(manifest),
+		expectedBranchSha: branchSha,
+		commitMessage: "feat: add reviewed request",
+		backendChangeApproved: manifest.backendChangeApproved,
+		files: [file],
+	};
+}
+
+function reviewedMergeRequest(manifest = reviewManifest()) {
+	return { ...approvedCommon(manifest), sourceSha: branchSha, ...manifest.mergeRequest };
+}
 
 function client(overrides: Partial<GitLabWriteClient> = {}): GitLabWriteClient {
 	return {
@@ -41,75 +120,122 @@ function client(overrides: Partial<GitLabWriteClient> = {}): GitLabWriteClient {
 					? { name, sha: branchSha, webUrl: "https://gitlab.example/change" }
 					: undefined,
 		file: async () => undefined,
+		changedPaths: async () => ["accounts/prod.yml"],
 		createBranch: async (_path, name, sha) => ({
 			name,
 			sha,
 			webUrl: `https://gitlab.example/${name}`,
 		}),
-		commit: async () => ({ sha: branchSha, webUrl: `https://gitlab.example/commit/${branchSha}` }),
+		commit: async () => ({
+			sha: branchSha,
+			parentShas: [branchSha],
+			webUrl: `https://gitlab.example/commit/${branchSha}`,
+		}),
 		openMergeRequest: async () => ({ iid: 7, webUrl: "https://gitlab.example/merge_requests/7" }),
 		...overrides,
 	};
 }
 
-const common = {
-	repository,
-	projectId: 42,
-	baseBranch: "main",
-	baseSha,
-	targetBranch: "agent/landing-zone/change",
-	changeSummary: "Add the reviewed account request",
-	reviewToken,
-};
-
 describe("Landing Zone write guards", () => {
 	test("rejects non-allowlisted repositories, default-branch targets, stale bases, and invalid review tokens", async () => {
-		await expect(createAllowedBranch(client(), { ...policy, allowedProjects: [] }, common)).rejects.toThrow(
+		const approved = approvedCommon(reviewManifest());
+		await expect(createAllowedBranch(client(), { ...policy, allowedProjects: [] }, approved)).rejects.toThrow(
 			"not write-allowlisted",
 		);
-		await expect(createAllowedBranch(client(), policy, { ...common, targetBranch: "main" })).rejects.toThrow(
-			"default branch",
-		);
-		await expect(createAllowedBranch(client(), policy, { ...common, baseSha: "c".repeat(40) })).rejects.toThrow(
-			"base SHA",
-		);
-		await expect(createAllowedBranch(client(), policy, { ...common, reviewToken: "wrong" })).rejects.toThrow(
-			"review token",
-		);
 		await expect(
-			createAllowedBranch(client(), policy, { ...common, targetBranch: "agent/landing-zone/../main" }),
-		).rejects.toThrow("safe Git branch name");
+			createAllowedBranch(client(), policy, approvedCommon(reviewManifest({ targetBranch: "main" }))),
+		).rejects.toThrow("default branch");
+		await expect(
+			createAllowedBranch(client(), policy, approvedCommon(reviewManifest({ baseSha: "f".repeat(40) }))),
+		).rejects.toThrow("base SHA");
+		await expect(
+			createAllowedBranch(client(), policy, { ...approved, reviewToken: `v1.${"0".repeat(64)}` }),
+		).rejects.toThrow("review token");
+		const expired = reviewManifest({
+			issuedAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+			expiresAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+		});
+		await expect(createAllowedBranch(client(), policy, approvedCommon(expired))).rejects.toThrow("expired");
+		expect(() => approvedCommon(reviewManifest({ targetBranch: "agent/landing-zone/../main" }))).toThrow(
+			"safe Git branch name",
+		);
+	});
+
+	test("rejects replaying an approval token with changed content or backend scope", async () => {
+		const approved = reviewedCommit({ content: defaultContent });
+		const approvedFile = approved.files[0];
+		if (!approvedFile) throw new Error("Test fixture must contain one reviewed file");
+		await expect(
+			commitAllowedFiles(client(), policy, {
+				...approved,
+				files: [{ ...approvedFile, content: "application_name: replayed" }],
+			}),
+		).rejects.toThrow("review manifest");
+		await expect(commitAllowedFiles(client(), policy, { ...approved, backendChangeApproved: true })).rejects.toThrow(
+			"Backend approval",
+		);
 	});
 
 	test.each([
 		["disallowed path", "modules/main.tf", "resource {}", false],
 		["state file", "accounts/terraform.tfstate", "{}", false],
 		["secret path", "accounts/prod.tfvars", 'password = "x"', false],
-		["secret content", "accounts/prod.yml", "token: glpat-secret", false],
+		["GitLab token", "accounts/prod.yml", "token: glpat-secret", false],
+		["client secret", "accounts/prod.yml", "client_secret: credential", false],
+		["API key", "accounts/prod.yml", "api_key: credential", false],
+		["secret key", "accounts/prod.yml", "secret_key: credential", false],
 		["generated section", "accounts/prod.yml", "<!-- BEGIN_TF_DOCS -->", false],
 		["backend outside scope", "accounts/backend.tf", 'terraform { backend "s3" {} }', true],
 	] as const)("rejects %s", async (_label, path, content, backendChangeApproved) => {
 		await expect(
-			commitAllowedFiles(client(), policy, {
-				...common,
-				expectedBranchSha: branchSha,
-				commitMessage: "feat: add reviewed request",
-				backendChangeApproved,
-				files: [{ path, content, expectedFileSha: null }],
-			}),
+			commitAllowedFiles(client(), policy, reviewedCommit({ path, content, backendChangeApproved })),
 		).rejects.toThrow();
 	});
 
 	test("rejects a stale expected file SHA instead of overwriting", async () => {
 		await expect(
-			commitAllowedFiles(client({ file: async () => ({ content: "old", blobId: "actual-sha", size: 3 }) }), policy, {
-				...common,
-				expectedBranchSha: branchSha,
-				commitMessage: "feat: update account",
-				backendChangeApproved: false,
-				files: [{ path: "accounts/prod.yml", content: "application_name: prod", expectedFileSha: "f".repeat(40) }],
-			}),
+			commitAllowedFiles(
+				client({ file: async () => ({ content: "old", blobId: "0".repeat(40), size: 3 }) }),
+				policy,
+				reviewedCommit({ expectedFileSha: "f".repeat(40) }),
+			),
 		).rejects.toThrow("file SHA");
+	});
+
+	test("stops when the branch changes during verification or GitLab returns an unexpected parent", async () => {
+		const input = reviewedCommit({});
+		let targetReads = 0;
+		await expect(
+			commitAllowedFiles(
+				client({
+					branch: async (_path, name) => {
+						if (name === "main") return { name, sha: baseSha, webUrl: "https://gitlab.example/main" };
+						targetReads++;
+						return {
+							name,
+							sha: targetReads < 2 ? branchSha : "9".repeat(40),
+							webUrl: "https://gitlab.example/change",
+						};
+					},
+				}),
+				policy,
+				input,
+			),
+		).rejects.toThrow("changed while files were being verified");
+
+		await expect(
+			commitAllowedFiles(
+				client({
+					commit: async () => ({
+						sha: commitSha,
+						parentShas: ["9".repeat(40)],
+						webUrl: "https://gitlab.example/commit/new",
+					}),
+				}),
+				policy,
+				input,
+			),
+		).rejects.toThrow("commit parent");
 	});
 });
 
@@ -123,18 +249,20 @@ describe("Landing Zone governed GitOps writes", () => {
 			maxResponseBytes: 200_000,
 			fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
 				request = { url: String(url), init };
-				return new Response(JSON.stringify({ id: "c".repeat(40), web_url: "https://gitlab.example/commit" }));
+				return new Response(
+					JSON.stringify({ id: commitSha, parent_ids: [branchSha], web_url: "https://gitlab.example/commit" }),
+				);
 			}) as typeof fetch,
 		});
 
 		await writeClient.commit(projectPath, {
-			branch: common.targetBranch,
+			branch: "agent/landing-zone/change",
 			commitMessage: "feat: update reviewed account",
 			actions: [
 				{
 					action: "update",
 					filePath: "accounts/prod.yml",
-					content: "application_name: prod",
+					content: defaultContent,
 					lastCommitId: fileCommitSha,
 				},
 			],
@@ -143,13 +271,14 @@ describe("Landing Zone governed GitOps writes", () => {
 		expect(request?.url).toEndWith("/repository/commits");
 		expect(new Headers(request?.init?.headers).get("PRIVATE-TOKEN")).toBe("dedicated-write-token");
 		expect(JSON.parse(String(request?.init?.body))).toMatchObject({
-			branch: common.targetBranch,
+			branch: "agent/landing-zone/change",
 			actions: [{ action: "update", file_path: "accounts/prod.yml", last_commit_id: fileCommitSha }],
 		});
 	});
 
 	test("creates a branch from the exact verified base SHA", async () => {
 		const calls: unknown[][] = [];
+		const manifest = reviewManifest();
 		const result = await createAllowedBranch(
 			client({
 				branch: async (_path, name) =>
@@ -160,16 +289,21 @@ describe("Landing Zone governed GitOps writes", () => {
 				},
 			}),
 			policy,
-			common,
+			approvedCommon(manifest),
 		);
-		expect(calls).toEqual([[projectPath, common.targetBranch, baseSha]]);
-		expect(result).toMatchObject({ projectPath, branch: common.targetBranch, sha: baseSha });
+		expect(calls).toEqual([[projectPath, manifest.targetBranch, baseSha]]);
+		expect(result).toMatchObject({ projectPath, branch: manifest.targetBranch, sha: baseSha });
 	});
 
-	test("commits only guarded files with exact branch and file SHAs", async () => {
+	test("commits only guarded files with exact branch, file, and parent SHAs", async () => {
 		let captured: unknown;
+		let targetSha = branchSha;
 		const result = await commitAllowedFiles(
 			client({
+				branch: async (_path, name) =>
+					name === "main"
+						? { name, sha: baseSha, webUrl: "https://gitlab.example/main" }
+						: { name, sha: targetSha, webUrl: "https://gitlab.example/change" },
 				file: async () => ({
 					content: "application_name: old",
 					blobId: fileSha,
@@ -178,41 +312,39 @@ describe("Landing Zone governed GitOps writes", () => {
 				}),
 				commit: async (_path, input) => {
 					captured = input;
-					return { sha: "c".repeat(40), webUrl: "https://gitlab.example/commit/new" };
+					targetSha = commitSha;
+					return { sha: commitSha, parentShas: [branchSha], webUrl: "https://gitlab.example/commit/new" };
 				},
 			}),
 			policy,
-			{
-				...common,
-				expectedBranchSha: branchSha,
-				commitMessage: "feat: update reviewed account",
-				backendChangeApproved: false,
-				files: [
-					{
-						path: "accounts/prod.yml",
-						content: "application_name: prod",
-						expectedFileSha: fileSha,
-					},
-				],
-			},
+			reviewedCommit({ expectedFileSha: fileSha }),
 		);
 		expect(captured).toEqual({
-			branch: common.targetBranch,
-			commitMessage: "feat: update reviewed account",
+			branch: "agent/landing-zone/change",
+			commitMessage: "feat: add reviewed request",
 			actions: [
 				{
 					action: "update",
 					filePath: "accounts/prod.yml",
-					content: "application_name: prod",
+					content: defaultContent,
 					lastCommitId: fileCommitSha,
 				},
 			],
 		});
-		expect(result.sha).toBe("c".repeat(40));
+		expect(result.sha).toBe(commitSha);
 	});
 
-	test("opens a draft MR containing evidence, validations, risk, and expected plan without triggering apply", async () => {
+	test("opens a draft MR only when changed paths and metadata match the reviewed manifest", async () => {
 		let captured: unknown;
+		const input = reviewedMergeRequest();
+		await expect(
+			openAllowedMergeRequest(
+				client({ changedPaths: async () => ["accounts/prod.yml", "modules/unreviewed.tf"] }),
+				policy,
+				input,
+			),
+		).rejects.toThrow("outside the approved review manifest");
+
 		const result = await openAllowedMergeRequest(
 			client({
 				openMergeRequest: async (_path, input) => {
@@ -221,18 +353,10 @@ describe("Landing Zone governed GitOps writes", () => {
 				},
 			}),
 			policy,
-			{
-				...common,
-				sourceSha: branchSha,
-				title: "Add reviewed account request",
-				evidence: ["accounts/schema.json at base SHA"],
-				validationResults: ["generator validation passed"],
-				riskSummary: "No destructive resources expected.",
-				expectedPlanShape: "One account module addition; no replacement or deletion.",
-			},
+			input,
 		);
 		expect(captured).toMatchObject({
-			sourceBranch: common.targetBranch,
+			sourceBranch: "agent/landing-zone/change",
 			targetBranch: "main",
 			title: "Draft: Add reviewed account request",
 		});

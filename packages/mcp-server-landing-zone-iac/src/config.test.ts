@@ -12,7 +12,7 @@ describe("Landing Zone MCP config", () => {
 		expect(config.write.allowedProjects).toEqual([]);
 	});
 
-	test("requires separate credentials, review token, projects, and paths when write mode is enabled", () => {
+	test("requires separate credentials, review signing secret, projects, and paths when write mode is enabled", () => {
 		const base = {
 			transport: { mode: "http", port: 9088, host: "127.0.0.1", path: "/mcp" },
 			gitlab: { baseUrl: "https://gitlab.example", token: "read-token", timeoutMs: 30_000, maxResponseBytes: 200_000 },
@@ -34,7 +34,7 @@ describe("Landing Zone MCP config", () => {
 				write: {
 					enabled: true,
 					token: "write-token",
-					reviewToken: "review-token",
+					reviewSecret: "review-signing-secret-at-least-32-bytes",
 					allowedProjects: ["pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator"],
 					allowedPathPrefixes: {
 						"pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator": ["accounts/"],
@@ -49,7 +49,7 @@ describe("Landing Zone MCP config", () => {
 				write: {
 					enabled: true,
 					token: "read-token",
-					reviewToken: "review-token",
+					reviewSecret: "review-signing-secret-at-least-32-bytes",
 					allowedProjects: ["pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator"],
 					allowedPathPrefixes: {
 						"pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator": ["accounts/"],
@@ -64,7 +64,7 @@ describe("Landing Zone MCP config", () => {
 		const env = {
 			LANDING_ZONE_WRITE_ENABLED: "TRUE",
 			LANDING_ZONE_GITLAB_WRITE_TOKEN: "write-token",
-			LANDING_ZONE_WRITE_REVIEW_TOKEN: "review-token",
+			LANDING_ZONE_WRITE_REVIEW_SECRET: "review-signing-secret-at-least-32-bytes",
 			LANDING_ZONE_WRITE_PROJECTS: "pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator",
 			LANDING_ZONE_WRITE_PATHS: '{"pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator":["accounts/"]}',
 		};
@@ -72,7 +72,7 @@ describe("Landing Zone MCP config", () => {
 		expect(loadConfig({ ...env, LANDING_ZONE_WRITE_ENABLED: "true" }).write).toMatchObject({
 			enabled: true,
 			token: "write-token",
-			reviewToken: "review-token",
+			reviewSecret: "review-signing-secret-at-least-32-bytes",
 			allowedProjects: ["pvhcorp/dhco/aws/aws-landing-zone/aws-lz-account-creator"],
 		});
 	});

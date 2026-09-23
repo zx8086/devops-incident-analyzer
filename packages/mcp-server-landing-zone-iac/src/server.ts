@@ -256,6 +256,9 @@ function registerGovernedWrites(
 					repository: repository.name,
 					iid: args.iid,
 				});
+				if (args.pipelineId && !pipelines.pipelines.some((pipeline) => pipeline.id === args.pipelineId)) {
+					throw new Error(`Pipeline ${args.pipelineId} does not belong to merge request !${args.iid}`);
+				}
 				const plan = args.pipelineId
 					? await readPipelinePlan(readClient, { repository: repository.name, pipelineId: args.pipelineId })
 					: undefined;
