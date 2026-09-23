@@ -193,6 +193,7 @@ export interface GitLabFile {
 	content: string;
 	blobId: string;
 	size: number;
+	lastCommitId?: string;
 }
 
 export interface GitLabOpenChange {

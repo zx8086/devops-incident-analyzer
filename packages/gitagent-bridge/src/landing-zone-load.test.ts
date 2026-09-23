@@ -96,14 +96,20 @@ describe("loadAgent(landing-zone-terraform)", () => {
 		expect(agent.hooks?.teardown?.steps).toContain("checkpoint_key_decisions");
 	});
 
-	test("exposes only read-only Landing Zone tool actions", () => {
+	test("exposes evidence plus confirmation-gated Landing Zone proposal actions", () => {
 		const agent = loadLandingZoneAgent();
 		const landingZoneTool = agent.tools.find((entry) => entry.name === "landing-zone");
 		expect(landingZoneTool).toBeDefined();
-		expect(landingZoneTool?.annotations?.read_only).toBe(true);
-		expect(landingZoneTool?.annotations?.requires_confirmation).toBe(false);
+		expect(landingZoneTool?.annotations?.read_only).toBe(false);
+		expect(landingZoneTool?.annotations?.requires_confirmation).toBe(true);
 		expect(landingZoneTool?.tool_mapping?.mcp_server).toBe("landing-zone-iac");
 		expect(landingZoneTool?.tool_mapping?.mcp_patterns).toEqual(["lz_*"]);
+		expect(landingZoneTool?.tool_mapping?.action_tool_map?.gitops_proposal).toEqual([
+			"lz_create_branch",
+			"lz_commit_allowed_files",
+			"lz_open_merge_request",
+		]);
+		expect(landingZoneTool?.tool_mapping?.action_tool_map?.pipeline_observation).toEqual(["lz_watch_pipeline"]);
 
 		const graphTool = agent.tools.find((entry) => entry.name === "knowledge-graph");
 		expect(graphTool?.annotations?.read_only).toBe(true);
@@ -119,9 +125,12 @@ describe("loadAgent(landing-zone-terraform)", () => {
 			"kg_run_cypher",
 		]);
 
-		const actionNames = agent.tools.flatMap((tool) => Object.keys(tool.tool_mapping?.action_tool_map ?? {}));
-		const forbidden = /(apply|destroy|state|branch|commit|merge|approve|pipeline|write|create|update|delete|mutate)/i;
-		expect(actionNames.filter((action) => forbidden.test(action))).toEqual([]);
+		const allMappedTools = agent.tools.flatMap((tool) =>
+			Object.values(tool.tool_mapping?.action_tool_map ?? {}).flat(),
+		);
+		const permanentlyForbidden =
+			/(apply|destroy|state|unlock|merge_merge_request|approve|trigger_pipeline|create_tag)/i;
+		expect(allMappedTools.filter((tool) => permanentlyForbidden.test(tool))).toEqual([]);
 	});
 
 	test("installs identity, policy, duty, and memory boundary files", () => {
