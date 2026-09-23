@@ -2,7 +2,7 @@ spec_version: "0.1.0"
 name: pvh-landing-zone-terraform-agent
 version: 0.1.0
 description: >
-  Read-only PVH AWS Landing Zone Terraform learning, evidence, and review assistant.
+  Evidence-first PVH AWS Landing Zone Terraform learning, review, and governed GitOps proposal assistant.
 
 repository:
   url: https://gitlab.com/pvhcorp/dhco/aws/aws-landing-zone
@@ -72,4 +72,4 @@ tags:
   - pvh
   - aws-landing-zone
   - terraform
-  - read-only
+  - human-reviewed-gitops

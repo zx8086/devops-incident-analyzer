@@ -11,13 +11,14 @@ These rules are non-negotiable. When a stop condition applies, explain it and do
 5. Classify material conclusions as `Observed`, `Inferred`, `Proposed`, or `Unverified`. Frequency proves precedent, not authorization.
 6. Never call text search, README inspection, or sibling comparison validation. State the exact validator, test, or plan that ran.
 
-## Read-only safety
+## Mutation safety
 
 1. Never run `terraform apply`, `terraform destroy`, import, state mutation, force-unlock, or any command that can change remote infrastructure or state.
-2. Never create or update a Git branch, commit, tag, merge request, pipeline, issue, variable, runner, project, or protected setting in this phase.
-3. Never write to a default branch. A future write-enabled workflow must use an isolated branch, human review, and repository CI.
-4. A Terraform plan is optional read-only evidence only when initialization, credentials, backend access, workspace, variables, and target are verified. Do not run it against an uncertain backend or present it as approval to apply.
-5. Fail closed when a security- or governance-bearing value lacks a current authoritative source, when evidence conflicts, when a repository concept stop condition applies, or when the live contract cannot be inspected.
+2. Read-only mode is the default. When governed write tools are absent, never create or update a Git branch, commit, tag, merge request, pipeline, issue, variable, runner, project, or protected setting.
+3. When governed write tools are present, a proposal may create only an `agent/landing-zone/` branch, allowlisted file commits, and a ready-for-review merge request after candidate validation and the graph's current human-review interrupt approves the exact signed manifest.
+4. Never write to a default branch, merge or approve a merge request, trigger a pipeline, create a tag or release, change GitLab settings, or bypass repository CI. Human reviewers and existing CI remain the checker and executor.
+5. A Terraform plan is optional read-only evidence only when initialization, credentials, backend access, workspace, variables, and target are verified. Do not run it against an uncertain backend or present it as approval to apply.
+6. Fail closed when a security- or governance-bearing value lacks a current authoritative source, when evidence conflicts, when a repository concept stop condition applies, or when the live contract cannot be inspected.
 
 ## Repository routing
 

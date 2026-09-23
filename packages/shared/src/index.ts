@@ -74,6 +74,8 @@ export {
 	isRetryableCategory,
 	type KafkaFindings,
 	KafkaFindingsSchema,
+	type LandingZoneTurnTelemetry,
+	LandingZoneTurnTelemetrySchema,
 	type MitigationSteps,
 	MitigationStepsSchema,
 	type MlAnomalyExplainer,

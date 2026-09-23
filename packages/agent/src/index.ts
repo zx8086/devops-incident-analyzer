@@ -130,6 +130,11 @@ export {
 } from "./landing-zone/memory.ts";
 export { LandingZoneState, type LandingZoneStateType } from "./landing-zone/state.ts";
 export {
+	type LandingZoneTurnTelemetry,
+	LandingZoneTurnTelemetrySchema,
+	projectLandingZoneTurnTelemetry,
+} from "./landing-zone/telemetry.ts";
+export {
 	type LandingZoneCandidate,
 	LandingZoneCandidateSchema,
 	type LandingZoneCandidateValidation,

@@ -4,6 +4,8 @@ Multi-datasource incident analysis agent powered by LangGraph and 7 datasource M
 
 The repo also ships a second top-level agent, **elastic-iac** -- a GitOps proposer for Elastic Cloud infrastructure changes (served by an 8th MCP server on port 9086). Selected by the UI agent toggle, it answers "change it" requests by editing deployment/policy JSON and opening a GitLab merge request; CI plans and humans merge/apply (agent proposes, GitOps disposes). See [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
 
+The **landing-zone-terraform** mode is an evidence-first learning, review, topology, and governed GitOps proposal agent for the private PVH AWS Landing Zone estate. It automatically routes account, workload-network, core-network, post-vending, GitLab-project, and runner questions to their repository-owned authoring surfaces. Read mode is the default; optional write mode can only open a human-reviewed branch and merge request and has no merge, apply, state, or pipeline-trigger capability. See [the Landing Zone architecture](docs/architecture/landing-zone-terraform-agent.md) and [operations runbook](docs/operations/landing-zone-agent-runbook.md).
+
 ## Architecture
 
 ```
@@ -69,6 +71,7 @@ agents/                          Gitagent declarative definitions (YAML/Markdown
     tools/                       MCP tool schemas with dynamic prompt templates
     skills/                      Procedural knowledge (normalize, aggregate, mitigate)
   elastic-iac/                   Second agent: GitOps proposer for Elastic Cloud infra changes
+  landing-zone-terraform/        PVH Landing Zone evidence, topology, and reviewed proposal agent
 
 packages/
   gitagent-bridge/               YAML-to-LangGraph adapter
@@ -87,6 +90,7 @@ packages/
   mcp-server-atlassian/          Atlassian MCP (Jira/Confluence proxy)
   mcp-server-aws/                AWS MCP (multi-estate via cross-account AssumeRole)
   mcp-server-elastic-iac/        Elastic IaC MCP (GitOps proposer tools, port 9086)
+  mcp-server-landing-zone-iac/   PVH Landing Zone evidence and governed proposal tools, port 9088
   mcp-server-knowledge-graph/    In-process Knowledge Graph MCP (curated kg_* + read-only Cypher, port 9087)
 
 apps/
@@ -106,10 +110,11 @@ apps/
 | AWS | 3001 (SigV4 proxy) | multi-estate read-only (CloudWatch incl. Metrics Insights, EC2 + network-path tracing, ECS, Lambda, RDS, S3, X-Ray) | `AWS_MCP_URL`, `AWS_ESTATES`, `AWS_DEFAULT_ESTATE` |
 | Elastic IaC | 9086 | GitOps proposer tools (terraform/git/gitlab/elastic-cloud) | `ELASTIC_IAC_MCP_URL`, `ELASTIC_IAC_GITLAB_TOKEN` |
 | Knowledge Graph | 9087 (in-process) | curated `kg_*` graph readers + read-only Cypher (lbug); off unless enabled | `KNOWLEDGE_GRAPH_ENABLED`, `KG_MCP_ALLOW_CYPHER` |
+| Landing Zone IaC | 9088 | 10 bounded evidence/topology reads; 4 additional governed proposal/pipeline-observation tools only when write mode validates | `LANDING_ZONE_IAC_MCP_URL`, `GITLAB_PERSONAL_ACCESS_TOKEN`, `LANDING_ZONE_WRITE_ENABLED` |
 
 ## Agent Memory (live-memory backend)
 
-Both agents (incident-analyzer and elastic-iac) keep durable, cross-session **live memory** -- distinct from the LangGraph checkpointer, which holds only transient per-thread state. Live memory is read into the prompt at session bootstrap and appended at safe boundaries through a single writer (`packages/agent/src/memory-writer.ts`: `readLiveMemory` / `appendDailyLog` / `recordKeyDecision`, gated by `LIVE_MEMORY_ENABLED`, always PII-redacted).
+The incident analyzer, Elastic IaC agent, and Landing Zone agent keep separate durable, cross-session **live memory** identities -- distinct from the LangGraph checkpointer, which holds only transient per-thread state. Live memory is read at safe lifecycle boundaries and appended through a single writer (`packages/agent/src/memory-writer.ts`: `readLiveMemory` / `appendDailyLog` / `recordKeyDecision`, gated by `LIVE_MEMORY_ENABLED`, always PII-redacted). Landing Zone recall is additionally advisory and must match current GitLab or AWS claims before it can be rendered as support for an answer.
 
 The storage behind that writer is swappable via `LIVE_MEMORY_BACKEND` (SIO-938):
 
@@ -163,6 +168,7 @@ See [.env.example](.env.example) for the full list. Minimum required:
 - `ATLASSIAN_UPSTREAM_MCP_URL` -- upstream Atlassian Cloud Rovo endpoint (the local proxy forwards to it); `ATLASSIAN_SITE_NAME` -- your Atlassian Cloud site
 - `AWS_ESTATES`, `AWS_DEFAULT_ESTATE` -- multi-estate AWS config (cross-account AssumeRole)
 - `ELASTIC_IAC_MCP_URL`, `ELASTIC_IAC_GITLAB_TOKEN` -- elastic-iac agent: IaC MCP server URL and the GitLab token used to open merge requests
+- `LANDING_ZONE_IAC_MCP_URL`, `GITLAB_PERSONAL_ACCESS_TOKEN` -- Landing Zone agent: bounded private-repository evidence; write mode remains off unless its separate policy and credential set validates
 
 Optional (live memory, all off/file by default):
 
@@ -183,6 +189,7 @@ See [docs/configuration/environment-variables.md](docs/configuration/environment
 |------------|----------|
 | Full documentation index | [docs/README.md](docs/README.md) |
 | Understand the architecture | [System Overview](docs/architecture/system-overview.md) |
+| Operate the PVH Landing Zone agent | [Landing Zone Agent Runbook](docs/operations/landing-zone-agent-runbook.md) |
 | Set up the project | [Getting Started](docs/development/getting-started.md) |
 | Deploy to AgentCore | [AgentCore Deployment](docs/deployment/agentcore-deployment.md) |
 | Add or modify MCP tools | [Adding MCP Tools](docs/development/adding-mcp-tools.md) |
