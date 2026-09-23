@@ -18,7 +18,7 @@ import {
 	parseDiagnoses,
 	suppressionReviewFromJournal,
 } from "../scripts/monitor/report.ts";
-import { subjectFor } from "../scripts/monitor/report-email.ts";
+import { subjectFor, truncateUtf8 } from "../scripts/monitor/report-email.ts";
 
 const finding = {
 	family: "alarm" as const,
@@ -282,25 +282,46 @@ describe("digest notables", () => {
 		expect(text.split("\n").find((l) => l.includes("i-other"))).not.toContain("[uninvestigated]");
 	});
 
-	test("caps the list at 10 and counts the overflow", () => {
-		const notables = Array.from({ length: 13 }, (_, i) => notable({ resource: `i-${i}` }));
-		const text = formatDigest({ ...quietDigest, findingCounts: { drift: 13 }, notables });
-		expect(text).toContain("i-9");
-		// The resource now ends its line, so the cap is checked on that shape.
-		expect(text).not.toContain("i-10\n");
-		expect(text).toContain("+3 more warn+ finding(s)");
+	test("every warn+ finding is printed; nothing is deferred to the journal", () => {
+		// SIO-1873: a 10-entry cap used to print "+N more in the journal", which
+		// contradicted the reason this section exists.
+		const notables = Array.from({ length: 31 }, (_, i) => notable({ resource: `i-${i}` }));
+		const text = formatDigest({ ...quietDigest, findingCounts: { drift: 31 }, notables });
+		for (let i = 0; i < 31; i++) expect(text).toContain(`i-${i}`);
+		expect(text).not.toContain("more warn+ finding(s)");
 	});
 
-	test("uninvestigated findings are always named, even past the display cap", () => {
-		// The shared-services digest of 2026-09-03 reported "uninvestigated: 2"
-		// while the two drift findings sat past the cap, so the operator had
-		// to dig through the source journal to learn which ones they were.
+	test("no family is dropped when one is noisy (the eu-oit-prd shape)", () => {
+		// The 2026-09-23 eu-oit-prd digest: 31 notables, 10 printed, and 12 health,
+		// 4 queues and 2 compliance findings did not appear AT ALL, because one log
+		// group filled every slot. The digest read as "no queue problems".
+		const notables = [
+			...Array.from({ length: 13 }, (_, i) =>
+				notable({ family: "logs", resource: `/ecs/fargate/log-${i}`, uninvestigated: true }),
+			),
+			...Array.from({ length: 12 }, (_, i) => notable({ family: "health", resource: `health-${i}` })),
+			...Array.from({ length: 4 }, (_, i) => notable({ family: "queues", resource: `dlq-${i}` })),
+			...Array.from({ length: 2 }, (_, i) => notable({ family: "compliance", resource: `eni-${i}` })),
+		];
+		const text = formatDigest({
+			...quietDigest,
+			findingCounts: { logs: 27, health: 12, queues: 4, compliance: 2 },
+			notables,
+		});
+		for (const fam of ["logs", "health", "queues", "compliance"]) expect(text).toContain(`/${fam})`);
+		expect(text).toContain("dlq-3");
+		expect(text).toContain("eni-1");
+		expect(text).toContain("health-11");
+	});
+
+	test("uninvestigated findings are all named and still lead", () => {
 		const notables = Array.from({ length: 12 }, (_, i) => notable({ resource: `i-${i}`, uninvestigated: i === 11 }));
 		const text = formatDigest({ ...quietDigest, findingCounts: { drift: 12 }, notables });
 		expect(text).toContain("uninvestigated: 1");
 		const line = text.split("\n").find((l) => l.includes("i-11"));
 		expect(line).toContain("[uninvestigated]");
-		expect(text).toContain("+2 more warn+ finding(s)");
+		// It leads rather than merely surviving: nothing is cut now.
+		expect(text.indexOf("i-11")).toBeLessThan(text.indexOf("i-0"));
 	});
 
 	test("uninvestigated findings lead the list, then severity orders the rest", () => {
@@ -335,17 +356,19 @@ describe("digest notables", () => {
 		expect(second).toBeGreaterThan(0);
 		// The line before the second entry is blank, and the summary of the first
 		// entry sits above that -- proving the gap separates ENTRIES rather than
-		// being the pre-existing gap above the notables header.
+		// being the gap under the notables header.
 		expect(lines[second - 1]).toBe("");
 		expect(lines[second - 2]).toContain("instance changed state");
-		// The first entry is flush against the header, not preceded by a gap.
+		// SIO-1873 / Greptile P2 on #900: the header now has its own blank line
+		// under it, because the bounded counters moved above the list.
 		const first = lines.findIndex((l) => l.includes("i-first"));
-		expect(lines[first - 1]).toContain("notable warn+ findings");
+		expect(lines[first - 1]).toBe("");
+		expect(lines[first - 2]).toContain("notable warn+ findings");
 	});
 
-	test("the uninvestigated total is separated from the last entry", () => {
-		// Flush against the final summary line it would read as part of that
-		// entry's block rather than as the total for the whole list.
+	test("the uninvestigated total sits with the bounded counters, above the list", () => {
+		// Greptile P2 on #900: it is a counter, not a list footer, and the counters
+		// are printed before the unbounded list so truncation cannot eat them.
 		const text = formatDigest({
 			...quietDigest,
 			findingCounts: { drift: 1 },
@@ -353,18 +376,50 @@ describe("digest notables", () => {
 		});
 		const lines = text.split("\n");
 		const total = lines.findIndex((l) => l.startsWith("- uninvestigated:"));
+		const header = lines.findIndex((l) => l.includes("notable warn+ findings"));
 		expect(total).toBeGreaterThan(0);
-		expect(lines[total - 1]).toBe("");
+		expect(total).toBeLessThan(header);
+		// And it keeps company with the other counters rather than floating alone.
+		expect(lines.slice(0, total).some((l) => l.startsWith("- bundle:"))).toBe(true);
 	});
 
-	test("blank lines do not consume the display cap", () => {
-		// The cap counts ENTRIES; a regression that counted printed lines would
-		// cut the list at five entries and report the wrong overflow.
-		const notables = Array.from({ length: 13 }, (_, i) => notable({ resource: `i-${i}` }));
-		const text = formatDigest({ ...quietDigest, findingCounts: { drift: 13 }, notables });
-		expect(text).toContain("i-9");
-		expect(text).not.toContain("i-10\n");
-		expect(text).toContain("+3 more warn+ finding(s)");
+	test("the bounded footer survives SNS truncation (Greptile P2 on #900)", () => {
+		// The notables list is unbounded since SIO-1873 and report-email.ts
+		// truncates from the TAIL, so with the counters printed last a noisy
+		// account lost exactly the operational state it most needed. Measured at
+		// 1400 notables: "check errors", "suppressed by ledger" and the bundle
+		// canary were all cut while the list they were cut for ran on.
+		const notables = Array.from({ length: 1400 }, (_, i) =>
+			notable({ resource: `/ecs/fargate/svc-${i}`, summary: "x".repeat(200) }),
+		);
+		const text = formatDigest({
+			...quietDigest,
+			findingCounts: { logs: 1400 },
+			checkErrors: 26,
+			checkErrorsByCheck: { logs: 26 },
+			suppressedCount: 55,
+			bundleVersion: "f659033b",
+			notables,
+		});
+		// Big enough that truncation genuinely fires, or this proves nothing.
+		expect(new TextEncoder().encode(text).length).toBeGreaterThan(262_144);
+		const cut = truncateUtf8(text, 262_144);
+		expect(cut.length).toBeLessThan(text.length);
+		for (const field of ["check errors: 26 (logs=26)", "suppressed by ledger: 55", "bundle: f659033b"]) {
+			expect(cut).toContain(field);
+		}
+	});
+
+	test("a large digest stays far inside the SNS message budget", () => {
+		// The only real bound. report-email.ts truncates at 256 KiB with a pointer
+		// to the hub mailbox; the worst real account measured 11 KB.
+		const notables = Array.from({ length: 120 }, (_, i) =>
+			notable({ resource: `/ecs/fargate/svc-${i}`, summary: "x".repeat(200) }),
+		);
+		const text = formatDigest({ ...quietDigest, findingCounts: { logs: 120 }, notables });
+		const bytes = new TextEncoder().encode(text).length;
+		expect(bytes).toBeLessThan(262_144 / 4);
+		expect(text).toContain("svc-119");
 	});
 
 	test("groups by family under uninvestigated and severity", () => {
