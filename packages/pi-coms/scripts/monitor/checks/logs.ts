@@ -100,13 +100,21 @@ const SAMPLE_EXCERPT = 200;
 // sample, and an operator correlating a trace goes there rather than reading it
 // off a wrapped digest line.
 const LEADING_TIMESTAMP = /^\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:[.,]\d+)?Z?\s*/;
-// A 16- or 32-char hex id, bare or as trace_id=/span_id=/traceId=/spanId=.
-// A BARE id is only stripped when a timestamp or level was already peeled off
-// this line -- otherwise a message that legitimately opens with a hex-looking
-// word ("deadbeefdeadbeef is the checksum we expected") loses its first token.
-// The labelled form is unambiguous and needs no such guard.
+// A labelled id is unambiguous: nothing but a tracer writes `trace_id=<hex>`.
 const LABELLED_ID = /^(?:trace|span)_?[Ii]d=[0-9a-f]{16,32}\s*/;
-const BARE_ID = /^[0-9a-f]{16,32}\s*/;
+
+// A BARE hex token is ambiguous -- it is a correlation id in
+// `ERROR <trace> <span> context= [class]`, and a payload in
+// `ERROR deadbeefdeadbeef is the checksum we expected`. Greptile P2 on #902
+// caught the second case being eaten, and my own test had missed it by using
+// the unprefixed form, which never reached this branch.
+//
+// The discriminator comes from the real data rather than from taste: in 11 of
+// 14 live eu-oit-prd lines the id RUN is two or three ids followed by
+// `context=` or `[`. A tracer emits ids in a run and then structure; prose
+// never does. So a run is only stripped when something structural follows it,
+// which leaves a lone hex word in front of a sentence exactly where it was.
+const ID_RUN_BEFORE_STRUCTURE = /^((?:[0-9a-f]{16,32}\s+){1,4})(?=context=|\[|---)/;
 const LEVEL = /^(?:ERROR|WARN|WARNING|FATAL|INFO|DEBUG)\s*/;
 // Quarkus prints an always-empty `context=` on every line in eu-oit-prd, and
 // Spring Boot a bare `1 ---` sequence number. Both are pure boilerplate, and
@@ -114,20 +122,13 @@ const LEVEL = /^(?:ERROR|WARN|WARNING|FATAL|INFO|DEBUG)\s*/;
 const EMPTY_CONTEXT = /^(?:context=\s*(?=\[)|\d+\s+---\s*)/;
 
 export function stripLogPrefix(line: string): string {
-	const withoutTs = line.replace(LEADING_TIMESTAMP, "");
-	// Bare ids are only safe to strip once this line has proved it is a
-	// structured log line, by carrying a timestamp or a level.
-	let structured = withoutTs !== line;
-	let s = withoutTs;
+	let s = line.replace(LEADING_TIMESTAMP, "");
 	// The level can sit either side of the ids, so both are peeled until neither
 	// matches: `<ts> ERROR <trace> <span> context=` and
 	// `<ts> trace_id=.. span_id=.. ERROR 1 --- [thread]` are both real.
 	for (let i = 0; i < 8; i++) {
 		const before = s;
-		const afterLevel = s.replace(LEVEL, "");
-		if (afterLevel !== s) structured = true;
-		s = afterLevel.replace(LABELLED_ID, "").replace(EMPTY_CONTEXT, "");
-		if (structured) s = s.replace(BARE_ID, "");
+		s = s.replace(LEVEL, "").replace(LABELLED_ID, "").replace(ID_RUN_BEFORE_STRUCTURE, "").replace(EMPTY_CONTEXT, "");
 		if (s === before) break;
 	}
 	const stripped = s.trim();

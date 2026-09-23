@@ -305,9 +305,30 @@ describe("stripLogPrefix (SIO-1874)", () => {
 	});
 
 	test("a hex-looking WORD in the message is not mistaken for an id", () => {
-		// CORRELATION_ID is anchored, so it can only ever eat a LEADING token.
 		const msg = "deadbeefdeadbeef is the checksum we expected";
 		expect(stripLogPrefix(msg)).toBe(msg);
+	});
+
+	// Greptile P2 on #902. The test above used the UNPREFIXED form, which never
+	// reached the bare-id branch, so it did not protect the case it looked like
+	// it protected. These carry the full structured prefix.
+	test("a hex payload token survives behind a real timestamp and level", () => {
+		expect(stripLogPrefix("2026-09-22 10:39:37,736 ERROR deadbeefdeadbeef is the checksum we expected")).toBe(
+			"deadbeefdeadbeef is the checksum we expected",
+		);
+		expect(stripLogPrefix("2026-09-22 10:39:37,736 ERROR 9f8e7d6c5b4a3210 build failed")).toBe(
+			"9f8e7d6c5b4a3210 build failed",
+		);
+	});
+
+	test("an id RUN followed by structure is still stripped", () => {
+		// The discriminator: a tracer emits ids in a run and then structure
+		// (`context=` or `[`), which prose never does. Measured on 11 of 14 live
+		// eu-oit-prd lines.
+		const out = stripLogPrefix(
+			"2026-09-22 10:39:37,736 ERROR f7b06144c52da311f3efd9c68f15145c 128552bcaa91de80 context= [com.pvh.Svc] boom",
+		);
+		expect(out).toBe("[com.pvh.Svc] boom");
 	});
 });
 
