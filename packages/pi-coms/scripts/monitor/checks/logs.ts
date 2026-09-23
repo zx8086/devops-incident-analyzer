@@ -78,9 +78,32 @@ export function logsWindow(
 // summary onto its own lines, so a wider excerpt costs no readability.
 // SIO-1873: this used to be costed against a 10-entry digest cap. That cap is
 // gone (it hid whole families), so the bound is now the SNS 256 KiB message
-// limit that report-email.ts truncates against: a 200-char excerpt is ~2 KB per
-// ten findings, and the worst real account measured 11 KB in total.
-const SAMPLE_EXCERPT = 200;
+// limit that report-email.ts truncates against, and the worst real account
+// measured 11 KB in total.
+//
+// SIO-1874: widened to the CAPTURE cap, and derived from it rather than
+// repeated, so the two cannot drift apart. Nothing beyond SAMPLE_CAPTURE was
+// ever stored, so this is not a tuned number -- it is the whole of what exists.
+// The excerpt now truncates only if stripping left MORE than the capture, which
+// cannot happen. Widening past it would be dead code; narrowing it again
+// silently discards message.
+//
+// The measurement behind it, over 62 real samples from the two noisiest
+// accounts on 2026-09-23: 36 were still cut at 200 after prefix stripping, and
+// moving to 300 made one more exception name visible
+// (`IllegalArgumentException: No enum constant ...AllowedBrand.NIKE`). Small,
+// but it is the same +1 a Jev span-selector could have recovered at its
+// theoretical best, for one constant instead of a per-finding model call on a
+// check that runs every 15 minutes across eight accounts.
+//
+// Cost: the discarded tails were mostly repeating SKU ids, so the realistic
+// growth is well under 100 bytes per finding -- against a 256 KiB budget the
+// worst account uses 4% of.
+
+// How much of a matched log event is stored on the finding, and therefore the
+// ceiling on everything downstream of it.
+export const SAMPLE_CAPTURE = 300;
+const SAMPLE_EXCERPT = SAMPLE_CAPTURE;
 
 // SIO-1874: the excerpt was mostly correlation ids. Measured live on
 // eu-oit-prd (2026-09-23): 76 of 188 characters were spent on the leading
@@ -330,7 +353,7 @@ export async function checkLogs(client: AwsClient, state: MonitorState, opts: Ch
 				for (const inc of collapseTraceEvents(events, logSignature, openTraces)) {
 					const cur = bySig.get(inc.signature) ?? {
 						count: 0,
-						sample: inc.message.slice(0, 300),
+						sample: inc.message.slice(0, SAMPLE_CAPTURE),
 						lastTs: inc.timestamp,
 					};
 					cur.count++;

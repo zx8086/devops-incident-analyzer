@@ -6,6 +6,7 @@ import {
 	collapseTraceEvents,
 	logSignature,
 	logsWindow,
+	SAMPLE_CAPTURE,
 	stripLogPrefix,
 	summariseLogSample,
 } from "../scripts/monitor/checks/logs.ts";
@@ -335,6 +336,27 @@ describe("stripLogPrefix (SIO-1874)", () => {
 describe("summariseLogSample", () => {
 	test("keeps a short message whole", () => {
 		expect(summariseLogSample("NullPointerException at Foo.bar")).toBe("NullPointerException at Foo.bar");
+	});
+
+	// SIO-1874: the excerpt cap IS the capture cap. Nothing beyond SAMPLE_CAPTURE
+	// is ever stored, so an excerpt narrower than it silently discards message,
+	// and one wider than it is dead code. Measured over 62 real samples from the
+	// two noisiest accounts: at 200 36 were cut mid-message, at 300 none are.
+	// Greptile P2 on #903: the first two assertions alone prove only ">= capture",
+	// so widening SAMPLE_EXCERPT past it still passed -- verified, 49 green with
+	// the cap at SAMPLE_CAPTURE + 500. My mutation check had narrowed it (300 to
+	// 200) and never widened it, so it tested one direction of a two-directional
+	// guard. The upper bound is asserted too.
+	test("the excerpt cap equals the capture cap, so nothing stored is discarded", () => {
+		const captured = "x".repeat(SAMPLE_CAPTURE);
+		expect(summariseLogSample(captured)).toBe(captured);
+		expect(summariseLogSample(captured).endsWith("...")).toBe(false);
+
+		// Upper bound: one character past the capture must still be cut, which is
+		// only true when the excerpt cap is not wider than the capture cap.
+		const beyondCapture = "x".repeat(SAMPLE_CAPTURE + 1);
+		expect(summariseLogSample(beyondCapture).length).toBe(SAMPLE_CAPTURE);
+		expect(summariseLogSample(beyondCapture).endsWith("...")).toBe(true);
 	});
 
 	// SIO-1832: asserted against the function's OWN cap rather than a hard-coded
