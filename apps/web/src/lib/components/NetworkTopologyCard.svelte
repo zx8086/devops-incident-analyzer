@@ -10,9 +10,13 @@
 import type { NetworkTopology } from "@devops-agent/shared";
 import { tick } from "svelte";
 import { buildNetworkChartOption, buildNetworkTextSummary } from "$lib/network-chart";
+import ArchifyDiagram from "./ArchifyDiagram.svelte";
 import Icon from "./Icon.svelte";
 
 let { topology }: { topology: NetworkTopology } = $props();
+
+// SIO-1876: which view the spike tab bar shows; the chart stays mounted (hidden) off the map tab.
+let diagramTab = $state<"map" | "diagram">("map");
 
 // Minimal structural handle -- keeps this module free of a static echarts type
 // dependency (echarts is only ever dynamic-imported, see the $effect below).
@@ -181,7 +185,8 @@ $effect(() => {
         {topology.nodes.length} nodes · {topology.edges.length} links · {topology.sources.join(", ")}
       </span>
     </div>
-    <div class={expanded ? "relative min-h-0 flex-1" : "relative"}>
+    <ArchifyDiagram view="network" {topology} bind:tab={diagramTab} />
+    <div class={[expanded ? "relative min-h-0 flex-1" : "relative", diagramTab !== "map" && "hidden"]}>
       <div
         bind:this={container}
         class={expanded ? "h-full w-full" : "h-[28rem] w-full"}
