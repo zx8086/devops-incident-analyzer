@@ -3,7 +3,7 @@
 - Date: 2026-09-23
 - Ticket: [SIO-1876](https://linear.app/siobytes/issue/SIO-1876)
 - Branch: `SIO-1876-archify-spike`
-- Flag: `ARCHIFY_DIAGRAMS_ENABLED=true` (opt-in, default off)
+- Flag: `ARCHIFY_DIAGRAMS_ENABLED` (on by default; `false` or `0` turns it off, SIO-1877)
 
 ## Question
 

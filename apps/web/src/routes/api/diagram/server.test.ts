@@ -26,12 +26,18 @@ describe("POST /api/diagram", () => {
 		delete process.env.ARCHIFY_DIAGRAMS_ENABLED;
 	});
 
-	test("404 while the flag is off, even for a valid body", async () => {
+	test("404 when the flag is explicitly off, even for a valid body", async () => {
+		process.env.ARCHIFY_DIAGRAMS_ENABLED = "false";
 		expect(await status(valid)).toBe(404);
 	});
 
+	// SIO-1877: on by default. With the variable unset the route renders.
+	test("serves diagrams with the flag unset", async () => {
+		delete process.env.ARCHIFY_DIAGRAMS_ENABLED;
+		expect(await status(valid)).toBe(200);
+	}, 30_000);
+
 	test("400 when the topology fails its schema", async () => {
-		process.env.ARCHIFY_DIAGRAMS_ENABLED = "true";
 		expect(await status({ ...valid, topology: { nodes: "nope" } })).toBe(400);
 		expect(await status({ ...valid, view: "network" })).toBe(400); // application topology under the network view
 	});
@@ -39,7 +45,6 @@ describe("POST /api/diagram", () => {
 	// Greptile P1 on #904: the route enforces the builders' caps. Checked AT the cap as well as one
 	// past it, so an off-by-one in the bound fails here rather than rejecting a real capped topology.
 	test("400 one node past the application builder cap, accepted at the cap", async () => {
-		process.env.ARCHIFY_DIAGRAMS_ENABLED = "true";
 		const services = (n: number) =>
 			Array.from({ length: n }, (_, i) => ({ id: `svc:s${i}`, kind: "service" as const, name: `s${i}` }));
 		const atCap = { ...APPLICATION_FIXTURE, nodes: services(APPLICATION_TOPOLOGY_MAX_NODES), edges: [] };
@@ -49,7 +54,6 @@ describe("POST /api/diagram", () => {
 	}, 60_000);
 
 	test("400 one node past the network builder cap", async () => {
-		process.env.ARCHIFY_DIAGRAMS_ENABLED = "true";
 		const nodes = Array.from({ length: NETWORK_TOPOLOGY_MAX_NODES + 1 }, (_, i) => ({
 			id: `eni-${i}`,
 			kind: "eni" as const,
@@ -59,7 +63,6 @@ describe("POST /api/diagram", () => {
 	});
 
 	test("413 for a body over the byte cap even when every field is schema-valid", async () => {
-		process.env.ARCHIFY_DIAGRAMS_ENABLED = "true";
 		const huge = { ...APPLICATION_FIXTURE, nodes: [{ id: "svc:x", kind: "service", name: "x".repeat(600_000) }] };
 		expect(await status({ ...valid, topology: huge })).toBe(413);
 	});
@@ -69,7 +72,6 @@ describe("POST /api/diagram", () => {
 	// assertion is on the MECHANISM: how many bytes were pulled, and whether the stream was cancelled.
 	// (An endless stream cannot be used: a buffering read of it never yields, so no timer could fail it.)
 	test("413 on an oversized streamed body, stopping at the cap instead of buffering it", async () => {
-		process.env.ARCHIFY_DIAGRAMS_ENABLED = "true";
 		const chunk = new Uint8Array(64 * 1024).fill(0x20);
 		const total = 8 * 512 * 1024;
 		let pulled = 0;
@@ -102,7 +104,6 @@ describe("POST /api/diagram", () => {
 	});
 
 	test("413 from a declared Content-Length over the cap, before reading", async () => {
-		process.env.ARCHIFY_DIAGRAMS_ENABLED = "true";
 		const request = new Request("http://localhost/api/diagram", {
 			method: "POST",
 			headers: { "content-length": String(10 * 1024 * 1024) },
@@ -118,7 +119,6 @@ describe("POST /api/diagram", () => {
 	});
 
 	test("returns embeddable HTML in the requested theme", async () => {
-		process.env.ARCHIFY_DIAGRAMS_ENABLED = "true";
 		const response = await call(valid);
 		expect(response.status).toBe(200);
 		expect(response.headers.get("content-type")).toContain("text/html");
