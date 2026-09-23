@@ -2,6 +2,7 @@
 
 import { createCheckpointer } from "@devops-agent/checkpointer";
 import { END, START, StateGraph } from "@langchain/langgraph";
+import { createLandingZoneChangeNodes, type LandingZoneChangeTools } from "./change-nodes.ts";
 import type { LandingZoneEvidenceCollectors } from "./evidence.ts";
 import {
 	answerLandingZoneQuestion,
@@ -24,6 +25,7 @@ export interface BuildLandingZoneGraphOptions {
 	collectors?: LandingZoneEvidenceCollectors;
 	awsLiveStateAuthorized?: boolean;
 	topologyTools?: LandingZoneTopologyTool[];
+	changeTools?: LandingZoneChangeTools;
 }
 
 export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOptions = {}) {
@@ -40,6 +42,7 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		"collectMemoryEvidence",
 		"collectKnowledgeGraphEvidence",
 	] as const;
+	const changeNodes = createLandingZoneChangeNodes(options.changeTools);
 	const graph = new StateGraph(LandingZoneState)
 		.addNode("bootstrap", bootstrapLandingZone)
 		.addNode("classifyRequest", classifyLandingZoneRequest)
@@ -57,6 +60,13 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		.addNode("reconcileEvidence", reconcileLandingZoneEvidence)
 		.addNode("assessRisk", assessLandingZoneRisk)
 		.addNode("answerQuestion", answerLandingZoneQuestion)
+		.addNode("draftChange", changeNodes.draftChange)
+		.addNode("validateCandidate", changeNodes.validateCandidate)
+		.addNode("prepareReview", changeNodes.prepareReview)
+		.addNode("reviewGate", changeNodes.reviewGate)
+		.addNode("openMergeRequest", changeNodes.openMergeRequest)
+		.addNode("watchPipeline", changeNodes.watchPipeline)
+		.addNode("recordOutcome", changeNodes.recordOutcome)
 		.addNode("projectTopology", (state) => projectLandingZoneTopologyNode(state, { tools: options.topologyTools }))
 		.addNode("teardown", teardownLandingZone)
 		.addEdge(START, "bootstrap")
@@ -66,7 +76,43 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		.addEdge("recallMemory", "selectPvhKnowledge")
 		.addEdge("joinEvidence", "reconcileEvidence")
 		.addEdge("reconcileEvidence", "assessRisk")
-		.addEdge("assessRisk", "answerQuestion")
+		.addConditionalEdges(
+			"assessRisk",
+			(state) =>
+				state.intent === "propose-change" && !state.risk?.blocked && !state.blockedReason
+					? "draftChange"
+					: "answerQuestion",
+			["draftChange", "answerQuestion"],
+		)
+		.addConditionalEdges("draftChange", (state) => (state.blockedReason ? "answerQuestion" : "validateCandidate"), [
+			"validateCandidate",
+			"answerQuestion",
+		])
+		.addConditionalEdges(
+			"validateCandidate",
+			(state) => (state.blockedReason || !state.candidateValidationPassed ? "answerQuestion" : "prepareReview"),
+			["prepareReview", "answerQuestion"],
+		)
+		.addConditionalEdges("prepareReview", (state) => (state.blockedReason ? "answerQuestion" : "reviewGate"), [
+			"reviewGate",
+			"answerQuestion",
+		])
+		.addConditionalEdges(
+			"reviewGate",
+			(state) =>
+				state.reviewDecision?.decision === "approve"
+					? "openMergeRequest"
+					: state.reviewDecision?.decision === "amend"
+						? "draftChange"
+						: "recordOutcome",
+			["openMergeRequest", "draftChange", "recordOutcome"],
+		)
+		.addConditionalEdges("openMergeRequest", (state) => (state.mergeRequest ? "watchPipeline" : "recordOutcome"), [
+			"watchPipeline",
+			"recordOutcome",
+		])
+		.addEdge("watchPipeline", "recordOutcome")
+		.addEdge("recordOutcome", "teardown")
 		.addEdge("answerQuestion", "projectTopology")
 		.addEdge("projectTopology", "teardown")
 		.addEdge("teardown", END);

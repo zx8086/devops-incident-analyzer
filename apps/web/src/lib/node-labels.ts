@@ -129,6 +129,13 @@ export const LANDING_ZONE_NODES: readonly NodeLabel[] = [
 	{ id: "reconcileEvidence", activeLabel: "Reconciling evidence", completeLabel: "Evidence reconciled" },
 	{ id: "assessRisk", activeLabel: "Assessing risk", completeLabel: "Risk assessed" },
 	{ id: "answerQuestion", activeLabel: "Writing answer", completeLabel: "Answer written" },
+	{ id: "draftChange", activeLabel: "Drafting proposal", completeLabel: "Proposal drafted" },
+	{ id: "validateCandidate", activeLabel: "Validating proposal", completeLabel: "Proposal validated" },
+	{ id: "prepareReview", activeLabel: "Preparing review", completeLabel: "Review prepared" },
+	{ id: "reviewGate", activeLabel: "Awaiting review", completeLabel: "Review resolved" },
+	{ id: "openMergeRequest", activeLabel: "Opening MR", completeLabel: "MR opened" },
+	{ id: "watchPipeline", activeLabel: "Watching pipeline", completeLabel: "Pipeline observed" },
+	{ id: "recordOutcome", activeLabel: "Recording outcome", completeLabel: "Outcome recorded" },
 	{ id: "projectTopology", activeLabel: "Building evidence map", completeLabel: "Evidence map built" },
 	{ id: "teardown", activeLabel: "Finishing session", completeLabel: "Session finished" },
 ] as const;

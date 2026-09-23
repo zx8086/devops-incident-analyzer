@@ -9,6 +9,7 @@ import {
 	type LandingZoneRiskAssessment,
 	LandingZoneRiskAssessmentSchema,
 	ResponseCitationSchema,
+	StandardsComparisonSchema,
 	TopologyEvidenceStateSchema,
 } from "@devops-agent/shared";
 import { z } from "zod";
@@ -62,15 +63,110 @@ export type LandingZoneReconciliation = EvidenceReconciliation;
 export const LandingZoneRiskSchema = LandingZoneRiskAssessmentSchema;
 export type LandingZoneRisk = LandingZoneRiskAssessment;
 
+const CommitShaSchema = z.string().regex(/^[0-9a-f]{40}$/i);
+const ContentShaSchema = z.string().regex(/^[0-9a-f]{64}$/i);
+const RepositoryPathSchema = z
+	.string()
+	.trim()
+	.min(1)
+	.max(500)
+	.refine(
+		(path) =>
+			!path.startsWith("/") &&
+			!path.includes("\\") &&
+			!path.split("/").some((part) => part === "" || part === "." || part === ".."),
+		"must be a safe repository-relative path",
+	);
+
+export const LandingZoneCandidateFileSchema = z
+	.object({
+		path: RepositoryPathSchema,
+		content: z.string().max(524_288),
+		expectedFileSha: CommitShaSchema.nullable(),
+	})
+	.strict();
+
+export const LandingZoneCandidateSchema = z
+	.object({
+		repository: z.string().trim().min(1),
+		projectId: z.number().int().positive(),
+		baseBranch: z.string().trim().min(1).max(255),
+		baseSha: CommitShaSchema,
+		targetBranch: z.string().trim().min(1).max(255),
+		changeSummary: z.string().trim().min(1).max(2_000),
+		title: z.string().trim().min(1).max(240),
+		backendChangeApproved: z.boolean(),
+		files: z.array(LandingZoneCandidateFileSchema).min(1).max(20),
+	})
+	.strict();
+export type LandingZoneCandidate = z.infer<typeof LandingZoneCandidateSchema>;
+
+export const LandingZoneCandidateValidationSchema = z
+	.object({
+		command: z.string().trim().min(1).max(1_000),
+		status: z.enum(["passed", "failed", "unavailable", "skipped"]),
+		required: z.boolean(),
+		summary: z.string().trim().min(1).max(4_000),
+	})
+	.strict();
+export type LandingZoneCandidateValidation = z.infer<typeof LandingZoneCandidateValidationSchema>;
+
+export const LandingZoneReviewDecisionSchema = z.discriminatedUnion("decision", [
+	z.object({ decision: z.literal("approve") }).strict(),
+	z.object({ decision: z.literal("reject"), reason: z.string().trim().min(1).max(2_000) }).strict(),
+	z.object({ decision: z.literal("amend"), instructions: z.string().trim().min(1).max(4_000) }).strict(),
+]);
+export type LandingZoneReviewDecision = z.infer<typeof LandingZoneReviewDecisionSchema>;
+
 export const ProposedChangeReviewSchema = z
 	.object({
-		repositories: z.array(z.string()),
-		orderedSteps: z.array(z.string()),
-		validationCommands: z.array(z.string()),
-		missingAuthoritativeInputs: z.array(z.string()),
+		repository: z.string().trim().min(1),
+		projectId: z.number().int().positive(),
+		baseBranch: z.string().trim().min(1).max(255),
+		baseSha: CommitShaSchema,
+		targetBranch: z.string().trim().min(1).max(255),
+		changeSummary: z.string().trim().min(1).max(2_000),
+		title: z.string().trim().min(1).max(240),
+		files: z
+			.array(
+				z
+					.object({
+						path: RepositoryPathSchema,
+						contentSha256: ContentShaSchema,
+						expectedFileSha: CommitShaSchema.nullable(),
+					})
+					.strict(),
+			)
+			.min(1)
+			.max(20),
+		diffSummary: z.string().trim().min(1).max(8_192),
+		standardsComparison: z.array(StandardsComparisonSchema).max(100),
+		validations: z.array(LandingZoneCandidateValidationSchema).min(1).max(50),
+		expectedPlan: z.string().trim().min(1).max(8_192),
+		stopConditions: z.array(z.string().trim().min(1).max(2_000)).max(100),
+		destructiveFlags: z.array(z.string().trim().min(1).max(2_000)).max(100),
+		unresolvedEvidence: z.array(z.string().trim().min(1).max(2_000)).max(100),
+		riskLevel: z.enum(["low", "medium", "high", "blocked"]),
 	})
 	.strict();
 export type ProposedChangeReview = z.infer<typeof ProposedChangeReviewSchema>;
+
+export const LandingZoneMergeRequestSchema = z
+	.object({
+		iid: z.number().int().positive(),
+		webUrl: z.string().url(),
+		sourceSha: CommitShaSchema,
+	})
+	.strict();
+export type LandingZoneMergeRequest = z.infer<typeof LandingZoneMergeRequestSchema>;
+
+export const LandingZonePipelineObservationSchema = z
+	.object({
+		status: z.string().trim().min(1).max(200),
+		summary: z.string().trim().min(1).max(8_192),
+	})
+	.strict();
+export type LandingZonePipelineObservation = z.infer<typeof LandingZonePipelineObservationSchema>;
 
 export const LandingZoneOutcomeSchema = z.enum(["pending", "answered", "blocked", "failed"]);
 export type LandingZoneOutcome = z.infer<typeof LandingZoneOutcomeSchema>;
@@ -98,7 +194,15 @@ export const LandingZoneStateInputSchema = z
 		response: z.string().nullable(),
 		blockedReason: z.string().nullable(),
 		outcome: LandingZoneOutcomeSchema,
+		changeCandidate: LandingZoneCandidateSchema.nullable(),
+		candidateValidations: z.array(LandingZoneCandidateValidationSchema),
+		candidateValidationPassed: z.boolean(),
 		proposedChangeReview: ProposedChangeReviewSchema.nullable(),
+		reviewDecision: LandingZoneReviewDecisionSchema.nullable(),
+		amendmentInstructions: z.string().nullable(),
+		proposalIteration: z.number().int().min(0).max(3),
+		mergeRequest: LandingZoneMergeRequestSchema.nullable(),
+		pipelineObservation: LandingZonePipelineObservationSchema.nullable(),
 		responseCitations: z.array(ResponseCitationSchema),
 		topologyStates: z.array(TopologyEvidenceStateSchema),
 	})

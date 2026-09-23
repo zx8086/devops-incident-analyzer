@@ -12,6 +12,7 @@ import ElasticDeploymentSelector from "$lib/components/ElasticDeploymentSelector
 import FleetUpgradeChoiceCard from "$lib/components/FleetUpgradeChoiceCard.svelte";
 import GraphTriagePanel from "$lib/components/GraphTriagePanel.svelte";
 import Icon from "$lib/components/Icon.svelte";
+import LandingZonePlanReviewCard from "$lib/components/LandingZonePlanReviewCard.svelte";
 import LandingZoneTopologyCard from "$lib/components/LandingZoneTopologyCard.svelte";
 import LearningMatchCard from "$lib/components/LearningMatchCard.svelte";
 import LearningOutcomeCard from "$lib/components/LearningOutcomeCard.svelte";
@@ -77,6 +78,7 @@ const graphPaused = $derived(
 			agentStore.hilLearningReview ||
 			agentStore.iacClarify ||
 			agentStore.iacPlanReview ||
+			agentStore.landingZonePlanReview ||
 			agentStore.iacReconcileChoice ||
 			agentStore.syntheticsPushChoice ||
 			agentStore.fleetUpgradeChoice ||
@@ -768,6 +770,16 @@ function handleSuggestionClick(suggestion: string) {
       disabled={agentStore.isStreaming}
       onApprove={() => agentStore.resolveIacPlanReview("approved")}
       onReject={() => agentStore.resolveIacPlanReview("rejected")}
+    />
+  {/if}
+
+  {#if agentStore.landingZonePlanReview}
+    <LandingZonePlanReviewCard
+      prompt={agentStore.landingZonePlanReview}
+      disabled={agentStore.isStreaming}
+      onApprove={() => agentStore.resolveLandingZonePlanReview({ decision: "approve" })}
+      onReject={(reason) => agentStore.resolveLandingZonePlanReview({ decision: "reject", reason })}
+      onAmend={(instructions) => agentStore.resolveLandingZonePlanReview({ decision: "amend", instructions })}
     />
   {/if}
 

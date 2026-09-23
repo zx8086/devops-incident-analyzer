@@ -3,6 +3,7 @@ import { z } from "zod";
 import { PendingActionSchema } from "./action-types.ts";
 import { HilApplyReportSchema, HilMatchCandidateSchema, LearningProposalSchema } from "./hil-learning.ts";
 import { LandingZoneTopologyEventSchema } from "./landing-zone-topology.ts";
+import { StandardsComparisonSchema } from "./landing-zone-types.ts";
 import { FleetInboxDigestSchema } from "./pi-coms-types.ts";
 
 export const ToolOutputSchema = z.object({
@@ -1070,6 +1071,46 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 	// SIO-1146: structured apply outcome for the terminal learning card, emitted
 	// from applyLearnings' node output before the prose summary message.
 	z.object({ type: z.literal("hil_learning_applied"), report: HilApplyReportSchema }),
+	z.object({
+		type: z.literal("landing_zone_plan_review"),
+		threadId: z.string(),
+		message: z.string(),
+		review: z.object({
+			repository: z.string(),
+			projectId: z.number().int().positive(),
+			baseBranch: z.string(),
+			baseSha: z.string().regex(/^[0-9a-f]{40}$/i),
+			targetBranch: z.string(),
+			changeSummary: z.string(),
+			title: z.string(),
+			files: z.array(
+				z.object({
+					path: z.string(),
+					contentSha256: z.string().regex(/^[0-9a-f]{64}$/i),
+					expectedFileSha: z
+						.string()
+						.regex(/^[0-9a-f]{40}$/i)
+						.nullable(),
+				}),
+			),
+			diffSummary: z.string(),
+			standardsComparison: z.array(StandardsComparisonSchema),
+			validations: z.array(
+				z.object({
+					command: z.string(),
+					status: z.enum(["passed", "failed", "unavailable", "skipped"]),
+					required: z.boolean(),
+					summary: z.string(),
+				}),
+			),
+			expectedPlan: z.string(),
+			stopConditions: z.array(z.string()),
+			destructiveFlags: z.array(z.string()),
+			unresolvedEvidence: z.array(z.string()),
+			riskLevel: z.enum(["low", "medium", "high", "blocked"]),
+		}),
+	}),
+	z.object({ type: z.literal("landing_zone_review_resolved") }),
 	// elastic-iac maker graph: a one-line clarification the planner needs, or the
 	// plan-review gate. The UI POSTs the resume value to /api/agent/iac/resume.
 	z.object({
