@@ -9,12 +9,16 @@
 
 import {
 	accountManagingRoots,
+	accountNetworkMap,
 	appliedChanges,
+	centralNetworkAttachments,
 	changeHistoryForStackInstance,
 	deploymentsRunningStack,
 	type GraphStore,
 	getGraphStore,
+	hostnameResolutionPath,
 	ipToWorkload,
+	landingZoneTopologyDrift,
 	mergeRequestPipelineOutcome,
 	networkMapForService,
 	priorChangesForDeployment,
@@ -22,8 +26,10 @@ import {
 	repositoryChangeHistory,
 	stacksUsingModule,
 	standardsForRepository,
+	subnetRouteAssociation,
 	successfulPromptChanges,
 	terraformModuleConsumers,
+	vpcRoutePath,
 } from "@devops-agent/knowledge-graph";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -121,6 +127,123 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 			if (rows.length === 0) return text(`No account-managing Terraform roots are recorded. ${GRAPH_INCOMPLETE}`);
 			return text(
 				`Account-managing Terraform roots:\n${rows.map((row) => `- ${row.rootId} (${row.repositoryPath}:${row.rootPath})`).join("\n")}`,
+			);
+		},
+	);
+
+	server.registerTool(
+		"kg_lz_account_network_map",
+		{
+			description: "Account-scoped Landing Zone VPC and subnet map with graph-recorded topology only. Read-only.",
+			inputSchema: { accountId: z.string().min(1).describe("Verified AWS account identifier") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
+		async ({ accountId }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await accountNetworkMap(store, accountId);
+			if (rows.length === 0) return text(`No recorded network topology for account ${accountId}. ${GRAPH_INCOMPLETE}`);
+			return text(
+				`Account network map for ${accountId}:\n${rows
+					.map(
+						(row) =>
+							`- VPC ${row.vpcName || row.vpcId} (${row.vpcId})${row.subnetId ? ` -> subnet ${row.subnetId}${row.subnetCidr ? ` (${row.subnetCidr})` : ""}` : ""}`,
+					)
+					.join("\n")}`,
+			);
+		},
+	);
+
+	server.registerTool(
+		"kg_lz_hostname_resolution",
+		{
+			description:
+				"DNS-only hostname resolution path through hosted zones and records. It does not claim packet routing. Read-only.",
+			inputSchema: { hostname: z.string().min(1).describe("Fully qualified hostname") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
+		async ({ hostname }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await hostnameResolutionPath(store, hostname);
+			if (rows.length === 0) return text(`No recorded DNS resolution path for ${hostname}. ${GRAPH_INCOMPLETE}`);
+			return text(
+				`DNS only for ${hostname}; query the VPC route path separately for reachability:\n${rows.map((row) => `- zone ${row.zoneId || "unknown"}: ${row.hostname} -> ${row.targetId || "unresolved"} [${row.targetKind || "target unknown"}]`).join("\n")}`,
+			);
+		},
+	);
+
+	server.registerTool(
+		"kg_lz_subnet_route_association",
+		{
+			description: "Recorded route-table association for one Landing Zone subnet. Read-only.",
+			inputSchema: { subnetId: z.string().min(1).describe("Graph subnet identifier") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
+		async ({ subnetId }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await subnetRouteAssociation(store, subnetId);
+			if (rows.length === 0) return text(`No recorded route-table association for ${subnetId}. ${GRAPH_INCOMPLETE}`);
+			return text(
+				`Route-table association for ${subnetId}:\n${rows.map((row) => `- ${row.routeTableId} [${row.status || "status unknown"}/${row.confidence || "confidence unknown"}]`).join("\n")}`,
+			);
+		},
+	);
+
+	server.registerTool(
+		"kg_lz_vpc_route_path",
+		{
+			description: "Recorded subnet, route-table, route, destination, and target path for one VPC. Read-only.",
+			inputSchema: { vpcId: z.string().min(1).describe("Graph VPC identifier") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
+		async ({ vpcId }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await vpcRoutePath(store, vpcId);
+			if (rows.length === 0) return text(`No recorded route path for ${vpcId}. ${GRAPH_INCOMPLETE}`);
+			return text(
+				`Route paths for ${vpcId}:\n${rows.map((row) => `- ${row.routeId}: ${row.destination} -> ${row.targetId || "local"} [${row.targetKind || "target unknown"}]`).join("\n")}`,
+			);
+		},
+	);
+
+	server.registerTool(
+		"kg_lz_central_attachment",
+		{
+			description: "Recorded Core Network or Transit Gateway attachment path for one VPC. Read-only.",
+			inputSchema: { vpcId: z.string().min(1).describe("Graph VPC identifier") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
+		async ({ vpcId }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await centralNetworkAttachments(store, vpcId);
+			if (rows.length === 0) return text(`No recorded central-network attachment for ${vpcId}. ${GRAPH_INCOMPLETE}`);
+			return text(
+				`Central-network attachments for ${vpcId}:\n${rows.map((row) => `- ${row.attachmentId} -> ${row.targetId} [${row.targetKind}]`).join("\n")}`,
+			);
+		},
+	);
+
+	server.registerTool(
+		"kg_lz_topology_drift",
+		{
+			description: "Desired/observed Landing Zone topology differences, unknowns, and conflicting evidence. Read-only.",
+			inputSchema: { accountId: z.string().min(1).optional().describe("Optional verified AWS account identifier") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
+		async ({ accountId }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await landingZoneTopologyDrift(store, accountId);
+			if (rows.length === 0)
+				return text(
+					`No active topology drift facts are recorded${accountId ? ` for ${accountId}` : ""}. ${GRAPH_INCOMPLETE}`,
+				);
+			return text(
+				`Topology reconciliation issues${accountId ? ` for ${accountId}` : ""}:\n${rows.map((row) => `- ${row.id} [${row.status}]`).join("\n")}`,
 			);
 		},
 	);

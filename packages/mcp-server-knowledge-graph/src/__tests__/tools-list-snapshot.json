@@ -27,8 +27,29 @@
 			"destructiveHint": false
 		}
 	},
+	"kg_lz_account_network_map": {
+		"surfaceHash": "6890c7a32da1c99799eaddc81a3a1e008878141977fa40772c3806210d46a64e",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
 	"kg_lz_account_roots": {
 		"surfaceHash": "46410ed49d8e51e21068128b8f95a1bc9a2f8b678e1159f15b77a64700bc9f30",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_lz_central_attachment": {
+		"surfaceHash": "7989ce26eb3fb79435194d75c1befdc3adc2d69bbd703d520bf47621ea8ec7f5",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_lz_hostname_resolution": {
+		"surfaceHash": "b60c216798befc7c53fd55881b11c2f47c9c56f6d7eb1b1d64b3bb541170cf40",
 		"annotations": {
 			"readOnlyHint": true,
 			"destructiveHint": false
@@ -57,6 +78,27 @@
 	},
 	"kg_lz_repository_standards": {
 		"surfaceHash": "c54f83bd647f8bca593310720247c3d96bf5ed9ab30716386a0c74fd87f678ef",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_lz_subnet_route_association": {
+		"surfaceHash": "9b578ffc99919241ad882c903cb2e9524721c4d720e96a189628ed1b58e7c521",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_lz_topology_drift": {
+		"surfaceHash": "38222b05d37e709c3e535d5bd810087cad26a729380d95733c0483d3039b85fc",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_lz_vpc_route_path": {
+		"surfaceHash": "398793d0c6fe76b29b98b38e453bca59c7d70c874881a8d14e23c8f3010f52e0",
 		"annotations": {
 			"readOnlyHint": true,
 			"destructiveHint": false

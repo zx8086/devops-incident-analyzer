@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	accountManagingRoots,
+	accountNetworkMap,
 	appMapForServices,
 	bindingsForServices,
 	changeHistoryForStackInstance,
@@ -29,8 +30,10 @@ import {
 	rootCauseForIncident,
 	stacksUsingModule,
 	standardsForRepository,
+	subnetRouteAssociation,
 	terraformModuleConsumers,
 	topology,
+	vpcRoutePath,
 } from "./reader.ts";
 import { resolutionFromAnnotations } from "./rebuild.ts";
 import { EMBEDDING_DIM } from "./schema.ts";
@@ -50,6 +53,7 @@ import {
 	recordLandingZoneChange,
 	recordLandingZoneGitLabImportCheckpoint,
 	recordLandingZoneRepository,
+	recordLandingZoneTopology,
 	recordModuleUsage,
 	recordNetworkTopology,
 	recordPipeline,
@@ -94,6 +98,81 @@ afterAll(() => {
 });
 
 describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
+	async function assertLandingZoneAccountRouteTopology(store: LadybugStore): Promise<void> {
+		const accountId = "111122223344";
+		const vpcId = "vpc-lz-topology";
+		const subnetId = "subnet-lz-topology";
+		const routeTableId = "rtb-lz-topology";
+		const routeId = "route-lz-topology";
+		const natGatewayId = "nat-lz-topology";
+		const observedAt = "2026-09-22T10:00:00.000Z";
+		const provenance = [{ state: "observed" as const, source: "aws-api", observedAt }];
+		const entity = (
+			id: string,
+			kind: string,
+			properties: Record<string, string | number | boolean> = {},
+			accountId?: string,
+			name?: string,
+		) => ({
+			id,
+			fact: { id, kind, properties, ...(accountId && { accountId }), ...(name && { name }) },
+			provenance,
+			reconciliation: { status: "aligned" as const, confidence: "verified" as const },
+			validFrom: observedAt,
+			observedAt,
+			consecutiveMisses: 0,
+		});
+		const relationship = (id: string, kind: string, from: string, to: string) => ({
+			id,
+			fact: { id, kind, from, to, properties: {} },
+			provenance,
+			reconciliation: { status: "aligned" as const, confidence: "verified" as const },
+			validFrom: observedAt,
+			observedAt,
+			consecutiveMisses: 0,
+		});
+		await recordLandingZoneTopology(store, {
+			entities: [
+				entity(accountId, "aws-account", {}, accountId),
+				entity(vpcId, "vpc", { cidr: "10.0.0.0/16" }, accountId, "workload"),
+				entity(subnetId, "subnet", { cidr: "10.0.1.0/24", classification: "private" }, accountId),
+				entity(routeTableId, "route-table", { vpcId }, accountId),
+				entity(routeId, "route", {}, accountId),
+				entity("0.0.0.0/0", "cidr-block", { cidr: "0.0.0.0/0" }),
+				entity(natGatewayId, "nat-gateway", {}, accountId, natGatewayId),
+			],
+			relationships: [
+				relationship("edge-account-vpc", "account-owns-vpc", accountId, vpcId),
+				relationship("edge-vpc-subnet", "vpc-contains-subnet", vpcId, subnetId),
+				relationship("edge-subnet-rt", "subnet-uses-route-table", subnetId, routeTableId),
+				relationship("edge-rt-route", "route-table-has-route", routeTableId, routeId),
+				relationship("edge-route-cidr", "route-destines-cidr", routeId, "0.0.0.0/0"),
+				relationship("edge-route-nat", "route-targets-nat-gateway", routeId, natGatewayId),
+			],
+		});
+
+		expect(await accountNetworkMap(store, accountId)).toContainEqual({
+			accountId,
+			vpcId,
+			vpcName: "workload",
+			region: "",
+			subnetId,
+			subnetCidr: "10.0.1.0/24",
+		});
+		expect(await subnetRouteAssociation(store, subnetId)).toContainEqual({
+			subnetId,
+			routeTableId,
+			status: "aligned",
+			confidence: "verified",
+		});
+		expect(await vpcRoutePath(store, vpcId)).toContainEqual({
+			routeId,
+			destination: "0.0.0.0/0",
+			targetId: natGatewayId,
+			targetKind: "nat-gateway",
+		});
+	}
+
 	test("Landing Zone GitLab import checkpoints round-trip through the migrated Repository schema", async () => {
 		const store = new LadybugStore(join(dir, "lz-gitlab-import-checkpoint"));
 		await store.init();
@@ -1207,6 +1286,7 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			subnetId: "subnet-1",
 			vpcId: "vpc-1",
 		});
+		await assertLandingZoneAccountRouteTopology(store);
 
 		await store.close();
 	});

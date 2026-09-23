@@ -46,11 +46,17 @@ describe("curated kg_* tools", () => {
 			"kg_deployments_running_stack",
 			// SIO-1204: reverse-IP cache lookup.
 			"kg_ip_to_workload",
+			"kg_lz_account_network_map",
 			"kg_lz_account_roots",
+			"kg_lz_central_attachment",
+			"kg_lz_hostname_resolution",
 			"kg_lz_module_consumers",
 			"kg_lz_mr_outcome",
 			"kg_lz_repository_history",
 			"kg_lz_repository_standards",
+			"kg_lz_subnet_route_association",
+			"kg_lz_topology_drift",
+			"kg_lz_vpc_route_path",
 			// SIO-1204: persisted per-service network map.
 			"kg_network_map",
 			"kg_prior_root_causes",
@@ -58,6 +64,41 @@ describe("curated kg_* tools", () => {
 			"kg_stacks_using_module",
 			"kg_successful_prompts",
 		]);
+	});
+
+	test("Landing Zone topology tools keep DNS, routes, attachments, and drift explicit", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("ACCOUNT_OWNS_VPC", [
+			{ accountId: "111122223333", vpcId: "vpc-1", vpcName: "workload", subnetId: "subnet-1" },
+		]);
+		store.stub("HOSTED_ZONE_CONTAINS_DNS_RECORD", [
+			{
+				recordId: "dns-1",
+				hostname: "api.internal",
+				targetId: "10.0.1.10",
+				targetKind: "DNS_RECORD_RESOLVES_TO_IP",
+				zoneId: "zone-1",
+			},
+		]);
+		store.stub("ROUTE_TABLE_HAS_ROUTE", [
+			{ routeId: "route-1", destination: "0.0.0.0/0", targetId: "nat-1", targetKind: "ROUTE_TARGET_NAT" },
+		]);
+		store.stub("SUBNET_USES_ROUTE_TABLE", [
+			{ subnetId: "subnet-1", routeTableId: "rtb-1", status: "aligned", confidence: "verified" },
+		]);
+		store.stub("VPC_HAS_NETWORK_ATTACHMENT", [
+			{ vpcId: "vpc-1", attachmentId: "att-1", targetId: "core-1", targetKind: "NETWORK_ATTACHMENT_TO_CORE_NETWORK" },
+		]);
+		store.stub("TopologyFact", [{ id: "vpc:vpc-1", status: "drifted", payload: '{"fact":{"kind":"vpc"}}' }]);
+		_setGraphStoreForTesting(store);
+		const client = await connectedClient();
+
+		expect(await call(client, "kg_lz_account_network_map", { accountId: "111122223333" })).toContain("vpc-1");
+		expect(await call(client, "kg_lz_hostname_resolution", { hostname: "api.internal" })).toContain("DNS only");
+		expect(await call(client, "kg_lz_subnet_route_association", { subnetId: "subnet-1" })).toContain("rtb-1");
+		expect(await call(client, "kg_lz_vpc_route_path", { vpcId: "vpc-1" })).toContain("0.0.0.0/0");
+		expect(await call(client, "kg_lz_central_attachment", { vpcId: "vpc-1" })).toContain("core-1");
+		expect(await call(client, "kg_lz_topology_drift", { accountId: "111122223333" })).toContain("drifted");
 	});
 
 	test("Landing Zone curated tools render repository history and state graph incompleteness on empty results", async () => {

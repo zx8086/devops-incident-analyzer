@@ -51,6 +51,267 @@ export interface EntityGraph {
 	dependencies?: Array<{ from: string; to: string }>;
 }
 
+const LandingZoneTopologyProvenanceSchema = z
+	.object({
+		state: z.enum(["desired", "observed", "proposed"]),
+		source: z.string().min(1),
+		repository: z.string().min(1).optional(),
+		filePath: z.string().min(1).optional(),
+		commitSha: z.string().min(1).optional(),
+		terraformAddress: z.string().min(1).optional(),
+		resourceId: z.string().min(1).optional(),
+		mergeRequestUrl: z.string().url().optional(),
+		sourceTimestamp: z.string().optional(),
+		observedAt: z.string().optional(),
+	})
+	.passthrough();
+
+const LandingZoneTopologyFactSchema = z
+	.object({
+		id: z.string().min(1),
+		fact: z
+			.object({
+				id: z.string().min(1),
+				kind: z.string().min(1),
+				name: z.string().optional(),
+				accountId: z.string().optional(),
+				region: z.string().optional(),
+				from: z.string().optional(),
+				to: z.string().optional(),
+				properties: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+			})
+			.passthrough(),
+		provenance: z.array(LandingZoneTopologyProvenanceSchema).min(1),
+		reconciliation: z
+			.object({
+				status: z.enum(["aligned", "drifted", "pending", "unknown", "conflicting-evidence"]),
+				confidence: z.enum(["verified", "unverified"]),
+			})
+			.strict(),
+		validFrom: z.string().min(1),
+		validTo: z.string().optional(),
+		observedAt: z.string().optional(),
+		consecutiveMisses: z.number().int().nonnegative(),
+	})
+	.strict();
+
+const LandingZoneTopologyRecordSchema = z
+	.object({
+		entities: z.array(LandingZoneTopologyFactSchema),
+		relationships: z.array(LandingZoneTopologyFactSchema),
+	})
+	.strict();
+
+export type LandingZoneTopologyRecord = z.infer<typeof LandingZoneTopologyRecordSchema>;
+
+const setName = " SET n.name = coalesce($name, n.name)";
+const landingZoneEntityMappings: Record<string, { label: string; key: string; set: string }> = {
+	"aws-organization": { label: "AwsOrganization", key: "id", set: setName },
+	"organizational-unit": { label: "OrganizationalUnit", key: "id", set: setName },
+	"aws-account": { label: "AwsAccount", key: "id", set: "" },
+	region: { label: "Region", key: "id", set: setName },
+	"availability-zone": {
+		label: "AvailabilityZone",
+		key: "id",
+		set: `${setName}, n.region = coalesce($region, n.region)`,
+	},
+	vpc: {
+		label: "Vpc",
+		key: "id",
+		set: `${setName}, n.cidr = coalesce($cidr, n.cidr), n.accountId = coalesce($accountId, n.accountId), n.region = coalesce($region, n.region)`,
+	},
+	subnet: {
+		label: "Subnet",
+		key: "id",
+		set: " SET n.cidr = coalesce($cidr, n.cidr), n.az = coalesce($az, n.az), n.vpcId = coalesce($vpcId, n.vpcId)",
+	},
+	"route-table": {
+		label: "RouteTable",
+		key: "id",
+		set: `${setName}, n.vpcId = coalesce($vpcId, n.vpcId)`,
+	},
+	route: { label: "Route", key: "id", set: setName },
+	"internet-gateway": { label: "InternetGateway", key: "id", set: setName },
+	"nat-gateway": { label: "NatGateway", key: "id", set: setName },
+	"transit-gateway": { label: "TransitGateway", key: "id", set: setName },
+	"core-network": { label: "CoreNetwork", key: "id", set: setName },
+	"network-attachment": { label: "NetworkAttachment", key: "id", set: setName },
+	"vpc-endpoint": {
+		label: "VpcEndpoint",
+		key: "id",
+		set: `${setName}, n.privateDnsEnabled = coalesce($privateDnsEnabled, n.privateDnsEnabled)`,
+	},
+	"network-acl": { label: "NetworkAcl", key: "id", set: setName },
+	"hosted-zone": {
+		label: "HostedZone",
+		key: "id",
+		set: `${setName}, n.private = coalesce($private, n.private)`,
+	},
+	"dns-record": {
+		label: "DnsRecord",
+		key: "id",
+		set: " SET n.name = coalesce($name, n.name), n.type = coalesce($recordType, n.type), n.target = coalesce($target, n.target)",
+	},
+	"load-balancer": { label: "LoadBalancer", key: "arn", set: setName },
+	"resolver-endpoint": {
+		label: "ResolverEndpoint",
+		key: "id",
+		set: `${setName}, n.direction = coalesce($direction, n.direction)`,
+	},
+	"resolver-rule": {
+		label: "ResolverRule",
+		key: "id",
+		set: `${setName}, n.domain = coalesce($domain, n.domain)`,
+	},
+	"dns-firewall-rule-group": { label: "DnsFirewallRuleGroup", key: "id", set: setName },
+	"ip-address": { label: "IpAddress", key: "ip", set: "" },
+	"cidr-block": { label: "CidrBlock", key: "id", set: " SET n.cidr = coalesce($cidr, n.cidr)" },
+};
+
+const landingZoneRelationshipMappings: Record<string, { rel: string; from: string; to: string }> = {
+	"organization-contains-ou": { rel: "ORG_CONTAINS_OU", from: "aws-organization", to: "organizational-unit" },
+	"ou-contains-account": { rel: "OU_CONTAINS_ACCOUNT", from: "organizational-unit", to: "aws-account" },
+	"account-owns-vpc": { rel: "ACCOUNT_OWNS_VPC", from: "aws-account", to: "vpc" },
+	"vpc-located-in-region": { rel: "VPC_LOCATED_IN_REGION", from: "vpc", to: "region" },
+	"vpc-contains-subnet": { rel: "VPC_CONTAINS_SUBNET", from: "vpc", to: "subnet" },
+	"subnet-located-in-availability-zone": { rel: "SUBNET_LOCATED_IN_AZ", from: "subnet", to: "availability-zone" },
+	"subnet-uses-route-table": { rel: "SUBNET_USES_ROUTE_TABLE", from: "subnet", to: "route-table" },
+	"subnet-protected-by-network-acl": { rel: "SUBNET_PROTECTED_BY_ACL", from: "subnet", to: "network-acl" },
+	"route-table-has-route": { rel: "ROUTE_TABLE_HAS_ROUTE", from: "route-table", to: "route" },
+	"route-destines-cidr": { rel: "ROUTE_DESTINATION_CIDR", from: "route", to: "cidr-block" },
+	"route-targets-internet-gateway": { rel: "ROUTE_TARGET_IGW", from: "route", to: "internet-gateway" },
+	"route-targets-nat-gateway": { rel: "ROUTE_TARGET_NAT", from: "route", to: "nat-gateway" },
+	"route-targets-transit-gateway": { rel: "ROUTE_TARGET_TGW", from: "route", to: "transit-gateway" },
+	"route-targets-core-network": { rel: "ROUTE_TARGET_CORE_NETWORK", from: "route", to: "core-network" },
+	"route-targets-vpc-endpoint": { rel: "ROUTE_TARGET_VPC_ENDPOINT", from: "route", to: "vpc-endpoint" },
+	"vpc-has-network-attachment": {
+		rel: "VPC_HAS_NETWORK_ATTACHMENT",
+		from: "vpc",
+		to: "network-attachment",
+	},
+	"network-attachment-targets-transit-gateway": {
+		rel: "NETWORK_ATTACHMENT_TO_TGW",
+		from: "network-attachment",
+		to: "transit-gateway",
+	},
+	"network-attachment-targets-core-network": {
+		rel: "NETWORK_ATTACHMENT_TO_CORE_NETWORK",
+		from: "network-attachment",
+		to: "core-network",
+	},
+	"vpc-associated-with-hosted-zone": { rel: "VPC_ASSOCIATED_WITH_HOSTED_ZONE", from: "vpc", to: "hosted-zone" },
+	"vpc-uses-resolver-rule": { rel: "VPC_USES_RESOLVER_RULE", from: "vpc", to: "resolver-rule" },
+	"vpc-hosts-resolver-endpoint": { rel: "VPC_HOSTS_RESOLVER_ENDPOINT", from: "vpc", to: "resolver-endpoint" },
+	"hosted-zone-contains-dns-record": { rel: "HOSTED_ZONE_CONTAINS_DNS_RECORD", from: "hosted-zone", to: "dns-record" },
+	"dns-record-resolves-to-ip": { rel: "DNS_RECORD_RESOLVES_TO_IP", from: "dns-record", to: "ip-address" },
+	"dns-record-resolves-to-vpc-endpoint": {
+		rel: "DNS_RECORD_RESOLVES_TO_VPC_ENDPOINT",
+		from: "dns-record",
+		to: "vpc-endpoint",
+	},
+	"dns-record-resolves-to-load-balancer": {
+		rel: "DNS_RECORD_RESOLVES_TO_LOAD_BALANCER",
+		from: "dns-record",
+		to: "load-balancer",
+	},
+	"dns-record-resolves-to-dns-record": {
+		rel: "DNS_RECORD_RESOLVES_TO_DNS_RECORD",
+		from: "dns-record",
+		to: "dns-record",
+	},
+	"resolver-rule-forwards-to-endpoint": {
+		rel: "RESOLVER_RULE_FORWARDS_TO_ENDPOINT",
+		from: "resolver-rule",
+		to: "resolver-endpoint",
+	},
+};
+
+function topologyGraphKey(fact: LandingZoneTopologyRecord["entities"][number]): string {
+	if (fact.fact.kind === "ip-address") return String(fact.fact.properties.ip ?? fact.fact.name ?? fact.fact.id);
+	return fact.fact.id;
+}
+
+export async function recordLandingZoneTopology(store: GraphStore, input: LandingZoneTopologyRecord): Promise<void> {
+	const record = LandingZoneTopologyRecordSchema.parse(input);
+	const entities = new Map(record.entities.map((entity) => [entity.fact.id, entity]));
+	for (const item of [...record.entities, ...record.relationships]) {
+		const first = item.provenance[0];
+		const accountId =
+			item.fact.accountId ??
+			("from" in item.fact
+				? (entities.get(item.fact.from ?? "")?.fact.accountId ?? entities.get(item.fact.to ?? "")?.fact.accountId)
+				: undefined) ??
+			"";
+		await store.run(
+			"MERGE (f:TopologyFact {key: $key}) SET f.id = $id, f.factType = $factType, f.entityKind = $entityKind, f.relationshipKind = $relationshipKind, f.accountId = $accountId, f.state = $state, f.status = $status, f.confidence = $confidence, f.payload = $payload, f.validFrom = $validFrom, f.validTo = $validTo, f.observedAt = $observedAt, f.consecutiveMisses = $consecutiveMisses",
+			{
+				key: `${item.id}:${item.validFrom}`,
+				id: item.id,
+				factType: "from" in item.fact ? "relationship" : "entity",
+				entityKind: "from" in item.fact ? "" : item.fact.kind,
+				relationshipKind: "from" in item.fact ? item.fact.kind : "",
+				accountId,
+				state: first?.state ?? "",
+				status: item.reconciliation.status,
+				confidence: item.reconciliation.confidence,
+				payload: JSON.stringify(item),
+				validFrom: item.validFrom,
+				validTo: item.validTo ?? "",
+				observedAt: item.observedAt ?? first?.observedAt ?? "",
+				consecutiveMisses: item.consecutiveMisses,
+			},
+		);
+	}
+
+	for (const entity of record.entities) {
+		const mapping = landingZoneEntityMappings[entity.fact.kind];
+		if (!mapping) continue;
+		const key = topologyGraphKey(entity);
+		await store.run(`MERGE (n:${mapping.label} {${mapping.key}: $key})${mapping.set}`, {
+			key,
+			name: entity.fact.name ?? null,
+			accountId: entity.fact.accountId ?? null,
+			region: entity.fact.region ?? null,
+			cidr: entity.fact.properties.cidr ?? null,
+			az: entity.fact.properties.az ?? null,
+			vpcId: entity.fact.properties.vpcId ?? null,
+			privateDnsEnabled: entity.fact.properties.privateDnsEnabled ?? null,
+			private: entity.fact.properties.private ?? null,
+			recordType: entity.fact.properties.type ?? null,
+			target: entity.fact.properties.target ?? null,
+			direction: entity.fact.properties.direction ?? null,
+			domain: entity.fact.properties.domain ?? null,
+		});
+	}
+
+	for (const edge of record.relationships) {
+		if (!("from" in edge.fact) || !edge.fact.from || !edge.fact.to) continue;
+		const mapping = landingZoneRelationshipMappings[edge.fact.kind];
+		const from = entities.get(edge.fact.from);
+		const to = entities.get(edge.fact.to);
+		if (!mapping || !from || !to || from.fact.kind !== mapping.from || to.fact.kind !== mapping.to) continue;
+		const fromMapping = landingZoneEntityMappings[from.fact.kind];
+		const toMapping = landingZoneEntityMappings[to.fact.kind];
+		if (!fromMapping || !toMapping) continue;
+		await store.run(
+			`MATCH (a:${fromMapping.label} {${fromMapping.key}: $fromKey}), (b:${toMapping.label} {${toMapping.key}: $toKey}) MERGE (a)-[r:${mapping.rel}]->(b) SET r.state = $state, r.source = $source, r.evidence = $evidence, r.observedAt = $observedAt, r.validFrom = $validFrom, r.validTo = $validTo, r.reconciliationStatus = $status, r.confidence = $confidence, r.consecutiveMisses = $consecutiveMisses`,
+			{
+				fromKey: topologyGraphKey(from),
+				toKey: topologyGraphKey(to),
+				state: edge.provenance[0]?.state ?? "",
+				source: [...new Set(edge.provenance.map((item) => item.source))].join(","),
+				evidence: JSON.stringify(edge.provenance),
+				observedAt: edge.observedAt ?? edge.provenance.find((item) => item.observedAt)?.observedAt ?? "",
+				validFrom: edge.validFrom,
+				validTo: edge.validTo ?? "",
+				status: edge.reconciliation.status,
+				confidence: edge.reconciliation.confidence,
+				consecutiveMisses: edge.consecutiveMisses,
+			},
+		);
+	}
+}
+
 export interface LandingZoneRepositoryRecord {
 	group: GitLabGroupNode;
 	repository: RepositoryNode;
