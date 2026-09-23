@@ -18,7 +18,7 @@ import {
 	parseDiagnoses,
 	suppressionReviewFromJournal,
 } from "../scripts/monitor/report.ts";
-import { subjectFor } from "../scripts/monitor/report-email.ts";
+import { subjectFor, truncateUtf8 } from "../scripts/monitor/report-email.ts";
 
 const finding = {
 	family: "alarm" as const,
@@ -356,17 +356,19 @@ describe("digest notables", () => {
 		expect(second).toBeGreaterThan(0);
 		// The line before the second entry is blank, and the summary of the first
 		// entry sits above that -- proving the gap separates ENTRIES rather than
-		// being the pre-existing gap above the notables header.
+		// being the gap under the notables header.
 		expect(lines[second - 1]).toBe("");
 		expect(lines[second - 2]).toContain("instance changed state");
-		// The first entry is flush against the header, not preceded by a gap.
+		// SIO-1873 / Greptile P2 on #900: the header now has its own blank line
+		// under it, because the bounded counters moved above the list.
 		const first = lines.findIndex((l) => l.includes("i-first"));
-		expect(lines[first - 1]).toContain("notable warn+ findings");
+		expect(lines[first - 1]).toBe("");
+		expect(lines[first - 2]).toContain("notable warn+ findings");
 	});
 
-	test("the uninvestigated total is separated from the last entry", () => {
-		// Flush against the final summary line it would read as part of that
-		// entry's block rather than as the total for the whole list.
+	test("the uninvestigated total sits with the bounded counters, above the list", () => {
+		// Greptile P2 on #900: it is a counter, not a list footer, and the counters
+		// are printed before the unbounded list so truncation cannot eat them.
 		const text = formatDigest({
 			...quietDigest,
 			findingCounts: { drift: 1 },
@@ -374,8 +376,38 @@ describe("digest notables", () => {
 		});
 		const lines = text.split("\n");
 		const total = lines.findIndex((l) => l.startsWith("- uninvestigated:"));
+		const header = lines.findIndex((l) => l.includes("notable warn+ findings"));
 		expect(total).toBeGreaterThan(0);
-		expect(lines[total - 1]).toBe("");
+		expect(total).toBeLessThan(header);
+		// And it keeps company with the other counters rather than floating alone.
+		expect(lines.slice(0, total).some((l) => l.startsWith("- bundle:"))).toBe(true);
+	});
+
+	test("the bounded footer survives SNS truncation (Greptile P2 on #900)", () => {
+		// The notables list is unbounded since SIO-1873 and report-email.ts
+		// truncates from the TAIL, so with the counters printed last a noisy
+		// account lost exactly the operational state it most needed. Measured at
+		// 1400 notables: "check errors", "suppressed by ledger" and the bundle
+		// canary were all cut while the list they were cut for ran on.
+		const notables = Array.from({ length: 1400 }, (_, i) =>
+			notable({ resource: `/ecs/fargate/svc-${i}`, summary: "x".repeat(200) }),
+		);
+		const text = formatDigest({
+			...quietDigest,
+			findingCounts: { logs: 1400 },
+			checkErrors: 26,
+			checkErrorsByCheck: { logs: 26 },
+			suppressedCount: 55,
+			bundleVersion: "f659033b",
+			notables,
+		});
+		// Big enough that truncation genuinely fires, or this proves nothing.
+		expect(new TextEncoder().encode(text).length).toBeGreaterThan(262_144);
+		const cut = truncateUtf8(text, 262_144);
+		expect(cut.length).toBeLessThan(text.length);
+		for (const field of ["check errors: 26 (logs=26)", "suppressed by ledger: 55", "bundle: f659033b"]) {
+			expect(cut).toContain(field);
+		}
 	});
 
 	test("a large digest stays far inside the SNS message budget", () => {

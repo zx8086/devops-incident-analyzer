@@ -566,8 +566,36 @@ export function formatDigest(d: DigestInput): string {
 		lines.push("- spend: no cost data yet");
 	}
 
+	// Greptile P2 on #900: the notables list below is UNBOUNDED since SIO-1873,
+	// and report-email.ts truncates from the TAIL at the SNS 256 KiB limit. With
+	// these bounded fields printed last, a noisy enough account lost exactly the
+	// operational state an operator needs most -- verified at 1400 notables:
+	// "check errors: 26", "suppressed by ledger: 55" and the bundle canary were
+	// all cut, while the list they were cut for ran on.
+	//
+	// So they are emitted BEFORE the list. They are a fixed handful of lines and
+	// cannot themselves overflow, which makes them the only part of the body
+	// guaranteed to survive truncation. Both consumers (contracts/report.ts and
+	// the web pane's emphasiseDigest) are line-based, not order-based.
+	lines.push("");
+	// DEGRADED must be self-explanatory from the mailbox: name the failing
+	// family, not just the count.
+	const byCheck = Object.entries(d.checkErrorsByCheck ?? {});
+	lines.push(
+		byCheck.length > 0
+			? `- check errors: ${d.checkErrors} (${byCheck.map(([k, v]) => `${k}=${v}`).join(" ")})`
+			: `- check errors: ${d.checkErrors}`,
+	);
+	if ((d.suppressedCount ?? 0) > 0) lines.push(`- suppressed by ledger: ${d.suppressedCount}`);
+	// Deploy canary: a stale bundle silently drops capabilities; the digest is
+	// where the operator sees the version without an SSM round-trip.
+	lines.push(`- bundle: ${d.bundleVersion ?? "unknown"}`);
+	// The uninvestigated TOTAL belongs with the other bounded counters for the
+	// same reason; the per-finding [uninvestigated] markers stay on their lines.
+	if (uninvestigated > 0) lines.push(`- uninvestigated: ${uninvestigated}`);
+
 	if (notables.length > 0) {
-		lines.push("", "- notable warn+ findings (last 24h):");
+		lines.push("", "- notable warn+ findings (last 24h):", "");
 		// Consecutive entries sharing a resource print it once, so several
 		// signatures from one log group read as one problem rather than several
 		// unrelated ones. Display only: notablesFromJournal has already collapsed
@@ -611,24 +639,6 @@ export function formatDigest(d: DigestInput): string {
 			// squeezed onto the resource line and cut mid-token.
 			for (const line of wrapSummary(n.summary)) lines.push(`      ${line}`);
 		}
-		// Blank line first: with entries now separated, a flush `- uninvestigated:`
-		// would read as part of the last entry's block rather than as the summary
-		// line for the whole list.
-		if (uninvestigated > 0) lines.push("", `- uninvestigated: ${uninvestigated}`);
 	}
-
-	lines.push("");
-	// DEGRADED must be self-explanatory from the mailbox: name the failing
-	// family, not just the count.
-	const byCheck = Object.entries(d.checkErrorsByCheck ?? {});
-	lines.push(
-		byCheck.length > 0
-			? `- check errors: ${d.checkErrors} (${byCheck.map(([k, v]) => `${k}=${v}`).join(" ")})`
-			: `- check errors: ${d.checkErrors}`,
-	);
-	if ((d.suppressedCount ?? 0) > 0) lines.push(`- suppressed by ledger: ${d.suppressedCount}`);
-	// Deploy canary: a stale bundle silently drops capabilities; the digest is
-	// where the operator sees the version without an SSM round-trip.
-	lines.push(`- bundle: ${d.bundleVersion ?? "unknown"}`);
 	return lines.join("\n");
 }
