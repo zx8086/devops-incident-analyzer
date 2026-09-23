@@ -240,6 +240,55 @@ describe("Landing Zone write guards", () => {
 });
 
 describe("Landing Zone governed GitOps writes", () => {
+	test("collects every compare page and fails closed when GitLab reports an incomplete comparison", async () => {
+		const requestedPages: string[] = [];
+		const pagedClient = createGitLabWriteClient({
+			baseUrl: "https://gitlab.example",
+			token: "dedicated-write-token",
+			timeoutMs: 30_000,
+			maxResponseBytes: 200_000,
+			fetchImpl: (async (url: string | URL | Request) => {
+				const parsed = new URL(String(url));
+				const page = parsed.searchParams.get("page") ?? "1";
+				requestedPages.push(page);
+				return new Response(
+					JSON.stringify({
+						compare_timeout: false,
+						diffs: [
+							page === "1"
+								? { old_path: "accounts/prod.yml", new_path: "accounts/prod.yml" }
+								: { old_path: "modules/unreviewed.tf", new_path: "modules/unreviewed.tf" },
+						],
+					}),
+					{ headers: page === "1" ? { "X-Next-Page": "2" } : {} },
+				);
+			}) as typeof fetch,
+		});
+
+		await expect(pagedClient.changedPaths(projectPath, baseSha, branchSha)).resolves.toEqual([
+			"accounts/prod.yml",
+			"modules/unreviewed.tf",
+		]);
+		expect(requestedPages).toEqual(["1", "2"]);
+
+		const incompleteClient = createGitLabWriteClient({
+			baseUrl: "https://gitlab.example",
+			token: "dedicated-write-token",
+			timeoutMs: 30_000,
+			maxResponseBytes: 200_000,
+			fetchImpl: (async (_url: string | URL | Request, _init?: RequestInit) =>
+				new Response(
+					JSON.stringify({
+						compare_timeout: true,
+						diffs: [{ old_path: "accounts/prod.yml", new_path: "accounts/prod.yml" }],
+					}),
+				)) as typeof fetch,
+		});
+		await expect(incompleteClient.changedPaths(projectPath, baseSha, branchSha)).rejects.toThrow(
+			"incomplete comparison",
+		);
+	});
+
 	test("maps per-file concurrency metadata to GitLab without exposing the read credential", async () => {
 		let request: { url: string; init?: RequestInit } | undefined;
 		const writeClient = createGitLabWriteClient({

@@ -166,6 +166,8 @@ const FileResponseSchema = z.object({
 });
 const CommitResponseSchema = z.object({ id: z.string(), parent_ids: z.array(z.string()), web_url: z.string() });
 const CompareResponseSchema = z.object({
+	compare_timeout: z.boolean(),
+	overflow: z.boolean().optional(),
 	diffs: z.array(z.object({ old_path: z.string(), new_path: z.string() })),
 });
 const MergeRequestResponseSchema = z.object({ iid: z.number().int().positive(), web_url: z.string() });
@@ -178,7 +180,11 @@ export function createGitLabWriteClient(options: GitLabWriteClientOptions): GitL
 	const apiRoot = `${options.baseUrl.replace(/\/$/, "")}/api/v4`;
 	const fetchImpl = options.fetchImpl ?? fetch;
 
-	async function request(path: string, init: RequestInit = {}, allowNotFound = false): Promise<unknown | undefined> {
+	async function requestWithHeaders(
+		path: string,
+		init: RequestInit = {},
+		allowNotFound = false,
+	): Promise<{ value: unknown; headers: Headers } | undefined> {
 		const response = await fetchImpl(`${apiRoot}${path}`, {
 			...init,
 			headers: {
@@ -194,7 +200,11 @@ export function createGitLabWriteClient(options: GitLabWriteClientOptions): GitL
 		if (Buffer.byteLength(text, "utf8") > options.maxResponseBytes) {
 			throw new Error(`GitLab response exceeded ${options.maxResponseBytes} bytes`);
 		}
-		return JSON.parse(text) as unknown;
+		return { value: JSON.parse(text) as unknown, headers: response.headers };
+	}
+
+	async function request(path: string, init: RequestInit = {}, allowNotFound = false): Promise<unknown | undefined> {
+		return (await requestWithHeaders(path, init, allowNotFound))?.value;
 	}
 
 	return {
@@ -240,11 +250,42 @@ export function createGitLabWriteClient(options: GitLabWriteClientOptions): GitL
 			};
 		},
 		async changedPaths(projectPath, fromSha, toSha) {
-			const params = new URLSearchParams({ from: fromSha, to: toSha, straight: "true" });
-			const comparison = CompareResponseSchema.parse(
-				await request(`${projectApiPath(projectPath)}/repository/compare?${params.toString()}`),
-			);
-			return [...new Set(comparison.diffs.flatMap((diff) => [diff.old_path, diff.new_path]))].sort();
+			const paths = new Set<string>();
+			let page = 1;
+			const visitedPages = new Set<number>();
+			while (true) {
+				if (visitedPages.has(page) || visitedPages.size >= 100) {
+					throw new Error("GitLab returned invalid or excessive comparison pagination");
+				}
+				visitedPages.add(page);
+				const params = new URLSearchParams({
+					from: fromSha,
+					to: toSha,
+					straight: "true",
+					page: String(page),
+					per_page: "100",
+				});
+				const response = await requestWithHeaders(
+					`${projectApiPath(projectPath)}/repository/compare?${params.toString()}`,
+				);
+				if (!response) throw new Error("GitLab comparison response was missing");
+				const comparison = CompareResponseSchema.parse(response.value);
+				if (comparison.compare_timeout || comparison.overflow === true) {
+					throw new Error("GitLab returned an incomplete comparison; refusing to authorize changed paths");
+				}
+				for (const diff of comparison.diffs) {
+					paths.add(diff.old_path);
+					paths.add(diff.new_path);
+				}
+				const nextPageHeader = response.headers.get("x-next-page")?.trim() ?? "";
+				if (!nextPageHeader) break;
+				const nextPage = Number(nextPageHeader);
+				if (!Number.isSafeInteger(nextPage) || nextPage <= page) {
+					throw new Error("GitLab returned invalid comparison pagination metadata");
+				}
+				page = nextPage;
+			}
+			return [...paths].sort();
 		},
 		async createBranch(projectPath, name, refSha) {
 			const branch = BranchResponseSchema.parse(
