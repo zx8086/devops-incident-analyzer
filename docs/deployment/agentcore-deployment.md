@@ -1,9 +1,9 @@
 # AWS Bedrock AgentCore Deployment
 
 > **Targets:** Bun 1.3.9+ | AWS Bedrock AgentCore | Docker
-> **Last updated:** 2026-05-28
+> **Last updated:** 2026-09-23
 
-Guide for deploying MCP servers to AWS Bedrock AgentCore Runtime. Covers the container contract, parameterized Dockerfile, IAM policies, deployment steps, and local testing. Each MCP server is deployed as an independent AgentCore Runtime behind a shared AgentCore Gateway that the agent discovers tools through.
+Guide for deploying supported MCP servers to AWS Bedrock AgentCore Runtime. Covers the container contract, parameterized Dockerfile, IAM policies, deployment steps, and local testing. Each supported MCP server is deployed as an independent AgentCore Runtime behind a shared AgentCore Gateway that the agent discovers tools through.
 
 ---
 
@@ -17,7 +17,9 @@ AgentCore Runtime hosts MCP servers inside isolated microVMs. Each server runs a
 
 The AgentCore Gateway aggregates multiple Runtime instances behind a single endpoint, allowing the agent to discover all tools across all seven MCP servers through one connection.
 
-Each MCP server is deployed independently. The parameterized `Dockerfile.agentcore` at the repository root builds any of the seven servers using a build argument.
+Each MCP server is deployed independently. The parameterized `Dockerfile.agentcore` can build the workspace MCP packages, but `scripts/agentcore/deploy.sh` still needs an explicit per-server environment mapping before a new package is considered deployable through this procedure.
+
+The PVH Landing Zone package is present in the Docker build context, but the generic deployment script does not yet map its `LANDING_ZONE_IAC_*`, GitLab read, or governed-write settings and does not set its server-specific port/transport names. Do not deploy it with `MCP_SERVER=landing-zone-iac` today. Run it as a separately configured HTTP service on port 9088, or add and review explicit deployment-script support in a dedicated change. See [the Landing Zone runbook](../operations/landing-zone-agent-runbook.md).
 
 ---
 
@@ -252,6 +254,7 @@ Key parameters:
 | Konnect | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION` | Uses Kong Konnect API token, region: `us\|eu\|au\|me\|in` |
 | GitLab | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` | Proxy to GitLab native MCP + custom REST tools |
 | Atlassian | `ATLASSIAN_SITE_NAME`, `ATLASSIAN_MCP_URL`, `ATLASSIAN_OAUTH_CALLBACK_PORT`, `ATLASSIAN_READ_ONLY` | OAuth 2.0 flow to Atlassian Cloud; read-only enforced by default |
+| Landing Zone IaC | Not supported by `scripts/agentcore/deploy.sh` yet | The image can be built, but the server-specific transport, read token, allowlists, and secret-store mappings require a dedicated reviewed deployment change. |
 
 ### Step 5: Register as Gateway Target
 

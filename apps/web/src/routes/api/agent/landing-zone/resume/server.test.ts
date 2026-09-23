@@ -59,6 +59,25 @@ const resumeAgentMock = mock(
 );
 let pendingQueue: Array<{ value: unknown } | undefined> = [];
 const getPendingInterruptMock = mock(async () => pendingQueue.shift());
+const landingZoneTelemetry = {
+	agent: "landing-zone-terraform",
+	intent: "propose-change",
+	repositories: ["aws-lz-account-creator"],
+	evidenceAvailability: {
+		gitlab: "collected",
+		okf: "collected",
+		terraformDocs: "collected",
+		awsDocs: "collected",
+		awsApi: "skipped",
+		memory: "collected",
+		knowledgeGraph: "collected",
+	},
+	riskTier: "high",
+	outcome: "answered",
+	graphUsed: true,
+	memoryUsed: true,
+	knowledgeGraphUsed: true,
+} as const;
 function seedPending(...values: Array<{ value: unknown } | undefined>) {
 	pendingQueue = values;
 }
@@ -68,6 +87,7 @@ mock.module("$lib/server/agent", () => ({
 	getPendingInterrupt: getPendingInterruptMock,
 	getPipelineNodes: mock(async () => new Set(["reviewGate", "openMergeRequest", "watchPipeline"])),
 	getLastAssistantText: mock(async () => "The proposal was handled."),
+	getLandingZoneTurnTelemetry: mock(async () => landingZoneTelemetry),
 	pruneThreadState: mock(() => Promise.resolve()),
 	runPostTurn: mock(() => Promise.resolve()),
 	setSessionOutcome: mock(() => undefined),
@@ -161,6 +181,11 @@ describe("POST /api/agent/landing-zone/resume", () => {
 		expect(args.resumeValue).toEqual(expected);
 		expect(streamed[0]?.type).toBe("landing_zone_review_resolved");
 		expect(streamed.at(-1)?.type).toBe("done");
+		expect(streamed.at(-1)?.telemetry).toEqual(landingZoneTelemetry);
+		const invokeOptions = (resumeAgentMock.mock.calls as unknown as unknown[][])[0]?.[0] as {
+			metadata?: Record<string, unknown>;
+		};
+		expect(invokeOptions.metadata).toMatchObject({ agent_id: "landing-zone-terraform", graph_used: true });
 	});
 
 	test("re-emits an amended review and does not finalize the turn", async () => {

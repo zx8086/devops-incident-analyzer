@@ -1,6 +1,7 @@
 // apps/web/src/lib/server/langsmith-tags.ts
 export interface LangSmithTagOptions {
 	threadId: string;
+	agentName?: string;
 	dataSources?: string[];
 	isFollowUp?: boolean;
 	resumed?: boolean;
@@ -8,6 +9,7 @@ export interface LangSmithTagOptions {
 
 export function buildLangSmithTags(opts: LangSmithTagOptions): string[] {
 	const tags = ["chat", `thread:${opts.threadId}`];
+	if (opts.agentName) tags.push(`agent:${opts.agentName}`);
 	tags.push(
 		opts.dataSources && opts.dataSources.length > 0
 			? `datasources:${[...opts.dataSources].sort().join(",")}`

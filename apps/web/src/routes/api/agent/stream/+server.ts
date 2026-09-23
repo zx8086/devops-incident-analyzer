@@ -18,6 +18,7 @@ import {
 	decrementSseConnections,
 	getClosureRequest,
 	getIacTurnOutcome,
+	getLandingZoneTurnTelemetry,
 	getLastAssistantText,
 	getPendingInterrupt,
 	getPiHandoffRequest,
@@ -156,12 +157,15 @@ export const POST: RequestHandler = async ({ request }) => {
 									runName: "agent.request",
 									tags: buildLangSmithTags({
 										threadId,
+										agentName: body.agentName,
 										dataSources: body.dataSources,
 										isFollowUp: body.isFollowUp,
 									}),
 									metadata: {
 										request_id: requestId,
 										session_id: threadId,
+										agent_id: body.agentName ?? "incident-analyzer",
+										graph_used: true,
 									},
 								});
 
@@ -224,8 +228,10 @@ export const POST: RequestHandler = async ({ request }) => {
 									}
 									const finalText = await getLastAssistantText(threadId, "landing-zone-terraform");
 									if (finalText) send({ type: "message", content: finalText });
+									const telemetry = await getLandingZoneTurnTelemetry(threadId);
 									await pruneThreadState(threadId, body.agentName);
 									await runPostTurn({ agentName: body.agentName, threadId });
+									log.info({ ...telemetry, responseTime: Date.now() - startTime }, "agent.landing-zone.turn");
 									send({
 										type: "done",
 										threadId,
@@ -233,6 +239,7 @@ export const POST: RequestHandler = async ({ request }) => {
 										runId,
 										responseTime: Date.now() - startTime,
 										toolsUsed,
+										telemetry,
 									});
 									return;
 								}

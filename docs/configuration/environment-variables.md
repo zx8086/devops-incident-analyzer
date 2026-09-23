@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-07-19
+> **Last updated:** 2026-09-23
 
 Complete reference for all environment variables used across the DevOps Incident Analyzer monorepo. Variables are grouped by service. Each table lists the variable name, whether it is required, its default value (if any), and a description.
 
@@ -123,7 +123,31 @@ The Elastic IaC MCP server (`packages/mcp-server-elastic-iac`, port 9086) backs 
 | `ELASTIC_IAC_MCP_URL` | Yes (for the IaC agent) | `http://localhost:9086` | URL the web server/agent connects to (`apps/web/src/lib/server/agent.ts`). Its `/identity` role must be `elastic-iac-mcp`. |
 | `ELASTIC_IAC_GITLAB_TOKEN` | No | -- | Agent-side GitLab token for branch/commit/MR; mirrors the MCP-side default so no extra config is needed when shared. Rotating it in `.env` requires a full web dev-server restart: Vite restarts in place on the `.env` change but its `loadEnv` keeps the existing (stale) `process.env` value, so the importer keeps 401ing; since SIO-1647 the importer backs off 15 min per rejected token value and logs one warn saying so. |
 
-### Agent-side config-edit JSON path templates
+## PVH Landing Zone IaC MCP
+
+The Landing Zone MCP (`packages/mcp-server-landing-zone-iac`, port 9088) supplies bounded private-GitLab evidence to the `landing-zone-terraform` graph. Its ten read tools are the default surface. Three branch/commit/MR tools are registered only after the write policy validates. It has no merge, pipeline-trigger, Terraform apply, or Terraform state tools.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LANDING_ZONE_IAC_MCP_URL` | Yes (for Landing Zone repository evidence) | `http://localhost:9088` | URL the web runtime connects to. Unset means no Landing Zone MCP tools are registered. |
+| `LANDING_ZONE_IAC_MCP_TRANSPORT` | No | `http` | Transport mode: `http` or `stdio`. |
+| `LANDING_ZONE_IAC_MCP_PORT` | No | `9088` | HTTP listener port. |
+| `LANDING_ZONE_IAC_MCP_HOST` | No | `0.0.0.0` | Bind host. Restrict at the deployment network boundary. |
+| `LANDING_ZONE_IAC_MCP_PATH` | No | `/mcp` | HTTP MCP path. |
+| `GITLAB_BASE_URL` | No | `https://gitlab.com` | GitLab REST base URL used by this MCP. |
+| `GITLAB_PERSONAL_ACCESS_TOKEN` | Conditional | -- | Read credential. Give it only the access needed to read approved Landing Zone repositories. |
+| `LANDING_ZONE_IAC_GITLAB_TIMEOUT_MS` | No | `30000` | Per-request GitLab deadline. |
+| `LANDING_ZONE_IAC_MAX_RESPONSE_BYTES` | No | `200000` | Response cap; accepted range 1,024 through 2,000,000 bytes. |
+| `LANDING_ZONE_WRITE_ENABLED` | No | `false` | Registers governed branch/commit/open-MR tools only when the complete policy below validates. |
+| `LANDING_ZONE_GITLAB_WRITE_TOKEN` | Required when writes enabled | -- | Dedicated write credential. It must differ from the read credential. |
+| `LANDING_ZONE_WRITE_REVIEW_SECRET` | Required when writes enabled | -- | Independent secret, at least 32 bytes, used to sign short-lived review capabilities. It must differ from the write token. |
+| `LANDING_ZONE_WRITE_PROJECTS` | Required when writes enabled | -- | Comma-separated exact GitLab project paths that may receive a proposal. |
+| `LANDING_ZONE_WRITE_PATHS` | Required when writes enabled | -- | JSON object mapping every writable project to one or more repository-relative allowed path prefixes. Absolute and parent-traversal paths are rejected. |
+| `LANDING_ZONE_WRITE_BACKEND_PROJECTS` | No | -- | Comma-separated subset of writable projects with separately approved backend changes. Empty denies backend changes. |
+
+`AWS_MCP_URL` does not currently enable Landing Zone live-state evidence. The production graph is constructed with Landing Zone AWS reads disabled, and the Terraform/AWS documentation collector seams are also not yet connected. See [the architecture](../architecture/landing-zone-terraform-agent.md) and [operations runbook](../operations/landing-zone-agent-runbook.md).
+
+## Elastic IaC agent-side config-edit JSON path templates
 
 The config-edit proposers resolve repo file paths from templates. `${cluster}`, `${policy}`, etc. are literal placeholders the agent substitutes (config, not JS template literals). All optional with sensible repo-relative defaults; override only if the repo layout changes.
 
@@ -527,6 +551,7 @@ URLs the agent uses to connect to each MCP server via `MultiServerMCPClient`. Th
 | `GITLAB_MCP_URL` | Yes | `http://localhost:9084` | GitLab MCP server URL |
 | `ATLASSIAN_MCP_URL` | Yes | `http://localhost:9085` | URL the agent uses to reach the local Atlassian MCP server (the upstream Rovo endpoint the proxy forwards to is `ATLASSIAN_UPSTREAM_MCP_URL`) |
 | `AWS_MCP_URL` | Yes (for AWS datasource) | `http://localhost:3001` | URL the agent uses to reach the AWS MCP server. Locally points at the SigV4 proxy; in production points at the deployed AgentCore endpoint. See [AWS MCP — Multi-Estate](#aws-mcp--multi-estate) for the full AgentCore configuration. |
+| `LANDING_ZONE_IAC_MCP_URL` | Yes (for Landing Zone repository evidence) | `http://localhost:9088` | URL for the PVH Landing Zone read and optional governed proposal server. |
 
 In Docker Compose, these resolve to service names (e.g., `http://elastic-mcp:9080`). In bare-metal development, they resolve to `localhost` with each server's configured port.
 

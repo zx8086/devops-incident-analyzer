@@ -21,14 +21,15 @@ const mockCreateMcpClient = mock(async () => {
 const mockMcpEvents = new EventEmitter();
 // SIO-1687: records what pruneThreadState stashed as the evidence TOC.
 const mockSetEvidenceToc = mock((_threadId: string, _toc?: string) => undefined);
-const mockGetState = mock(() =>
-	Promise.resolve({
-		values: {
-			messages: [{ id: "old1" }, { id: "a" }, { id: "b" }],
-			// SIO-1687: the evidence this turn fetched, captured before the reset.
-			dataSourceResults: [{ dataSourceId: "elastic" }],
-		},
-	}),
+const mockGetState = mock(
+	(): Promise<{ values: Record<string, unknown> }> =>
+		Promise.resolve({
+			values: {
+				messages: [{ id: "old1" }, { id: "a" }, { id: "b" }],
+				// SIO-1687: the evidence this turn fetched, captured before the reset.
+				dataSourceResults: [{ dataSourceId: "elastic" }],
+			},
+		}),
 );
 
 const mockAgentDef = {
@@ -113,6 +114,17 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-930: agent.ts imports iacTurnOutcome (used by getIacTurnOutcome). The mock must export it
 	// or the namespace import throws "Export named 'getIacTurnOutcome' not found" downstream.
 	iacTurnOutcome: mock(() => "completed" as const),
+	projectLandingZoneTurnTelemetry: mock((state: Record<string, unknown>) => ({
+		agent: "landing-zone-terraform" as const,
+		intent: state.intent ?? "understand",
+		repositories: state.repositoryScope ?? [],
+		evidenceAvailability: {},
+		riskTier: "unassessed" as const,
+		outcome: state.outcome ?? "pending",
+		graphUsed: true as const,
+		memoryUsed: false,
+		knowledgeGraphUsed: false,
+	})),
 	AttachmentError: class AttachmentError extends Error {},
 	flushLangSmithCallbacks: mock(() => Promise.resolve()),
 	// SIO-846: agent.ts now runs session bootstrap/teardown via these.
@@ -340,7 +352,8 @@ mock.module("@langchain/core/messages", () => ({
 	},
 }));
 
-const { _waitForAgentStartupForTest, ensureMcpConnected, invokeAgent, pruneThreadState } = await import("./agent.ts");
+const { _waitForAgentStartupForTest, ensureMcpConnected, getLandingZoneTurnTelemetry, invokeAgent, pruneThreadState } =
+	await import("./agent.ts");
 
 test("cold startup attempts MCP before its first schedule registration", async () => {
 	await _waitForAgentStartupForTest();
@@ -418,6 +431,25 @@ describe("invokeAgent", () => {
 		expect(call[0].messages).toBeDefined();
 		expect(call[0].authorizedAccountScope).toEqual(["111122223333", "444455556666"]);
 		expect(call[0].targetDataSources).toBeUndefined();
+	});
+});
+
+test("reads privacy-safe Landing Zone telemetry from the checkpoint", async () => {
+	mockGetState.mockResolvedValueOnce({
+		values: {
+			intent: "review",
+			repositoryScope: ["aws-lz-account-creator"],
+			outcome: "answered",
+		},
+	});
+
+	const telemetry = await getLandingZoneTurnTelemetry("thread-landing-zone-telemetry");
+	expect(telemetry).toMatchObject({
+		agent: "landing-zone-terraform",
+		intent: "review",
+		repositories: ["aws-lz-account-creator"],
+		outcome: "answered",
+		graphUsed: true,
 	});
 });
 

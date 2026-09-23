@@ -22,4 +22,9 @@ describe("buildLangSmithTags", () => {
 		const tags = buildLangSmithTags({ threadId: "abc", resumed: true });
 		expect(tags).toContain("resumed");
 	});
+
+	test("includes the selected agent without exposing request content", () => {
+		const tags = buildLangSmithTags({ threadId: "abc", agentName: "landing-zone-terraform" });
+		expect(tags).toContain("agent:landing-zone-terraform");
+	});
 });

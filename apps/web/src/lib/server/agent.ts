@@ -22,9 +22,12 @@ import {
 	installMemoryPromotion,
 	installSkillLearner,
 	isEvidenceTocEnabled,
+	type LandingZoneStateType,
+	type LandingZoneTurnTelemetry,
 	mcpEvents,
 	needsPruning,
 	type OutcomeTurn,
+	projectLandingZoneTurnTelemetry,
 	pruneState,
 	runBootstrap,
 	runPostTurn,
@@ -815,4 +818,14 @@ export async function getIacTurnOutcome(threadId: string): Promise<IacTurnOutcom
 	} catch {
 		return "completed";
 	}
+}
+
+// Read before checkpoint pruning so completion telemetry describes this turn,
+// not a later reset state. The projection deliberately contains categorical
+// metadata only; prompts, evidence content, account scope, and identifiers stay
+// in the graph checkpoint and are never copied into logs or SSE events.
+export async function getLandingZoneTurnTelemetry(threadId: string): Promise<LandingZoneTurnTelemetry> {
+	const graph = await getLandingZoneGraph();
+	const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+	return projectLandingZoneTurnTelemetry(snapshot.values as LandingZoneStateType);
 }

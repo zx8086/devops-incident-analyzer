@@ -248,6 +248,25 @@ const invokeAgentMock = mock(
 // done-event path intact.
 const buildLangSmithTagsMock = mock(() => [] as string[]);
 const getLastAssistantTextMock = mock(async () => "");
+const landingZoneTelemetry = {
+	agent: "landing-zone-terraform",
+	intent: "understand",
+	repositories: ["aws-lz-account-creator"],
+	evidenceAvailability: {
+		gitlab: "collected",
+		okf: "collected",
+		terraformDocs: "collected",
+		awsDocs: "collected",
+		awsApi: "skipped",
+		memory: "collected",
+		knowledgeGraph: "skipped",
+	},
+	riskTier: "low",
+	outcome: "answered",
+	graphUsed: true,
+	memoryUsed: true,
+	knowledgeGraphUsed: false,
+} as const;
 mock.module("$lib/server/langsmith-tags", () => ({
 	buildLangSmithTags: buildLangSmithTagsMock,
 }));
@@ -261,6 +280,7 @@ mock.module("$lib/server/agent", () => ({
 	getLastAssistantText: getLastAssistantTextMock,
 	// SIO-930: stream/+server.ts imports this to label the elastic-iac done event.
 	getIacTurnOutcome: mock(async () => "completed"),
+	getLandingZoneTurnTelemetry: mock(async () => landingZoneTelemetry),
 	// SIO-476: stream/+server.ts calls this after each completed turn.
 	pruneThreadState: mock(() => Promise.resolve()),
 	// SIO-942: stream/+server.ts calls this after each completed turn (live-memory flush).
@@ -392,6 +412,11 @@ describe("POST /api/agent/stream — SSE stream", () => {
 			content: "PVH account vending uses the account YAML surface.",
 		});
 		expect(events.at(-1)?.type).toBe("done");
+		expect(events.at(-1)?.telemetry).toEqual(landingZoneTelemetry);
+		const options = (invokeAgentMock.mock.calls.at(-1) as unknown[] | undefined)?.[1] as
+			| { metadata?: Record<string, unknown> }
+			| undefined;
+		expect(options?.metadata).toMatchObject({ agent_id: "landing-zone-terraform", graph_used: true });
 	});
 
 	test("forwards aggregator chunks, then done", async () => {

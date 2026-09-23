@@ -1,7 +1,7 @@
 # Documentation Index
 
 > **Targets:** Bun 1.4.2+ | LangGraph | TypeScript 5.x | MCP SDK 1.30.0
-> **Last updated:** 2026-09-06
+> **Last updated:** 2026-09-23
 
 Project-specific documentation for the DevOps Incident Analyzer monorepo. This index covers architecture, configuration, deployment, development, and operations for a LangGraph supervisor agent that orchestrates seven MCP server sub-agents (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian, AWS) to correlate DevOps incidents across 210+ tools, plus a peer **elastic-iac** GitOps proposer agent (an 8th MCP server) for Elastic Cloud infrastructure changes and the **pi-fleet-console** agent (SIO-1655) that queries the live pi-coms account spokes.
 
@@ -26,6 +26,8 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | [pi-fleet console graph](architecture/pi-fleet-third-graph.md) | SIO-1655: the in-process third agent that asks several account spokes one question and synthesizes their replies; the separate console persona, the five hub tools, and the untrusted-reply boundary (the only path where a hub reply reaches a model) |
 | Implement a knowledge graph in your own agent | [Knowledge Graph Guide](../guides/knowledge-graph-guide.md) |
 | Use the Elastic IaC (GitOps proposer) agent | [Elastic IaC GitOps Proposer](architecture/elastic-iac-proposer.md) |
+| Use the PVH Landing Zone Terraform agent | [Landing Zone Terraform Agent](architecture/landing-zone-terraform-agent.md) |
+| Operate or recover the Landing Zone agent | [Landing Zone Agent Runbook](operations/landing-zone-agent-runbook.md) |
 | Ask the live fleet a question across accounts | [pi-fleet console graph](architecture/pi-fleet-third-graph.md) |
 | Add or modify MCP tools | [Adding MCP Tools](development/adding-mcp-tools.md) |
 | Understand action-driven tool filtering | [Action Tool Maps](development/action-tool-maps.md) |
@@ -55,6 +57,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | [Gitagent Bridge](architecture/gitagent-bridge.md) | YAML-to-LangGraph adapter: manifest loading, model factory, skill and tool resolution |
 | [MCP Integration](architecture/mcp-integration.md) | 8 MCP server connections (7 datasource + elastic-iac), tool scoping, health monitoring, trace propagation |
 | [Elastic IaC GitOps Proposer](architecture/elastic-iac-proposer.md) | The natural-language change agent (peer to the incident-analyzer): 31-node GitOps proposer, `elastic-iac-mcp` (:9086), HITL plan-review, JSON-edit-via-GitLab-API; 17 config-edit workflows (version-upgrade / tier-resize / ilm-rollout / ilm-delete / topology / slo / alerting / dataview / cluster-default-edit / cluster-default-delete / cluster-settings-edit / space / security / fleet-integration / dashboard / index-template-create / ingest-pipeline-create / ingest-pipeline-edit) plus drift, synthetics-drift, and Fleet-upgrade CI sub-flows, with verbatim-prompt capture, knowledge-graph + agent-memory enrichment on the plan-review card. Agent proposes, CI + human dispose. |
+| [PVH Landing Zone Terraform Agent](architecture/landing-zone-terraform-agent.md) | Separate evidence-first graph for PVH repository routing, standards reconciliation, risk gates, topology projection, Agent Memory, historical GitLab learning, and optional human-reviewed GitOps proposals. |
 | [Knowledge Graph](architecture/knowledge-graph.md) | Optional embedded entity+correlation graph (lbug/LadybugDB): store + three-layer IaC schema (incl. the `Prompt` node), the in-process MCP server (:9087) with curated `kg_*` tools + read-only Cypher, the 7 record/enrich pipeline nodes across both agents, gating, and the lbug exclusive-lock / teardown gotchas |
 
 ### Configuration
@@ -92,6 +95,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | [Observability](operations/observability.md) | Pino structured logging, OpenTelemetry tracing, LangSmith integration |
 | [Troubleshooting](operations/troubleshooting.md) | Common issues, diagnostic commands, and resolution steps |
 | [OAuth Seeding](operations/oauth-seeding.md) | One-time OAuth token seeding for Atlassian and GitLab |
+| [Landing Zone Agent Runbook](operations/landing-zone-agent-runbook.md) | Safe bring-up, capability checks, write-mode enablement, historical import, privacy-safe telemetry, troubleshooting, and rollback. |
 
 ### Runbooks
 

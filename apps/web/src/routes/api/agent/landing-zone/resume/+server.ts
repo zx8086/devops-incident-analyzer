@@ -5,6 +5,7 @@ import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/obser
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
 import {
+	getLandingZoneTurnTelemetry,
 	getLastAssistantText,
 	getPendingInterrupt,
 	getPipelineNodes,
@@ -83,8 +84,8 @@ export const POST: RequestHandler = async ({ request }) => {
 								agentName: AGENT,
 								resumeValue,
 								runName: "agent.request",
-								tags: buildLangSmithTags({ threadId: body.threadId, resumed: true }),
-								metadata: { request_id: requestId, session_id: body.threadId },
+								tags: buildLangSmithTags({ threadId: body.threadId, agentName: AGENT, resumed: true }),
+								metadata: { request_id: requestId, session_id: body.threadId, agent_id: AGENT, graph_used: true },
 							});
 							const { toolsUsed } = await pumpEventStream(events, send, await getPipelineNodes(AGENT));
 							await flushLangSmithCallbacks();
@@ -96,10 +97,12 @@ export const POST: RequestHandler = async ({ request }) => {
 							}
 							const finalText = await getLastAssistantText(body.threadId, AGENT);
 							if (finalText) send({ type: "message", content: finalText });
+							const telemetry = await getLandingZoneTurnTelemetry(body.threadId);
 							await pruneThreadState(body.threadId, AGENT);
 							await runPostTurn({ agentName: AGENT, threadId: body.threadId });
 							const responseTime = Date.now() - startedAt;
-							send({ type: "done", threadId: body.threadId, requestId, runId, responseTime, toolsUsed });
+							log.info({ ...telemetry, responseTime }, "agent.landing-zone.turn");
+							send({ type: "done", threadId: body.threadId, requestId, runId, responseTime, toolsUsed, telemetry });
 						},
 						{ "thread.id": body.threadId, "run.id": runId, "request.id": requestId },
 					);
