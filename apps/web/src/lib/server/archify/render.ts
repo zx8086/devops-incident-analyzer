@@ -141,5 +141,18 @@ async function renderOnce(type: DiagramType, diagram: unknown): Promise<RenderRe
 // ponytail: matchMedia shim, drop it if upstream Archify grows an embed-config hook.
 export function embedHtml(html: string, theme: "light" | "dark"): string {
 	const shim = `<script>(function(){document.documentElement.setAttribute('data-embed','true');var m=window.matchMedia.bind(window);window.matchMedia=function(q){if(/prefers-color-scheme/.test(q)){var light=${theme === "light"};var hit=/light/.test(q)?light:!light;return{matches:hit,media:q,onchange:null,addEventListener:function(){},removeEventListener:function(){},addListener:function(){},removeListener:function(){},dispatchEvent:function(){return false}}}return m(q)}})();</script>`;
-	return html.replace(/<head>/i, `<head>${shim}`);
+	// SIO-1878: Archify's embed mode sets body { overflow: hidden } and draws the SVG (viewBox only) at
+	// the frame's full width, so anything taller than the frame was clipped with no way to scroll.
+	// Capping the height lets the default preserveAspectRatio (meet) scale the whole diagram in.
+	const fit = `<style>html[data-embed="true"] .diagram-container svg{display:block;width:100%;height:auto;max-height:calc(100vh - 1rem)}</style>`;
+	return html.replace(/<head>/i, `<head>${shim}`).replace(/<\/head>/i, `${fit}</head>`);
+}
+
+// The SVG's own viewBox size, so the card can give the frame the diagram's aspect ratio.
+export function svgViewBox(html: string): { width: number; height: number } | null {
+	const match = html.match(/<svg\b[^>]*\bviewBox="\s*[-\d.]+\s+[-\d.]+\s+([\d.]+)\s+([\d.]+)\s*"/);
+	if (!match?.[1] || !match[2]) return null;
+	const width = Number(match[1]);
+	const height = Number(match[2]);
+	return width > 0 && height > 0 ? { width, height } : null;
 }

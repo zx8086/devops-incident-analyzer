@@ -125,5 +125,6 @@ describe("POST /api/diagram", () => {
 		const html = await response.text();
 		expect(html).toContain("setAttribute('data-embed','true')");
 		expect(html).toContain("var light=true");
+		expect(response.headers.get("x-archify-viewbox")).toMatch(/^\d+(\.\d+)? \d+(\.\d+)?$/); // SIO-1878
 	}, 30_000);
 });

@@ -1,7 +1,7 @@
 // apps/web/src/lib/server/archify/render.test.ts
 import { describe, expect, test } from "bun:test";
 import { APPLICATION_FIXTURE } from "./fixtures.ts";
-import { RendererBusyError, remember, renderDiagram, rendererLoad } from "./render.ts";
+import { embedHtml, RendererBusyError, remember, renderDiagram, rendererLoad, svgViewBox } from "./render.ts";
 import { applicationToArchify } from "./to-archify.ts";
 
 describe("renderDiagram admission (Greptile P1 on #904)", () => {
@@ -30,4 +30,19 @@ describe("remember", () => {
 		for (let i = 0; i < 5; i++) remember(cache, `k${i}`, i, 3);
 		expect([...cache.keys()]).toEqual(["k2", "k3", "k4"]);
 	});
+});
+
+describe("embed sizing (SIO-1878)", () => {
+	test("embedHtml caps the SVG at the frame height, and svgViewBox reads the diagram size", async () => {
+		const result = await renderDiagram("architecture", applicationToArchify(APPLICATION_FIXTURE));
+		if (!result.ok) throw new Error(result.error);
+		const html = embedHtml(result.html, "dark");
+		// Archify's embed CSS hides overflow, so without this cap a tall diagram is clipped.
+		expect(html).toContain("max-height:calc(100vh - 1rem)");
+		expect(html.indexOf("max-height:calc(100vh")).toBeLessThan(html.indexOf("</head>"));
+		const box = svgViewBox(result.html);
+		expect(box?.width).toBeGreaterThan(0);
+		expect(box?.height).toBeGreaterThan(0);
+		expect(svgViewBox('<svg role="img">')).toBeNull();
+	}, 30_000);
 });
