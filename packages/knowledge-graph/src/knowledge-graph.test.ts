@@ -30,6 +30,7 @@ import {
 	priorRootCauses,
 	proposedChangesWithMr,
 	purgeUncuratedIncidents,
+	REL_TYPES,
 	recordAppMapTopologyEdges,
 	recordIacChange,
 	recordIacPrompt,
@@ -103,6 +104,60 @@ describe("schema", () => {
 		for (const [relationship, endpoints] of relationships) {
 			const migration = MIGRATIONS.find((candidate) => candidate.includes(`REL TABLE IF NOT EXISTS ${relationship}(`));
 			expect(migration).toContain(endpoints);
+		}
+	});
+
+	test("MIGRATIONS model Landing Zone account, routing, and DNS topology", () => {
+		for (const label of [
+			"AwsOrganization",
+			"OrganizationalUnit",
+			"Region",
+			"AvailabilityZone",
+			"RouteTable",
+			"Route",
+			"InternetGateway",
+			"NatGateway",
+			"TransitGateway",
+			"CoreNetwork",
+			"NetworkAttachment",
+			"VpcEndpoint",
+			"NetworkAcl",
+			"HostedZone",
+			"ResolverEndpoint",
+			"ResolverRule",
+			"DnsFirewallRuleGroup",
+			"CidrBlock",
+		] as const) {
+			expect(NODE_LABELS).toContain(label);
+			expect(MIGRATIONS.some((migration) => migration.includes(`NODE TABLE IF NOT EXISTS ${label}(`))).toBeTrue();
+		}
+
+		const relationships = [
+			["ORG_CONTAINS_OU", "FROM AwsOrganization TO OrganizationalUnit"],
+			["OU_CONTAINS_ACCOUNT", "FROM OrganizationalUnit TO AwsAccount"],
+			["ACCOUNT_OWNS_VPC", "FROM AwsAccount TO Vpc"],
+			["VPC_LOCATED_IN_REGION", "FROM Vpc TO Region"],
+			["VPC_CONTAINS_SUBNET", "FROM Vpc TO Subnet"],
+			["SUBNET_LOCATED_IN_AZ", "FROM Subnet TO AvailabilityZone"],
+			["SUBNET_USES_ROUTE_TABLE", "FROM Subnet TO RouteTable"],
+			["SUBNET_PROTECTED_BY_ACL", "FROM Subnet TO NetworkAcl"],
+			["ROUTE_TABLE_HAS_ROUTE", "FROM RouteTable TO Route"],
+			["ROUTE_DESTINATION_CIDR", "FROM Route TO CidrBlock"],
+			["ROUTE_TARGET_IGW", "FROM Route TO InternetGateway"],
+			["ROUTE_TARGET_NAT", "FROM Route TO NatGateway"],
+			["ROUTE_TARGET_TGW", "FROM Route TO TransitGateway"],
+			["ROUTE_TARGET_CORE_NETWORK", "FROM Route TO CoreNetwork"],
+			["ROUTE_TARGET_VPC_ENDPOINT", "FROM Route TO VpcEndpoint"],
+			["VPC_ASSOCIATED_WITH_HOSTED_ZONE", "FROM Vpc TO HostedZone"],
+			["VPC_USES_RESOLVER_RULE", "FROM Vpc TO ResolverRule"],
+			["VPC_HOSTS_RESOLVER_ENDPOINT", "FROM Vpc TO ResolverEndpoint"],
+			["HOSTED_ZONE_CONTAINS_DNS_RECORD", "FROM HostedZone TO DnsRecord"],
+		] as const;
+		for (const [relationship, endpoints] of relationships) {
+			expect(REL_TYPES).toContain(relationship);
+			expect(MIGRATIONS.find((candidate) => candidate.includes(`REL TABLE IF NOT EXISTS ${relationship}(`))).toContain(
+				endpoints,
+			);
 		}
 	});
 
@@ -213,6 +268,65 @@ describe("schema", () => {
 });
 
 describe("Landing Zone graph writers", () => {
+	test("recordLandingZoneTopology writes evidence facts and endpoint-typed relationships", async () => {
+		const record =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, input: Record<string, unknown>) => Promise<void>>(
+				"recordLandingZoneTopology",
+			);
+		const store = new InMemoryGraphStore();
+		await record(store, {
+			entities: [
+				{
+					id: "vpc:vpc-1",
+					fact: { id: "vpc:vpc-1", kind: "vpc", accountId: "111122223333", properties: { cidr: "10.0.0.0/16" } },
+					provenance: [
+						{ state: "observed", source: "aws-api", resourceId: "vpc-1", observedAt: "2026-09-22T10:00:00.000Z" },
+					],
+					reconciliation: { status: "aligned", confidence: "verified" },
+					validFrom: "2026-09-22T10:00:00.000Z",
+					observedAt: "2026-09-22T10:00:00.000Z",
+					consecutiveMisses: 0,
+				},
+				{
+					id: "subnet:subnet-1",
+					fact: {
+						id: "subnet:subnet-1",
+						kind: "subnet",
+						accountId: "111122223333",
+						properties: { cidr: "10.0.1.0/24", classification: "private" },
+					},
+					provenance: [
+						{ state: "observed", source: "aws-api", resourceId: "subnet-1", observedAt: "2026-09-22T10:00:00.000Z" },
+					],
+					reconciliation: { status: "aligned", confidence: "verified" },
+					validFrom: "2026-09-22T10:00:00.000Z",
+					observedAt: "2026-09-22T10:00:00.000Z",
+					consecutiveMisses: 0,
+				},
+			],
+			relationships: [
+				{
+					id: "vpc-contains-subnet:vpc:vpc-1:subnet:subnet-1",
+					fact: { id: "edge-1", kind: "vpc-contains-subnet", from: "vpc:vpc-1", to: "subnet:subnet-1", properties: {} },
+					provenance: [
+						{ state: "observed", source: "aws-api", resourceId: "subnet-1", observedAt: "2026-09-22T10:00:00.000Z" },
+					],
+					reconciliation: { status: "aligned", confidence: "verified" },
+					validFrom: "2026-09-22T10:00:00.000Z",
+					observedAt: "2026-09-22T10:00:00.000Z",
+					consecutiveMisses: 0,
+				},
+			],
+		});
+
+		expect(store.calls.filter((call) => call.cypher.includes("MERGE (f:TopologyFact"))).toHaveLength(3);
+		expect(store.calls.some((call) => call.cypher.includes("MERGE (n:Vpc"))).toBeTrue();
+		expect(store.calls.some((call) => call.cypher.includes("MERGE (n:Subnet"))).toBeTrue();
+		const edge = store.calls.find((call) => call.cypher.includes("VPC_CONTAINS_SUBNET"));
+		expect(edge?.params).toMatchObject({ status: "aligned", confidence: "verified", validTo: "" });
+		expect(JSON.stringify(edge?.params)).toContain("aws-api");
+	});
+
 	test("recordLandingZoneRepository re-imports one stable repository identity and refreshes source metadata", async () => {
 		const record =
 			requiredLandingZoneApi<(store: InMemoryGraphStore, input: Record<string, unknown>) => Promise<void>>(
@@ -399,6 +513,51 @@ describe("Landing Zone graph writers", () => {
 });
 
 describe("Landing Zone graph readers", () => {
+	test("account network, route, DNS, central attachment, and drift reads bind their filters", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("ACCOUNT_OWNS_VPC", [{ accountId: "111122223333", vpcId: "vpc-1", vpcName: "workload" }]);
+		store.stub("SUBNET_USES_ROUTE_TABLE", [{ subnetId: "subnet-1", routeTableId: "rtb-1" }]);
+		store.stub("ROUTE_TABLE_HAS_ROUTE", [
+			{ routeId: "route-1", destination: "0.0.0.0/0", targetId: "nat-1", targetKind: "nat-gateway" },
+		]);
+		store.stub("HOSTED_ZONE_CONTAINS_DNS_RECORD", [
+			{ recordId: "dns-1", hostname: "api.internal", targetId: "10.0.1.10", targetKind: "ip-address" },
+		]);
+		store.stub("VPC_HAS_NETWORK_ATTACHMENT", [
+			{ vpcId: "vpc-1", attachmentId: "att-1", targetId: "core-1", targetKind: "core-network" },
+		]);
+		store.stub("TopologyFact", [{ id: "vpc:vpc-1", status: "drifted", payload: '{"kind":"vpc"}' }]);
+
+		const accountMap =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, accountId: string) => Promise<unknown[]>>("accountNetworkMap");
+		const subnetRoute =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, subnetId: string) => Promise<unknown[]>>(
+				"subnetRouteAssociation",
+			);
+		const routePath =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, vpcId: string) => Promise<unknown[]>>("vpcRoutePath");
+		const dnsPath =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, hostname: string) => Promise<unknown[]>>(
+				"hostnameResolutionPath",
+			);
+		const attachments =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, vpcId: string) => Promise<unknown[]>>(
+				"centralNetworkAttachments",
+			);
+		const drift =
+			requiredLandingZoneApi<(store: InMemoryGraphStore, accountId?: string) => Promise<unknown[]>>(
+				"landingZoneTopologyDrift",
+			);
+
+		expect(await accountMap(store, "111122223333")).toHaveLength(1);
+		expect(await subnetRoute(store, "subnet-1")).toHaveLength(1);
+		expect(await routePath(store, "vpc-1")).toHaveLength(1);
+		expect(await dnsPath(store, "api.internal")).toHaveLength(1);
+		expect(await attachments(store, "vpc-1")).toHaveLength(1);
+		expect(await drift(store, "111122223333")).toHaveLength(1);
+		expect(store.calls.every((call) => !call.cypher.includes("111122223333"))).toBeTrue();
+	});
+
 	test("repositoryChangeHistory returns MR, pipeline, and plan outcomes newest first", async () => {
 		const read =
 			requiredLandingZoneApi<(store: InMemoryGraphStore, repositoryPath: string, limit?: number) => Promise<unknown[]>>(

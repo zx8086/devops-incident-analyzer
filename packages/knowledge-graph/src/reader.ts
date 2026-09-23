@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import { TOPOLOGY_DISCOVERED_BY, TOPOLOGY_KINDS, type TopologyEdgeKind } from "./schema.ts";
-import type { GraphStore } from "./store.ts";
+import type { GraphRow, GraphStore } from "./store.ts";
 
 // SIO-1202: the exported readers bind numeric args straight into `LIMIT $limit`,
 // so a caller outside the Zod-guarded MCP tool layer (this function is public
@@ -123,6 +123,109 @@ export async function accountManagingRoots(
 		repositoryPath ? { repositoryPath } : undefined,
 	);
 	return rows.map(shapeTerraformRoot);
+}
+
+export interface AccountNetworkMapRow extends GraphRow {
+	accountId: string;
+	vpcId: string;
+	vpcName: string;
+	region?: string;
+	subnetId?: string;
+	subnetCidr?: string;
+}
+
+export async function accountNetworkMap(store: GraphStore, accountId: string): Promise<AccountNetworkMapRow[]> {
+	if (!accountId) return [];
+	return store.run<AccountNetworkMapRow>(
+		"MATCH (a:AwsAccount {id: $accountId})-[owns:ACCOUNT_OWNS_VPC]->(v:Vpc) WHERE owns.validTo = '' OPTIONAL MATCH (v)-[contains:VPC_CONTAINS_SUBNET]->(s:Subnet) WHERE coalesce(contains.validTo, '') = '' RETURN a.id AS accountId, v.id AS vpcId, coalesce(v.name, '') AS vpcName, coalesce(v.region, '') AS region, coalesce(s.id, '') AS subnetId, coalesce(s.cidr, '') AS subnetCidr ORDER BY v.id, s.id",
+		{ accountId },
+	);
+}
+
+export interface SubnetRouteAssociationRow extends GraphRow {
+	subnetId: string;
+	routeTableId: string;
+	status?: string;
+	confidence?: string;
+}
+
+export async function subnetRouteAssociation(
+	store: GraphStore,
+	subnetId: string,
+): Promise<SubnetRouteAssociationRow[]> {
+	if (!subnetId) return [];
+	return store.run<SubnetRouteAssociationRow>(
+		"MATCH (s:Subnet {id: $subnetId})-[r:SUBNET_USES_ROUTE_TABLE]->(rt:RouteTable) WHERE r.validTo = '' RETURN s.id AS subnetId, rt.id AS routeTableId, r.reconciliationStatus AS status, r.confidence AS confidence",
+		{ subnetId },
+	);
+}
+
+export interface VpcRoutePathRow extends GraphRow {
+	routeId: string;
+	destination: string;
+	targetId: string;
+	targetKind: string;
+}
+
+export async function vpcRoutePath(store: GraphStore, vpcId: string): Promise<VpcRoutePathRow[]> {
+	if (!vpcId) return [];
+	return store.run<VpcRoutePathRow>(
+		"MATCH (v:Vpc {id: $vpcId})-[contains:VPC_CONTAINS_SUBNET]->(:Subnet)-[uses:SUBNET_USES_ROUTE_TABLE]->(rt:RouteTable)-[hasRoute:ROUTE_TABLE_HAS_ROUTE]->(route:Route)-[destination:ROUTE_DESTINATION_CIDR]->(cidr:CidrBlock) WHERE contains.validTo = '' AND uses.validTo = '' AND hasRoute.validTo = '' AND destination.validTo = '' OPTIONAL MATCH (route)-[toIgw:ROUTE_TARGET_IGW]->(igw:InternetGateway) WHERE coalesce(toIgw.validTo, '') = '' OPTIONAL MATCH (route)-[toNat:ROUTE_TARGET_NAT]->(nat:NatGateway) WHERE coalesce(toNat.validTo, '') = '' OPTIONAL MATCH (route)-[toTgw:ROUTE_TARGET_TGW]->(tgw:TransitGateway) WHERE coalesce(toTgw.validTo, '') = '' OPTIONAL MATCH (route)-[toCore:ROUTE_TARGET_CORE_NETWORK]->(core:CoreNetwork) WHERE coalesce(toCore.validTo, '') = '' OPTIONAL MATCH (route)-[toEndpoint:ROUTE_TARGET_VPC_ENDPOINT]->(endpoint:VpcEndpoint) WHERE coalesce(toEndpoint.validTo, '') = '' RETURN route.id AS routeId, cidr.cidr AS destination, coalesce(igw.id, nat.id, tgw.id, core.id, endpoint.id, '') AS targetId, CASE WHEN igw.id IS NOT NULL THEN 'internet-gateway' WHEN nat.id IS NOT NULL THEN 'nat-gateway' WHEN tgw.id IS NOT NULL THEN 'transit-gateway' WHEN core.id IS NOT NULL THEN 'core-network' WHEN endpoint.id IS NOT NULL THEN 'vpc-endpoint' ELSE '' END AS targetKind",
+		{ vpcId },
+	);
+}
+
+export interface HostnameResolutionPathRow extends GraphRow {
+	recordId: string;
+	hostname: string;
+	targetId: string;
+	targetKind: string;
+	zoneId?: string;
+}
+
+export async function hostnameResolutionPath(
+	store: GraphStore,
+	hostname: string,
+): Promise<HostnameResolutionPathRow[]> {
+	if (!hostname) return [];
+	return store.run<HostnameResolutionPathRow>(
+		"MATCH (zone:HostedZone)-[contains:HOSTED_ZONE_CONTAINS_DNS_RECORD]->(record:DnsRecord) WHERE record.name = $hostname AND contains.validTo = '' OPTIONAL MATCH (record)-[toIp:DNS_RECORD_RESOLVES_TO_IP]->(ip:IpAddress) WHERE coalesce(toIp.validTo, '') = '' OPTIONAL MATCH (record)-[toEndpoint:DNS_RECORD_RESOLVES_TO_VPC_ENDPOINT]->(endpoint:VpcEndpoint) WHERE coalesce(toEndpoint.validTo, '') = '' OPTIONAL MATCH (record)-[toLb:DNS_RECORD_RESOLVES_TO_LOAD_BALANCER]->(lb:LoadBalancer) WHERE coalesce(toLb.validTo, '') = '' OPTIONAL MATCH (record)-[toRecord:DNS_RECORD_RESOLVES_TO_DNS_RECORD]->(next:DnsRecord) WHERE coalesce(toRecord.validTo, '') = '' RETURN record.id AS recordId, record.name AS hostname, coalesce(ip.ip, endpoint.id, lb.arn, next.id, '') AS targetId, CASE WHEN ip.ip IS NOT NULL THEN 'ip-address' WHEN endpoint.id IS NOT NULL THEN 'vpc-endpoint' WHEN lb.arn IS NOT NULL THEN 'load-balancer' WHEN next.id IS NOT NULL THEN 'dns-record' ELSE '' END AS targetKind, zone.id AS zoneId",
+		{ hostname },
+	);
+}
+
+export interface CentralNetworkAttachmentRow extends GraphRow {
+	vpcId: string;
+	attachmentId: string;
+	targetId: string;
+	targetKind: string;
+}
+
+export async function centralNetworkAttachments(
+	store: GraphStore,
+	vpcId: string,
+): Promise<CentralNetworkAttachmentRow[]> {
+	if (!vpcId) return [];
+	return store.run<CentralNetworkAttachmentRow>(
+		"MATCH (v:Vpc {id: $vpcId})-[hasAttachment:VPC_HAS_NETWORK_ATTACHMENT]->(attachment:NetworkAttachment) WHERE hasAttachment.validTo = '' OPTIONAL MATCH (attachment)-[toTgw:NETWORK_ATTACHMENT_TO_TGW]->(tgw:TransitGateway) WHERE coalesce(toTgw.validTo, '') = '' OPTIONAL MATCH (attachment)-[toCore:NETWORK_ATTACHMENT_TO_CORE_NETWORK]->(core:CoreNetwork) WHERE coalesce(toCore.validTo, '') = '' RETURN v.id AS vpcId, attachment.id AS attachmentId, coalesce(tgw.id, core.id, '') AS targetId, CASE WHEN tgw.id IS NOT NULL THEN 'transit-gateway' WHEN core.id IS NOT NULL THEN 'core-network' ELSE '' END AS targetKind",
+		{ vpcId },
+	);
+}
+
+export interface LandingZoneTopologyDriftRow extends GraphRow {
+	id: string;
+	status: string;
+	payload: string;
+}
+
+export async function landingZoneTopologyDrift(
+	store: GraphStore,
+	accountId?: string,
+): Promise<LandingZoneTopologyDriftRow[]> {
+	return store.run<LandingZoneTopologyDriftRow>(
+		"MATCH (f:TopologyFact) WHERE f.status IN ['drifted', 'conflicting-evidence', 'unknown'] AND ($accountId = '' OR f.accountId = $accountId) AND f.validTo = '' RETURN f.id AS id, f.status AS status, f.payload AS payload ORDER BY f.id",
+		{ accountId: accountId ?? "" },
+	);
 }
 
 export type MergeRequestPipelineOutcome = Omit<LandingZoneChangeHistoryEntry, "summary" | "createdAt">;
