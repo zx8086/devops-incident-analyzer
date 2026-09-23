@@ -222,7 +222,8 @@ function registerGovernedWrites(
 	server.registerTool(
 		"lz_open_merge_request",
 		{
-			description: "Open a draft merge request with evidence, validation, risk, and expected Terraform plan details.",
+			description:
+				"Open a ready-for-review merge request with evidence, validation, risk, and expected Terraform plan details.",
 			inputSchema: OpenMergeRequestInputSchema.shape,
 			annotations: GOVERNED_WRITE_ANNOTATIONS,
 		},

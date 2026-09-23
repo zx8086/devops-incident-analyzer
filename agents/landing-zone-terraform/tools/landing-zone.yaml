@@ -2,7 +2,7 @@ name: landing-zone
 description: >
   Evidence facade for the PVH AWS Landing Zone with governed GitOps proposal tools that
   are absent unless write mode is explicitly enabled. The optional tools may create an
-  isolated branch, commit allowlisted files, and open a draft merge request after human
+  isolated branch, commit allowlisted files, and open a ready-for-review merge request after human
   review. Terraform execution, pipeline mutation, merge, approval, deployment, AWS
   mutation, and state operations are always absent.
 version: 0.1.0
@@ -44,7 +44,7 @@ related_tools:
   - Use review_evidence to check work in flight before calling a checkout current.
   - Use terraform_topology to extract evidence-linked account, network, DNS, and module facts from repository files.
   - Use gitops_proposal only after human approval and complete evidence-backed validation.
-  - Use pipeline_observation after opening the draft merge request; it never triggers CI.
+  - Use pipeline_observation after opening the merge request; it never triggers CI.
 
 tool_mapping:
   mcp_server: landing-zone-iac
@@ -76,12 +76,12 @@ tool_mapping:
     review_evidence: when checking open merge requests and review details that may make the default branch incomplete or stale
     ci_evidence: when reading pipeline jobs, logs, Terraform reports, or plan logs without triggering or changing a pipeline
     terraform_topology: when extracting account, VPC, subnet, route, DNS, and module facts from current repository files
-    gitops_proposal: when a human-approved Landing Zone change may be proposed through an isolated GitLab branch and draft merge request
-    pipeline_observation: when observing the existing draft merge request pipeline and Terraform plan without triggering CI
+    gitops_proposal: when a human-approved Landing Zone change may be proposed through an isolated GitLab branch and ready-for-review merge request
+    pipeline_observation: when observing the existing merge request pipeline and Terraform plan without triggering CI
   action_keywords:
     repository_evidence: [repository, schema, validator, generator, file, code, configuration]
     review_evidence: [merge request, work in flight, open mr, pending change]
     ci_evidence: [pipeline, terraform plan, job log, validation]
     terraform_topology: [account map, vpc, subnet, route, dns, route53, hosted zone, module, network diagram]
-    gitops_proposal: [propose change, create branch, commit files, open merge request, draft mr]
+    gitops_proposal: [propose change, create branch, commit files, open merge request, ready for review]
     pipeline_observation: [watch pipeline, mr pipeline, plan result, pipeline status]

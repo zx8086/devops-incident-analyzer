@@ -574,7 +574,6 @@ export async function openAllowedMergeRequest(
 	if (JSON.stringify(changedPaths) !== JSON.stringify(reviewedPaths)) {
 		throw new Error("Source branch contains paths outside the approved review manifest");
 	}
-	const title = input.title.startsWith("Draft:") ? input.title : `Draft: ${input.title}`;
 	const description = [
 		"## Change summary",
 		input.changeSummary,
@@ -592,7 +591,7 @@ export async function openAllowedMergeRequest(
 	return client.openMergeRequest(projectPath, {
 		sourceBranch: input.targetBranch,
 		targetBranch: defaultBranch,
-		title,
+		title: input.title,
 		description,
 	});
 }

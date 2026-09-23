@@ -383,7 +383,7 @@ describe("Landing Zone governed GitOps writes", () => {
 		expect(result.sha).toBe(commitSha);
 	});
 
-	test("opens a draft MR only when changed paths and metadata match the reviewed manifest", async () => {
+	test("opens a ready-for-review MR only when changed paths and metadata match the reviewed manifest", async () => {
 		let captured: unknown;
 		const input = reviewedMergeRequest();
 		await expect(
@@ -407,7 +407,7 @@ describe("Landing Zone governed GitOps writes", () => {
 		expect(captured).toMatchObject({
 			sourceBranch: "agent/landing-zone/change",
 			targetBranch: "main",
-			title: "Draft: Add reviewed account request",
+			title: "Add reviewed account request",
 		});
 		expect(JSON.stringify(captured)).toContain("generator validation passed");
 		expect(JSON.stringify(captured).toLowerCase()).toContain("never apply");
