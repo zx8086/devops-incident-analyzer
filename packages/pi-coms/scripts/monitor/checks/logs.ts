@@ -82,8 +82,63 @@ export function logsWindow(
 // ten findings, and the worst real account measured 11 KB in total.
 const SAMPLE_EXCERPT = 200;
 
+// SIO-1874: the excerpt was mostly correlation ids. Measured live on
+// eu-oit-prd (2026-09-23): 76 of 188 characters were spent on the leading
+// timestamp, trace id and span id BEFORE the message began, and 17 of 21
+// excerpts were cut mid-message -- so the digest showed which request failed
+// and never what went wrong. Zero of 28 findings had a visible exception name.
+//
+// Both real producer formats are handled, because a stripper tested against one
+// is untested. Measured from live journals:
+//   eu-oit-prd     `2026-09-22 08:55:22,710 ERROR a39779fa... b1bcd4b3... context= [com.pvh...`
+//   eu-b2becom-v2  `2026-09-22T10:39:11.020Z trace_id=6ab25a... span_id=8b553a... ERROR 1 --- [Cont...`
+// A line that matches neither (a bare stack frame, `at org.springframework...`)
+// is left exactly as it is: stripping is best-effort and must never eat the
+// message it exists to reveal.
+//
+// The ids are dropped, not relocated: the finding's evidence keeps the full
+// sample, and an operator correlating a trace goes there rather than reading it
+// off a wrapped digest line.
+const LEADING_TIMESTAMP = /^\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:[.,]\d+)?Z?\s*/;
+// A labelled id is unambiguous: nothing but a tracer writes `trace_id=<hex>`.
+const LABELLED_ID = /^(?:trace|span)_?[Ii]d=[0-9a-f]{16,32}\s*/;
+
+// A BARE hex token is ambiguous -- it is a correlation id in
+// `ERROR <trace> <span> context= [class]`, and a payload in
+// `ERROR deadbeefdeadbeef is the checksum we expected`. Greptile P2 on #902
+// caught the second case being eaten, and my own test had missed it by using
+// the unprefixed form, which never reached this branch.
+//
+// The discriminator comes from the real data rather than from taste: in 11 of
+// 14 live eu-oit-prd lines the id RUN is two or three ids followed by
+// `context=` or `[`. A tracer emits ids in a run and then structure; prose
+// never does. So a run is only stripped when something structural follows it,
+// which leaves a lone hex word in front of a sentence exactly where it was.
+const ID_RUN_BEFORE_STRUCTURE = /^((?:[0-9a-f]{16,32}\s+){1,4})(?=context=|\[|---)/;
+const LEVEL = /^(?:ERROR|WARN|WARNING|FATAL|INFO|DEBUG)\s*/;
+// Quarkus prints an always-empty `context=` on every line in eu-oit-prd, and
+// Spring Boot a bare `1 ---` sequence number. Both are pure boilerplate, and
+// only stripped when EMPTY: a populated `context=<mdc>` carries real state.
+const EMPTY_CONTEXT = /^(?:context=\s*(?=\[)|\d+\s+---\s*)/;
+
+export function stripLogPrefix(line: string): string {
+	let s = line.replace(LEADING_TIMESTAMP, "");
+	// The level can sit either side of the ids, so both are peeled until neither
+	// matches: `<ts> ERROR <trace> <span> context=` and
+	// `<ts> trace_id=.. span_id=.. ERROR 1 --- [thread]` are both real.
+	for (let i = 0; i < 8; i++) {
+		const before = s;
+		s = s.replace(LEVEL, "").replace(LABELLED_ID, "").replace(ID_RUN_BEFORE_STRUCTURE, "").replace(EMPTY_CONTEXT, "");
+		if (s === before) break;
+	}
+	const stripped = s.trim();
+	// Never return less than the message: if peeling consumed everything, the
+	// line was ids only and the original is more useful than an empty string.
+	return stripped === "" ? line.trim() : stripped;
+}
+
 export function summariseLogSample(sample: string, max = SAMPLE_EXCERPT): string {
-	const oneLine = sample.replace(/\s+/g, " ").trim();
+	const oneLine = stripLogPrefix(sample.replace(/\s+/g, " ").trim());
 	if (oneLine.length <= max) return oneLine;
 	// `max` bounds the WHOLE excerpt, ellipsis included, so a caller's cap is
 	// the real budget rather than max + 3.
