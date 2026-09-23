@@ -1,6 +1,7 @@
 // apps/web/src/lib/server/archify/to-archify.ts
 import type { ApplicationTopology, NetworkTopology } from "@devops-agent/shared";
 import { UNHEALTHY_ERROR_RATE } from "../../app-chart.ts";
+import { collapseDnsRecords, focusGraph } from "./focus.ts";
 
 // SIO-1876: deterministic topology -> Archify architecture JSON. Archify has no auto-layout, so
 // this places components on its grid: one column band per node kind in flow order, and one row
@@ -36,7 +37,7 @@ export type ArchifyBoundary = { kind: "region" | "security-group"; label: string
 export type ArchifyArchitecture = {
 	schema_version: 1;
 	diagram_type: "architecture";
-	meta: { title: string; subtitle?: string };
+	meta: { title: string; subtitle?: string; visual_preset: "signal-flow" };
 	layout: {
 		mode: "grid";
 		origin: [number, number];
@@ -172,7 +173,13 @@ const NETWORK_TYPES: Record<keyof typeof NETWORK_BANDS, ComponentType> = {
 	eni: "backend",
 };
 
-export function networkToArchify(t: NetworkTopology): ArchifyArchitecture {
+// Drawn components per diagram; see focus.ts for why the Diagram tab is a focused view.
+export const DIAGRAM_NODE_BUDGET = 16;
+
+export function networkToArchify(full: NetworkTopology): ArchifyArchitecture {
+	const collapsed = collapseDnsRecords(full);
+	const focused = focusGraph(collapsed.nodes, collapsed.edges, DIAGRAM_NODE_BUDGET);
+	const t = { ...collapsed, nodes: focused.nodes, edges: focused.edges };
 	const subnetOf = new Map<string, string>();
 	const vpcOf = new Map<string, string>();
 	for (const e of t.edges) {
@@ -240,7 +247,7 @@ export function networkToArchify(t: NetworkTopology): ArchifyArchitecture {
 	return {
 		schema_version: 1,
 		diagram_type: "architecture",
-		meta: { title: "Network map", subtitle: subtitleFor(t) },
+		meta: { title: "Network map", subtitle: subtitleFor(full, focused), visual_preset: "signal-flow" },
 		layout: { ...GRID, cols: usedBands(components) },
 		components,
 		...(boundaries.length ? { boundaries } : {}),
@@ -258,7 +265,9 @@ const APP_TYPES: Record<keyof typeof APP_BANDS, ComponentType> = {
 	awsResource: "cloud",
 };
 
-export function applicationToArchify(t: ApplicationTopology): ArchifyArchitecture {
+export function applicationToArchify(full: ApplicationTopology): ArchifyArchitecture {
+	const focused = focusGraph(full.nodes, full.edges, DIAGRAM_NODE_BUDGET);
+	const t = { ...full, nodes: focused.nodes, edges: focused.edges };
 	const ids = makeIdMap(t.nodes.map((n) => n.id));
 	const items: Placeable[] = t.nodes.map((n) => {
 		const unhealthy = n.errorRate !== undefined && n.errorRate >= UNHEALTHY_ERROR_RATE;
@@ -296,13 +305,22 @@ export function applicationToArchify(t: ApplicationTopology): ArchifyArchitectur
 	return {
 		schema_version: 1,
 		diagram_type: "architecture",
-		meta: { title: "Application map", subtitle: subtitleFor(t) },
+		meta: { title: "Application map", subtitle: subtitleFor(full, focused), visual_preset: "signal-flow" },
 		layout: { ...GRID, cols: usedBands(components) },
 		components,
 		connections,
 	};
 }
 
-function subtitleFor(t: { sources: string[]; truncated?: boolean }): string {
-	return `Sources: ${t.sources.join(", ") || "none"}${t.truncated ? " (truncated)" : ""}`;
+// Says when the diagram is a subset, so nobody reads a focused view as the whole map.
+function subtitleFor(
+	t: { sources: string[]; truncated?: boolean },
+	focused: { nodes: { kind: string }[]; total: number },
+): string {
+	const shown = focused.nodes.filter((n) => n.kind !== "vpc" && n.kind !== "subnet").length;
+	const scope =
+		shown < focused.total
+			? `${shown} of ${focused.total} nodes around the focus services and busiest hubs; all on the Map tab`
+			: `${shown} nodes`;
+	return `${scope} | Sources: ${t.sources.join(", ") || "none"}${t.truncated ? " (truncated)" : ""}`;
 }

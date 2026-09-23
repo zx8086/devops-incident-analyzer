@@ -89,6 +89,31 @@ A caveat on the screenshots: the browser pane's capture does not paint an opaque
 
 The converter plus render takes about 165 ms per fixture, the time for one CLI child process. There is no model cost.
 
+### 6. Closing the gap with the Archify gallery
+
+The first real render of the 200-node network map was a 12,976 px tall page, and 140 of its 363 labels were cut off. The [Archify gallery](https://tt-a1i.github.io/archify/gallery.html) examples are 7-12 hand-laid-out nodes each. Two changes were made:
+
+- **Style:** `meta.visual_preset: "signal-flow"` (the gallery's look).
+- **Focused view** (`focus.ts`), drawing at most 16 components:
+  - DNS records that alias the same target are merged into one node. On the live map, 56 records pointed at 11 targets, 20 of them at one ALB.
+  - The drawing then expands outward from the nodes linked to a focus service, taking each node together with up to 4 of its busiest neighbours.
+  - When the seeds' neighbourhoods run out, it continues from the busiest remaining hub. The live network map's 6 focus-linked workloads had no traffic edges at all.
+  - The subnet and VPC of every kept node are kept, so their boundaries still draw.
+  - The subtitle says "N of M nodes ... all on the Map tab", and a map that already fits is drawn whole.
+
+Result on the live topologies:
+
+| Map | Size | Boxes | Connections | Boundaries | Notes |
+|---|---|---|---|---|---|
+| Network | 1,636 px tall (was 12,976) | 16 | 8 | 7 | The 6 focus workloads are each unconnected in their own subnet |
+| Application | fits one screen | 16 | 16 | 0 | 1 box unconnected |
+
+Two early versions of the rule failed on real data:
+- Plain breadth-first search gave the network map 6 unconnected boxes.
+- With no fan-out cap, one ALB spent the whole budget on a star of 15 target groups.
+
+Views and lane labels (the gallery's "01 / User Interface" bands and named chapters) were not added.
+
 ## What you give up compared with the ECharts cards
 
 - **Interaction.** ECharts has zoom, pan and hover tooltips on every node. Archify's viewer offers focus, routes, lenses and export instead. These are good for reading one diagram, but the tooltip detail (health, CIDR, error rate) must now fit into a 22-character label, a sublabel or a tag.

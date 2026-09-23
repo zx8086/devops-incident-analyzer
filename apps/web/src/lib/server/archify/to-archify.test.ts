@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { APPLICATION_FIXTURE, NETWORK_FIXTURE } from "./fixtures.ts";
 import { renderDiagram } from "./render.ts";
-import { type ArchifyArchitecture, applicationToArchify, networkToArchify } from "./to-archify.ts";
+import { type ArchifyArchitecture, applicationToArchify, DIAGRAM_NODE_BUDGET, networkToArchify } from "./to-archify.ts";
 
 function assertWellFormed(diagram: ArchifyArchitecture) {
 	const ids = new Set(diagram.components.map((c) => c.id));
@@ -63,5 +63,24 @@ describe("applicationToArchify", () => {
 		const result = await renderDiagram("architecture", diagram);
 		if (!result.ok) throw new Error(`${result.error}: ${JSON.stringify(result.diagnostics)}`);
 		expect(result.html).toContain("<svg");
+	}, 30_000);
+});
+
+describe("focused, styled output", () => {
+	test("uses the signal-flow preset, and says so when a large map is focused down to the budget", async () => {
+		const services = Array.from({ length: 40 }, (_, i) => ({
+			id: `svc:s${i}`,
+			kind: "service" as const,
+			name: `s${i}`,
+		}));
+		const edges = services.slice(1).map((s, i) => ({ from: `svc:s${i}`, to: s.id, kind: "calls" as const }));
+		const diagram = applicationToArchify({ ...APPLICATION_FIXTURE, nodes: services, edges });
+		expect(diagram.meta.visual_preset).toBe("signal-flow");
+		expect(diagram.components).toHaveLength(DIAGRAM_NODE_BUDGET);
+		expect(diagram.meta.subtitle).toContain(`${DIAGRAM_NODE_BUDGET} of 40 nodes`);
+		expect(applicationToArchify(APPLICATION_FIXTURE).meta.subtitle).toStartWith("6 nodes |");
+		const result = await renderDiagram("architecture", diagram);
+		if (!result.ok) throw new Error(`${result.error}: ${JSON.stringify(result.diagnostics)}`);
+		expect(result.html).toContain('data-preset="signal-flow"');
 	}, 30_000);
 });
