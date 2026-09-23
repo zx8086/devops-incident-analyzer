@@ -61,6 +61,8 @@ function getProxyLogger(role: "aws-proxy" | "kafka-proxy"): ReturnType<typeof ge
 const JSONRPC_RETRY_BACKOFFS_MS = [300, 800, 1500, 3000, 5000, 8000, 8000, 8000] as const;
 const JSONRPC_RETRY_DEFAULT_MAX_ATTEMPTS = JSONRPC_RETRY_BACKOFFS_MS.length + 1; // 9
 const JSONRPC_RETRY_DEFAULT_DEADLINE_MS = 60_000;
+// Per-TCP-try ceiling; the remaining cumulative deadline clamps it further (SIO-1871).
+const TCP_ATTEMPT_TIMEOUT_MS = 30_000;
 
 function readPositiveIntEnv(name: string, fallback: number): number {
 	const raw = process.env[name];
@@ -612,6 +614,25 @@ export async function startAgentCoreProxy(
 							terminalFailure: boolean;
 						}> => {
 							for (let attempt = 1; attempt <= tcpMaxAttempts; attempt++) {
+								// SIO-1871: the cumulative deadline is a HARD bound, not just a gate on
+								// scheduling the next JSON-RPC retry. Without this an attempt started just
+								// before the deadline could run two more 30s TCP tries (~60s past it), so
+								// the agent bridge's connect timeout (deadline + margin) could abandon a
+								// call the proxy was still completing. Clamp each try to the time left.
+								// The first try always goes out (the outer loop only starts attempts
+								// before the deadline); a TCP retry past the deadline is skipped.
+								const remainingMs = deadline - Date.now();
+								if (attempt > 1 && remainingMs <= 0) {
+									const envelope = Response.json(
+										{
+											jsonrpc: "2.0",
+											error: { code: -32000, message: "AgentCore proxy retry deadline exceeded" },
+											id: null,
+										},
+										{ status: 502 },
+									);
+									return { response: envelope, clonedBody: await envelope.clone().text(), terminalFailure: true };
+								}
 								try {
 									const creds = await getCredentials();
 									const targetUrl = new URL(`${basePath}?${queryString}`, baseUrl);
@@ -622,7 +643,10 @@ export async function startAgentCoreProxy(
 										method: "POST",
 										headers,
 										body,
-										signal: AbortSignal.any([AbortSignal.timeout(30_000), sessionAbort.signal]),
+										signal: AbortSignal.any([
+											AbortSignal.timeout(Math.min(TCP_ATTEMPT_TIMEOUT_MS, Math.max(remainingMs, 1))),
+											sessionAbort.signal,
+										]),
 									});
 
 									const respSessionId = response.headers.get("mcp-session-id");
@@ -672,9 +696,10 @@ export async function startAgentCoreProxy(
 						// non-retryable code, attempt-budget exhaustion, or cumulative
 						// deadline. The attempt budget (9 by default since SIO-868) is independent
 						// of the inner TCP retry counter; both share the cumulative wallclock
-						// deadline (jsonRpcRetryDeadlineMs, 60s default). The deadline only stops
-						// NEW retries: an attempt in flight can finish after it, which is why the
-						// agent bridge's connect timeout adds a margin on top (SIO-1871).
+						// deadline (jsonRpcRetryDeadlineMs, 60s default). SIO-1871: the deadline is a
+						// hard bound -- doFetchWithTcpRetry clamps every TCP try to the time left --
+						// so the agent bridge's connect timeout (deadline + margin) always outlasts
+						// the proxy. The margin only covers credential fetch and local overhead.
 						let response: Response | undefined;
 						let clonedBody = "";
 						let terminalFailure = false;

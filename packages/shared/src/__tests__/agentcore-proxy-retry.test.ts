@@ -375,6 +375,31 @@ describe("JSON-RPC -320xx retry", () => {
 		}
 	});
 
+	// SIO-1871: the deadline is a HARD bound. A hung upstream used to hold the call for
+	// two full 30s TCP tries regardless of the deadline, so the agent bridge's connect
+	// timeout (deadline + margin) could fire while the proxy was still working.
+	test("a hung upstream is cut at the cumulative deadline, not after 2 x 30s TCP tries", async () => {
+		process.env.AGENTCORE_JSONRPC_RETRY_DEADLINE_MS = "300";
+		const hung = (): Promise<Response> =>
+			new Promise((_, reject) => {
+				const signal = fetchCalls[fetchCalls.length - 1]?.init.signal;
+				signal?.addEventListener("abort", () => reject(signal.reason));
+			});
+		try {
+			scriptedResponses = [hung, hung, hung];
+			const started = Date.now();
+			const res = await callTool();
+			const elapsed = Date.now() - started;
+			const body = await res.text();
+			expect(res.status).toBe(502);
+			expect(body).toContain('"code":-32000');
+			expect(elapsed).toBeLessThan(3_000);
+			expect(fetchCalls.length).toBe(1);
+		} finally {
+			delete process.env.AGENTCORE_JSONRPC_RETRY_DEADLINE_MS;
+		}
+	});
+
 	test("preserves mcp-session-id across retried attempts", async () => {
 		scriptedResponses = [jsonRpcOk()];
 		await ORIG_FETCH(`${proxy.url}/mcp`, {

@@ -169,9 +169,9 @@ export function isClosedModuleRunnerError(error: unknown): boolean {
 // AGENTCORE_JSONRPC_RETRY_DEADLINE_MS overrides). The bridge connect timeout must
 // EXCEED that deadline or it abandons a connect the proxy would have recovered.
 // SIO-1871: derived from the same reader instead of a copied constant (the copy sat
-// at 35s after SIO-868 moved the deadline to 60s). The margin covers the attempt
-// still in flight when the deadline passes: the proxy only stops scheduling NEW
-// retries at the deadline, and a cold -32010 round trip is ~4-5s server-side.
+// at 35s after SIO-868 moved the deadline to 60s). The proxy treats the deadline as a
+// HARD bound (each TCP try is clamped to the time left), so the margin only has to
+// cover credential fetch, signing and local overhead, not an in-flight attempt.
 // Non-AgentCore servers have no cold-start cost and stay on 10s.
 const DEFAULT_MCP_CONNECT_TIMEOUT_MS = 10_000;
 const AGENTCORE_CONNECT_MARGIN_MS = 15_000;
