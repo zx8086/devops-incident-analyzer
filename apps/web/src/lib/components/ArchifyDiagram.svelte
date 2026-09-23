@@ -21,13 +21,17 @@ function archifyEnabled(): Promise<boolean> {
 // keeps Archify's own PNG/SVG export working.
 import type { ApplicationTopology, NetworkTopology } from "@devops-agent/shared";
 import { diagramFrameHeight } from "$lib/archify-frame";
+import Icon from "./Icon.svelte";
 
 type Tab = "map" | "diagram";
+// SIO-1879: the card owns the expanded dialog (state, focus save/restore, Escape, focus trap); the
+// Diagram tab only asks for it, so there is one dialog per card, not a second one here.
+type Shared = { tab?: Tab; expanded?: boolean; onToggleExpand?: () => void };
 type Props =
-	| { view: "network"; topology: NetworkTopology; tab?: Tab }
-	| { view: "application"; topology: ApplicationTopology; tab?: Tab };
+	| ({ view: "network"; topology: NetworkTopology } & Shared)
+	| ({ view: "application"; topology: ApplicationTopology } & Shared);
 
-let { view, topology, tab = $bindable("map") }: Props = $props();
+let { view, topology, tab = $bindable("map"), expanded = false, onToggleExpand }: Props = $props();
 
 type Loaded = { html: string; ms: string; viewBox: string | null } | { error: string; details: string[] };
 
@@ -102,14 +106,28 @@ let frameWidth = $state(0);
           Rendering diagram...
         </div>
       {:else if current && "html" in current}
-        <iframe
-          title="{view} map diagram"
-          srcdoc={current.html}
-          sandbox="allow-scripts allow-downloads"
-          bind:clientWidth={frameWidth}
-          style:height="{diagramFrameHeight(current.viewBox, frameWidth)}px"
-          class="w-full rounded border-0 bg-slate-950"
-        ></iframe>
+        <!-- Expanded, the frame fills the dialog; the embed CSS scales the SVG to its height. -->
+        <div class={expanded ? "relative flex min-h-0 flex-1 flex-col" : "relative"}>
+          <iframe
+            title="{view} map diagram"
+            srcdoc={current.html}
+            sandbox="allow-scripts allow-downloads"
+            bind:clientWidth={frameWidth}
+            style:height={expanded ? undefined : `${diagramFrameHeight(current.viewBox, frameWidth)}px`}
+            class={expanded ? "min-h-0 w-full flex-1 rounded border-0 bg-slate-950" : "w-full rounded border-0 bg-slate-950"}
+          ></iframe>
+          {#if onToggleExpand}
+            <button
+              type="button"
+              onclick={onToggleExpand}
+              class="absolute right-2 top-2 rounded-md border border-slate-600 bg-slate-900/80 p-1.5 text-slate-200 shadow-sm hover:bg-slate-800"
+              aria-label={expanded ? `Collapse ${view} diagram` : `Expand ${view} diagram`}
+              title={expanded ? "Collapse" : "Expand"}
+            >
+              <Icon name={expanded ? "collapse" : "expand"} class="h-3.5 w-3.5" />
+            </button>
+          {/if}
+        </div>
         <p class="mt-1 text-[0.5625rem] text-gray-500 tabular-nums">
           Rendered in {current.ms} ms
         </p>

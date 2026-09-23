@@ -61,7 +61,13 @@
   --animate-pulse-dot: pulse-dot 1.5s ease-in-out infinite;
   --animate-fade-in: fade-in 0.2s ease-out;
   --animate-pulse-glow: pulse-glow 1.5s ease-in-out infinite;
-  --animate-slide-up-fade: slide-up-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  /* SIO-1879: no `forwards`. Holding the last keyframe leaves an identity transform on every chat
+     message (even when that keyframe says `transform: none`, since it is interpolated from a
+     translateY), and a transformed ancestor becomes the containing block and stacking context for
+     position:fixed descendants: a topology card's "full-screen" expand dialog opened inside its
+     message, under the app header. Every user of this class starts visible with no delay, so the
+     final keyframe equals the element's own style and nothing needs holding. */
+  --animate-slide-up-fade: slide-up-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   --animate-pop-in: pop-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
   --animate-cascade-in: cascade-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
   --animate-fade-slide-up: fade-slide-up 0.7s ease-out forwards;

@@ -60,9 +60,20 @@ function resetView() {
 	chart?.setOption({ series: [{ zoom: 1, center: undefined }] });
 }
 
-function focusableToolbarButtons(): HTMLButtonElement[] {
+// SIO-1879: every visible focusable element in document order, not just buttons. The text-view
+// summary and its scroll region come after the chart's controls, and a button-only trap wrapped Tab
+// from the last button back to the first, so a keyboard user could never reach the text view while
+// the dialog was expanded. Visibility matters too: the Map toolbar stays mounted but hidden on the
+// Diagram tab, and a hidden last element let Tab walk straight out of the dialog.
+const FOCUSABLE = 'button, summary, a[href], iframe, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+function focusableInDialog(): HTMLElement[] {
 	if (!dialogEl) return [];
-	return Array.from(dialogEl.querySelectorAll("button"));
+	// checkVisibility, not offsetParent: content of a closed <details> keeps an offsetParent, so the
+	// text-view region counted as the trap's last element while the browser skipped it, and Tab from
+	// the summary left the dialog (reproduced with real key presses). offsetParent is the fallback.
+	return Array.from(dialogEl.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) =>
+		typeof el.checkVisibility === "function" ? el.checkVisibility() : el.offsetParent !== null,
+	);
 }
 
 async function toggleExpanded() {
@@ -86,7 +97,7 @@ function onKeydown(event: KeyboardEvent) {
 		return;
 	}
 	if (event.key !== "Tab") return;
-	const focusable = focusableToolbarButtons();
+	const focusable = focusableInDialog();
 	if (focusable.length === 0) return;
 	const first = focusable[0];
 	const last = focusable[focusable.length - 1];
@@ -159,7 +170,7 @@ $effect(() => {
         {topology.nodes.length} nodes · {topology.edges.length} links · {topology.sources.join(", ")}
       </span>
     </div>
-    <ArchifyDiagram view="application" {topology} bind:tab={diagramTab} />
+    <ArchifyDiagram view="application" {topology} bind:tab={diagramTab} {expanded} onToggleExpand={toggleExpanded} />
     <div class={[expanded ? "relative min-h-0 flex-1" : "relative", diagramTab !== "map" && "hidden"]}>
       <div
         bind:this={container}
