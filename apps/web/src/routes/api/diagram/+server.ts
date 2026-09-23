@@ -57,10 +57,34 @@ async function render(body: Body): Promise<Rendered> {
 	return { ...(await renderDiagram("architecture", diagram)), ms: Math.round(performance.now() - started) };
 }
 
+// Greptile P1 (round 2 on #904): the limit must hold WHILE reading. request.text() buffers the whole
+// body first, and adapter-auto guarantees no upstream BODY_SIZE_LIMIT (vite dev has none), so the
+// stream is read chunk by chunk and cancelled the moment it passes the cap. A declared
+// Content-Length over the cap is refused before a single byte is read.
+async function readCapped(request: Request, max: number): Promise<string | null> {
+	const declared = Number(request.headers.get("content-length"));
+	if (Number.isFinite(declared) && declared > max) return null;
+	if (!request.body) return "";
+	const reader = request.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		size += value.byteLength;
+		if (size > max) {
+			await reader.cancel();
+			return null;
+		}
+		chunks.push(value);
+	}
+	return Buffer.concat(chunks).toString("utf8");
+}
+
 export const POST: RequestHandler = async ({ request }) => {
 	if (!isArchifyEnabled()) error(404, "Not found");
-	const raw = await request.text();
-	if (Buffer.byteLength(raw) > MAX_BODY_BYTES) error(413, `body exceeds ${MAX_BODY_BYTES} bytes`);
+	const raw = await readCapped(request, MAX_BODY_BYTES);
+	if (raw === null) error(413, `body exceeds ${MAX_BODY_BYTES} bytes`);
 	let payload: unknown = null;
 	try {
 		payload = JSON.parse(raw);

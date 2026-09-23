@@ -64,6 +64,59 @@ describe("POST /api/diagram", () => {
 		expect(await status({ ...valid, topology: huge })).toBe(413);
 	});
 
+	// Greptile round 2 on #904: the cap must hold while reading, not after buffering. The body is 8x
+	// the cap with no Content-Length. Both a buffering handler and a streaming one end in 413, so the
+	// assertion is on the MECHANISM: how many bytes were pulled, and whether the stream was cancelled.
+	// (An endless stream cannot be used: a buffering read of it never yields, so no timer could fail it.)
+	test("413 on an oversized streamed body, stopping at the cap instead of buffering it", async () => {
+		process.env.ARCHIFY_DIAGRAMS_ENABLED = "true";
+		const chunk = new Uint8Array(64 * 1024).fill(0x20);
+		const total = 8 * 512 * 1024;
+		let pulled = 0;
+		let cancelled = false;
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				if (pulled >= total) return controller.close();
+				pulled += chunk.byteLength;
+				controller.enqueue(chunk);
+			},
+			cancel() {
+				cancelled = true;
+			},
+		});
+		const request = new Request("http://localhost/api/diagram", {
+			method: "POST",
+			body,
+			duplex: "half",
+		} as RequestInit);
+		expect(request.headers.get("content-length")).toBeNull(); // the declared-length shortcut cannot fire
+		let code = 0;
+		try {
+			code = (await POST({ request } as Event)).status;
+		} catch (thrown) {
+			code = (thrown as { status: number }).status;
+		}
+		expect(code).toBe(413);
+		expect(cancelled).toBe(true);
+		expect(pulled).toBeLessThanOrEqual(512 * 1024 + 2 * chunk.byteLength);
+	});
+
+	test("413 from a declared Content-Length over the cap, before reading", async () => {
+		process.env.ARCHIFY_DIAGRAMS_ENABLED = "true";
+		const request = new Request("http://localhost/api/diagram", {
+			method: "POST",
+			headers: { "content-length": String(10 * 1024 * 1024) },
+			body: JSON.stringify(valid),
+		});
+		let code = 0;
+		try {
+			code = (await POST({ request } as Event)).status;
+		} catch (thrown) {
+			code = (thrown as { status: number }).status;
+		}
+		expect(code).toBe(413);
+	});
+
 	test("returns embeddable HTML in the requested theme", async () => {
 		process.env.ARCHIFY_DIAGRAMS_ENABLED = "true";
 		const response = await call(valid);
