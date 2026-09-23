@@ -1076,6 +1076,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		threadId: z.string(),
 		message: z.string(),
 		review: z.object({
+			reviewId: z.string().uuid(),
 			repository: z.string(),
 			projectId: z.number().int().positive(),
 			baseBranch: z.string(),

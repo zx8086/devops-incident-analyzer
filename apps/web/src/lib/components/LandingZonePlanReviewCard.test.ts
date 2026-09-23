@@ -6,6 +6,7 @@ const prompt = {
 	threadId: "thread-lz",
 	message: "Review the evidence-backed proposal.",
 	review: {
+		reviewId: "11111111-1111-4111-8111-111111111111",
 		repository: "aws-lz-account-creator",
 		projectId: 42,
 		baseBranch: "main",

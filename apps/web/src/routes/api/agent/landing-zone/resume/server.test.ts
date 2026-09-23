@@ -101,6 +101,7 @@ mock.module("$lib/server/sse-pump", () => ({
 }));
 
 const { POST } = await import("./+server.ts");
+const reviewId = "11111111-1111-4111-8111-111111111111";
 
 function request(body: unknown): Parameters<typeof POST>[0] {
 	return {
@@ -122,14 +123,23 @@ async function events(response: Response): Promise<Record<string, unknown>[]> {
 
 describe("POST /api/agent/landing-zone/resume", () => {
 	test("rejects malformed or mixed decision payloads", async () => {
-		expect((await POST(request({ threadId: "t", decision: "reject" }))).status).toBe(400);
-		expect((await POST(request({ threadId: "t", decision: "amend", instructions: " " }))).status).toBe(400);
-		expect((await POST(request({ threadId: "t", decision: "approve", reason: "extra" }))).status).toBe(400);
+		expect((await POST(request({ threadId: "t", reviewId, decision: "reject" }))).status).toBe(400);
+		expect((await POST(request({ threadId: "t", reviewId, decision: "amend", instructions: " " }))).status).toBe(400);
+		expect((await POST(request({ threadId: "t", reviewId, decision: "approve", reason: "extra" }))).status).toBe(400);
 	});
 
 	test("rejects a stale resume when no Landing Zone review is pending", async () => {
 		seedPending(undefined);
-		expect((await POST(request({ threadId: "t", decision: "approve" }))).status).toBe(409);
+		expect((await POST(request({ threadId: "t", reviewId, decision: "approve" }))).status).toBe(409);
+	});
+
+	test("rejects a review capability that does not own the pending gate", async () => {
+		seedPending({ value: { type: "landing_zone_plan_review", review: { reviewId } } });
+		const response = await POST(
+			request({ threadId: "t", reviewId: "22222222-2222-4222-8222-222222222222", decision: "approve" }),
+		);
+		expect(response.status).toBe(403);
+		expect(resumeAgentMock).not.toHaveBeenCalled();
 	});
 
 	test.each([
@@ -144,8 +154,8 @@ describe("POST /api/agent/landing-zone/resume", () => {
 		],
 	] as const)("forwards the exact %s decision union", async (body, expected) => {
 		resumeAgentMock.mockClear();
-		seedPending({ value: { type: "landing_zone_plan_review" } }, undefined);
-		const response = await POST(request({ threadId: "thread-lz", ...body }));
+		seedPending({ value: { type: "landing_zone_plan_review", review: { reviewId } } }, undefined);
+		const response = await POST(request({ threadId: "thread-lz", reviewId, ...body }));
 		const streamed = await events(response);
 		const args = (resumeAgentMock.mock.calls as unknown as unknown[][])[0]?.[0] as { resumeValue?: unknown };
 		expect(args.resumeValue).toEqual(expected);
@@ -155,14 +165,25 @@ describe("POST /api/agent/landing-zone/resume", () => {
 
 	test("re-emits an amended review and does not finalize the turn", async () => {
 		seedPending(
-			{ value: { type: "landing_zone_plan_review" } },
-			{ value: { type: "landing_zone_plan_review", review: {} } },
+			{ value: { type: "landing_zone_plan_review", review: { reviewId } } },
+			{ value: { type: "landing_zone_plan_review", review: { reviewId } } },
 		);
 		emitLandingZoneInterruptMock.mockImplementationOnce(() => true);
 		const response = await POST(
-			request({ threadId: "thread-lz", decision: "amend", instructions: "Use the approved owner" }),
+			request({ threadId: "thread-lz", reviewId, decision: "amend", instructions: "Use the approved owner" }),
 		);
 		const streamed = await events(response);
 		expect(streamed.some((event) => event.type === "done")).toBeFalse();
+	});
+
+	test("restores the pending review when graph resume throws", async () => {
+		emitLandingZoneInterruptMock.mockClear();
+		resumeAgentMock.mockRejectedValueOnce(new Error("resume failed"));
+		const pending = { value: { type: "landing_zone_plan_review", review: { reviewId } } };
+		seedPending(pending);
+		const response = await POST(request({ threadId: "thread-lz", reviewId, decision: "approve" }));
+		const streamed = await events(response);
+		expect(emitLandingZoneInterruptMock).toHaveBeenCalledWith(expect.any(Function), "thread-lz", pending.value);
+		expect(streamed.some((event) => event.type === "error")).toBeTrue();
 	});
 });

@@ -70,7 +70,7 @@ async function relevantOpenChanges(
 export async function findRepresentativeExamples(client: GitLabReadClient, input: RepresentativeExamplesInput) {
 	const repository = resolveRepository(input.repository);
 	if (repository.availability === "no-git-refs") throw new Error(`${repository.name} has no Git refs`);
-	const { provenance } = await repositoryProvenance(client, repository, input.ref);
+	const { project, provenance } = await repositoryProvenance(client, repository, input.ref);
 	const tree = await client.tree(repository.projectPath, provenance.ref, true);
 	const blobs = tree.entries.filter((entry) => entry.type === "blob").map((entry) => entry.path);
 
@@ -108,6 +108,7 @@ export async function findRepresentativeExamples(client: GitLabReadClient, input
 
 	return {
 		repository,
+		project: { id: project.id, path: project.path, defaultBranch: project.defaultBranch, headSha: project.headSha },
 		contracts,
 		examples: exampleEvidence,
 		openChanges,

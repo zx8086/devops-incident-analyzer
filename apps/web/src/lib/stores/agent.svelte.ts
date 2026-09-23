@@ -814,7 +814,11 @@ function createAgentStore() {
 			const response = await fetch("/api/agent/landing-zone/resume", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ threadId: pendingReview.threadId, ...decision }),
+				body: JSON.stringify({
+					threadId: pendingReview.threadId,
+					reviewId: pendingReview.review.reviewId,
+					...decision,
+				}),
 			});
 			if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 			for await (const event of parseSseChunks(response.body)) handleEvent(event);

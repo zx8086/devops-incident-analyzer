@@ -136,6 +136,12 @@ describe("representative evidence", () => {
 		expect(evidence.examples).toHaveLength(5);
 		expect(evidence.contracts.map((item) => item.kind).sort()).toEqual(["generator", "schema", "test"]);
 		expect(evidence.openChanges).toHaveLength(1);
+		expect(evidence.project).toEqual({
+			id: 42,
+			path: "pvhcorp/dhco/aws/aws-lz-renamed/account-creator",
+			defaultBranch: "main",
+			headSha: "abc123",
+		});
 		expect(evidence.provenance.untrustedContent).toBe(true);
 		expect(evidence.provenance.ref).toBe("abc123");
 	});

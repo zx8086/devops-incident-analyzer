@@ -120,6 +120,7 @@ export type LandingZoneReviewDecision = z.infer<typeof LandingZoneReviewDecision
 
 export const ProposedChangeReviewSchema = z
 	.object({
+		reviewId: z.string().uuid(),
 		repository: z.string().trim().min(1),
 		projectId: z.number().int().positive(),
 		baseBranch: z.string().trim().min(1).max(255),

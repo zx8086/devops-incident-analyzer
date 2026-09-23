@@ -52,6 +52,7 @@ function pumpEventStream(eventStream: AsyncIterable<LangGraphEvent>, send: (even
 
 describe("emitLandingZoneInterrupt", () => {
 	const review = {
+		reviewId: "11111111-1111-4111-8111-111111111111",
 		repository: "aws-lz-account-creator",
 		projectId: 42,
 		baseBranch: "main",

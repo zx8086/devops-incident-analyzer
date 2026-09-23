@@ -20,10 +20,22 @@ const log = getLogger("api.agent.landing-zone.resume");
 const AGENT = "landing-zone-terraform";
 
 const ResumeRequestSchema = z.discriminatedUnion("decision", [
-	z.object({ threadId: z.string().min(1), decision: z.literal("approve") }).strict(),
-	z.object({ threadId: z.string().min(1), decision: z.literal("reject"), reason: z.string().trim().min(1) }).strict(),
+	z.object({ threadId: z.string().min(1), reviewId: z.string().uuid(), decision: z.literal("approve") }).strict(),
 	z
-		.object({ threadId: z.string().min(1), decision: z.literal("amend"), instructions: z.string().trim().min(1) })
+		.object({
+			threadId: z.string().min(1),
+			reviewId: z.string().uuid(),
+			decision: z.literal("reject"),
+			reason: z.string().trim().min(1),
+		})
+		.strict(),
+	z
+		.object({
+			threadId: z.string().min(1),
+			reviewId: z.string().uuid(),
+			decision: z.literal("amend"),
+			instructions: z.string().trim().min(1),
+		})
 		.strict(),
 ]);
 
@@ -40,6 +52,9 @@ export const POST: RequestHandler = async ({ request }) => {
 	) {
 		return json({ error: "No Landing Zone review is pending for this thread" }, { status: 409 });
 	}
+	const pendingReviewId = (pending.value as { review?: { reviewId?: unknown } }).review?.reviewId;
+	if (pendingReviewId !== body.reviewId)
+		return json({ error: "Landing Zone review capability did not match" }, { status: 403 });
 
 	const resumeValue =
 		body.decision === "approve"
@@ -89,6 +104,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						{ "thread.id": body.threadId, "run.id": runId, "request.id": requestId },
 					);
 				} catch (error) {
+					emitLandingZoneInterrupt(send, body.threadId, pending.value);
 					log.error(
 						{
 							err: error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error) },

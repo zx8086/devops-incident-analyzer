@@ -1,9 +1,11 @@
 // packages/agent/src/landing-zone/change-nodes.ts
 
 import { createHash, createHmac } from "node:crypto";
-import { AIMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { interrupt } from "@langchain/langgraph";
+import { createLlm } from "../llm.ts";
 import { getToolsForDataSource } from "../mcp-bridge.ts";
+import { extractTextFromContent } from "../message-utils.ts";
 import type { LandingZoneStateType } from "./state.ts";
 import {
 	type LandingZoneCandidate,
@@ -56,6 +58,43 @@ function candidateFromPrompt(state: LandingZoneStateType): LandingZoneCandidate 
 			`The supplied Landing Zone candidate is invalid: ${error instanceof Error ? error.message : String(error)}`,
 		);
 	}
+}
+
+async function draftCandidateFromEvidence(
+	state: LandingZoneStateType,
+	amendmentInstructions?: string,
+): Promise<LandingZoneCandidate> {
+	const text = latestText(state);
+	if (/```(?:landing-zone-change|json)\s*[\s\S]*?```/i.test(text)) return candidateFromPrompt(state);
+	const evidence = state.evidenceResults.map(({ id, source, status, summary, provenance, freshness }) => ({
+		id,
+		source,
+		status,
+		summary,
+		provenance,
+		freshness,
+	}));
+	const response = await createLlm("iacDrafter", "landing-zone-terraform").invoke([
+		new SystemMessage(
+			"Draft one bounded PVH Landing Zone GitOps candidate as strict JSON matching: " +
+				"{repository,projectId,baseBranch,baseSha,targetBranch,changeSummary,title,backendChangeApproved,files:[{path,content,expectedFileSha}]}. " +
+				"Use only values present in current evidence or the user request. Never invent governance values, project IDs, SHAs, OU IDs, accounts, CIDRs, roles, or permission sets. " +
+				"The target branch must start agent/landing-zone/. Use null expectedFileSha only for a proven new file. Return JSON only; if any required value is missing, return an invalid empty object so the graph stops safely.",
+		),
+		new HumanMessage(
+			JSON.stringify({
+				request: text,
+				amendmentInstructions: amendmentInstructions ?? null,
+				repositories: state.repositoryScope,
+				evidence,
+			}),
+		),
+	]);
+	const raw = extractTextFromContent(response.content)
+		.trim()
+		.replace(/^```(?:json)?\s*/i, "")
+		.replace(/\s*```$/, "");
+	return LandingZoneCandidateSchema.parse(JSON.parse(raw));
 }
 
 function textPayload(value: unknown): unknown {
@@ -131,7 +170,7 @@ function reviewManifest(candidate: LandingZoneCandidate, review: ProposedChangeR
 }
 
 const DEFAULT_CHANGE_TOOLS: LandingZoneChangeTools = {
-	draftCandidate: async (state) => candidateFromPrompt(state),
+	draftCandidate: draftCandidateFromEvidence,
 	validateCandidate: async (candidate) => [
 		{
 			command: "candidate contract",
@@ -142,9 +181,9 @@ const DEFAULT_CHANGE_TOOLS: LandingZoneChangeTools = {
 		{
 			command: "repository-configured validation",
 			status: "unavailable",
-			required: true,
+			required: false,
 			summary:
-				"No isolated repository validation runner is connected. GitLab CI is authoritative, but a human review cannot replace required pre-write validation.",
+				"No isolated repository validation runner is connected. The limitation is disclosed for review and GitLab CI remains authoritative.",
 		},
 	],
 	openMergeRequest: async (candidate, review) => {
@@ -280,6 +319,7 @@ export function createLandingZoneChangeNodes(tools: LandingZoneChangeTools = DEF
 				...(state.reconciliation?.conflicts ?? []),
 			];
 			const review = ProposedChangeReviewSchema.parse({
+				reviewId: crypto.randomUUID(),
 				repository: candidate.repository,
 				projectId: candidate.projectId,
 				baseBranch: candidate.baseBranch,
@@ -289,7 +329,10 @@ export function createLandingZoneChangeNodes(tools: LandingZoneChangeTools = DEF
 				title: candidate.title,
 				files,
 				diffSummary: candidate.files
-					.map((file) => `${file.expectedFileSha === null ? "Create" : "Update"} ${file.path}`)
+					.map(
+						(file) =>
+							`${file.expectedFileSha === null ? "Create" : "Update"} ${file.path}\n--- proposed full content ---\n${file.content}`,
+					)
 					.join("\n"),
 				standardsComparison: state.reconciliation?.comparisons ?? [],
 				validations: state.candidateValidations,

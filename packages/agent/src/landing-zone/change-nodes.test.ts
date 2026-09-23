@@ -102,6 +102,7 @@ describe("Landing Zone proposal contracts", () => {
 
 	test("requires the complete evidence, risk, validation, and expected-plan review payload", () => {
 		const parsed = ProposedChangeReviewSchema.parse({
+			reviewId: "11111111-1111-4111-8111-111111111111",
 			repository: candidate.repository,
 			projectId: candidate.projectId,
 			baseBranch: candidate.baseBranch,
@@ -170,6 +171,10 @@ describe("Landing Zone proposal graph", () => {
 		const interruptValue = paused.tasks[0]?.interrupts[0]?.value as { type?: string; review?: unknown } | undefined;
 		expect(interruptValue?.type).toBe("landing_zone_plan_review");
 		expect(ProposedChangeReviewSchema.safeParse(interruptValue?.review).success).toBeTrue();
+		expect(interruptValue?.review).toMatchObject({
+			reviewId: expect.any(String),
+			diffSummary: expect.stringContaining("application_name: martech"),
+		});
 
 		await graph.invoke(new Command({ resume: { decision: "approve" } }), config);
 		expect(calls).toEqual(["draft", "validate", `open:${baseSha}`, "watch"]);

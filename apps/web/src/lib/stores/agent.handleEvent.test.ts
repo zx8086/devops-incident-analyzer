@@ -7,6 +7,7 @@ import { applyStreamEvent, initialReducerState } from "./agent-reducer.ts";
 describe("applyStreamEvent", () => {
 	test("stores and clears the Landing Zone proposal review gate", () => {
 		const review = {
+			reviewId: "11111111-1111-4111-8111-111111111111",
 			repository: "aws-lz-account-creator",
 			projectId: 42,
 			baseBranch: "main",
