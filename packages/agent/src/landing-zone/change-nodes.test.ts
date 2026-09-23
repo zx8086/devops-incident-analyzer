@@ -3,6 +3,7 @@ import type { EvidenceItem, EvidenceSource } from "@devops-agent/shared";
 import { HumanMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 import {
+	DEFAULT_CHANGE_TOOLS,
 	type LandingZoneCandidate,
 	type LandingZoneChangeTools,
 	validateLandingZoneCandidate,
@@ -132,6 +133,25 @@ describe("Landing Zone proposal contracts", () => {
 		});
 		expect(result.passed).toBeFalse();
 		expect(result.blockedReason).toContain("terraform validate");
+	});
+
+	test("requires repository surface and YAML validation in the production validator", async () => {
+		const candidateFile = candidate.files[0];
+		if (!candidateFile) throw new Error("Candidate fixture must include a file");
+
+		const valid = await validateLandingZoneCandidate(candidate, DEFAULT_CHANGE_TOOLS);
+		expect(valid.passed).toBeTrue();
+		const invalid = await validateLandingZoneCandidate(
+			{ ...candidate, files: [{ ...candidateFile, content: "application_name: [" }] },
+			DEFAULT_CHANGE_TOOLS,
+		);
+		expect(invalid.passed).toBeFalse();
+		expect(invalid.blockedReason).toContain("repository authoring surface and YAML validation");
+		const unsupported = await validateLandingZoneCandidate(
+			{ ...candidate, repository: "dhco-gitlab-terraform", files: [{ ...candidateFile, path: "projects.tf" }] },
+			DEFAULT_CHANGE_TOOLS,
+		);
+		expect(unsupported.passed).toBeFalse();
 	});
 });
 

@@ -3,6 +3,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { interrupt } from "@langchain/langgraph";
+import { parse as parseYaml } from "yaml";
 import { createLlm } from "../llm.ts";
 import { getToolsForDataSource } from "../mcp-bridge.ts";
 import { extractTextFromContent } from "../message-utils.ts";
@@ -169,23 +170,50 @@ function reviewManifest(candidate: LandingZoneCandidate, review: ProposedChangeR
 	return { manifest, token };
 }
 
-const DEFAULT_CHANGE_TOOLS: LandingZoneChangeTools = {
+export const DEFAULT_CHANGE_TOOLS: LandingZoneChangeTools = {
 	draftCandidate: draftCandidateFromEvidence,
-	validateCandidate: async (candidate) => [
-		{
-			command: "candidate contract",
-			status: LandingZoneCandidateSchema.safeParse(candidate).success ? "passed" : "failed",
-			required: true,
-			summary: "The bounded candidate was checked against the Landing Zone proposal schema.",
-		},
-		{
-			command: "repository-configured validation",
-			status: "unavailable",
-			required: false,
-			summary:
-				"No isolated repository validation runner is connected. The limitation is disclosed for review and GitLab CI remains authoritative.",
-		},
-	],
+	validateCandidate: async (candidate) => {
+		const allowedSurface: Record<string, RegExp> = {
+			"aws-lz-account-creator": /^accounts\/[^/]+\.ya?ml$/i,
+			"aws-lz-network-workloads": /^environments\/[^/]+\/vpcs\/[^/]+\.ya?ml$/i,
+			"aws-lz-network-core": /^environments\/[^/]+\/WAN\/[^/]+\.ya?ml$/i,
+			"aws-lz-post-vending": /^workloads\/[^/]+\.ya?ml$/i,
+			"gitlab-k8s-runners-lzv2": /^runners\/[^/]+\/[^/]+\.ya?ml$/i,
+		};
+		const surface = allowedSurface[candidate.repository];
+		const surfacePassed = surface !== undefined && candidate.files.every((file) => surface.test(file.path));
+		let yamlError: string | undefined;
+		if (surfacePassed) {
+			for (const file of candidate.files) {
+				try {
+					const parsed = parseYaml(file.content);
+					if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+						throw new Error("root must be a mapping");
+					}
+				} catch (error) {
+					yamlError = `${file.path}: ${error instanceof Error ? error.message : String(error)}`;
+					break;
+				}
+			}
+		}
+		return [
+			{
+				command: "candidate contract",
+				status: LandingZoneCandidateSchema.safeParse(candidate).success ? "passed" : "failed",
+				required: true,
+				summary: "The bounded candidate was checked against the Landing Zone proposal schema.",
+			},
+			{
+				command: "repository authoring surface and YAML validation",
+				status: surfacePassed ? (yamlError ? "failed" : "passed") : "unavailable",
+				required: true,
+				summary: surfacePassed
+					? (yamlError ??
+						"Every proposed file matches the repository authoring surface and parses as a YAML mapping. GitLab CI remains authoritative for generator and plan validation.")
+					: "No safe in-process validator exists for this repository or file surface; the proposal is blocked before review.",
+			},
+		];
+	},
 	openMergeRequest: async (candidate, review) => {
 		const { manifest, token } = reviewManifest(candidate, review);
 		const common = {
