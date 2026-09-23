@@ -72,8 +72,11 @@ retention picture above).
 
 ### Cost & time (incident replay)
 
-- 32 examples per repetition per leg; ~$0.50-1.50 and ~5-10min PER repetition (Bedrock +
-  gpt-4o-mini judge) -- scale by `--repetitions` and by the number of A/B legs
+- 32 examples per repetition per leg, ~5-6 min per example run. Measured (LangSmith, AWS
+  connected, 64-run leg = 32 incidents x 2 repetitions): haiku-4-5 ~$136 / 142.5M tokens,
+  sonnet-4-6 ~$447, ~4.5-5.5h per leg. So roughly $68-224 and ~2.5h PER repetition, depending
+  on the sub-agent model -- scale by `--repetitions` and by the number of A/B legs. Do NOT use
+  the synthetic eval's ~$0.50-1.50 figure below here; it covers 5 queries, not 32 incidents
 - `EVAL_FIXTURE_MODE=replay-outputs` re-grades a recorded leg for judge cost only (pennies,
   minutes; no Bedrock/MCP)
 

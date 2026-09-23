@@ -120,6 +120,7 @@ export {
 } from "./agent-state.ts";
 export {
 	type AgentCoreProxyHandle,
+	jsonRpcRetryDeadlineMs,
 	loadProxyConfigFromEnv,
 	type ProxyConfig,
 	type ProxyCredentials,

@@ -1,5 +1,6 @@
 // packages/agent/src/mcp-bridge.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { jsonRpcRetryDeadlineMs } from "@devops-agent/shared";
 import { landingZoneGitLabImportEnabled } from "./landing-zone/gitlab-import.ts";
 import * as mcpBridge from "./mcp-bridge.ts";
 import {
@@ -202,16 +203,32 @@ describe("withTimeout (SIO-680/682)", () => {
 });
 
 // SIO-774: AgentCore-backed MCP servers (kafka-mcp, aws-mcp) ride a SigV4 proxy
-// whose cold-start retry ladder runs to ~30s. The bridge's connect timeout has
-// to outlast that budget so the proxy's retry can succeed before the bridge bails.
-// Non-AgentCore servers have no cold-start cost and keep the 10s default.
-describe("connectTimeoutFor (SIO-774)", () => {
-	test("kafka-mcp gets AgentCore-sized timeout", () => {
-		expect(connectTimeoutFor("kafka-mcp")).toBe(35_000);
+// that retries cold-start errors until jsonRpcRetryDeadlineMs() (60s since SIO-868).
+// The bridge's connect timeout has to outlast that deadline so the proxy's retry can
+// succeed before the bridge bails. SIO-1871: the timeout had been a copied 35s
+// constant that SIO-868 left below the deadline; these tests pin the relation, not a
+// number. Non-AgentCore servers have no cold-start cost and keep the 10s default.
+describe("connectTimeoutFor (SIO-774, SIO-1871)", () => {
+	const DEADLINE_ENV = "AGENTCORE_JSONRPC_RETRY_DEADLINE_MS";
+	let savedDeadline: string | undefined;
+	beforeEach(() => {
+		savedDeadline = process.env[DEADLINE_ENV];
+		delete process.env[DEADLINE_ENV];
+	});
+	afterEach(() => {
+		if (savedDeadline === undefined) delete process.env[DEADLINE_ENV];
+		else process.env[DEADLINE_ENV] = savedDeadline;
 	});
 
-	test("aws-mcp gets AgentCore-sized timeout", () => {
-		expect(connectTimeoutFor("aws-mcp")).toBe(35_000);
+	test.each(["kafka-mcp", "aws-mcp"])("%s timeout exceeds the default proxy retry deadline", (server) => {
+		expect(jsonRpcRetryDeadlineMs()).toBe(60_000);
+		expect(connectTimeoutFor(server)).toBeGreaterThan(jsonRpcRetryDeadlineMs());
+	});
+
+	test.each(["kafka-mcp", "aws-mcp"])("%s timeout follows an overridden proxy deadline", (server) => {
+		process.env[DEADLINE_ENV] = "120000";
+		expect(jsonRpcRetryDeadlineMs()).toBe(120_000);
+		expect(connectTimeoutFor(server)).toBeGreaterThan(120_000);
 	});
 
 	test("non-AgentCore servers stay on the 10s default", () => {

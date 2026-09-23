@@ -73,7 +73,7 @@ These tune the SigV4 proxy's JSON-RPC retry loop and apply to **every** AgentCor
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `AGENTCORE_JSONRPC_RETRY_MAX_ATTEMPTS` | No | `9` | Max JSON-RPC `-320xx` retry attempts per tool call. Raise for environments with slower cold-starts. |
-| `AGENTCORE_JSONRPC_RETRY_DEADLINE_MS` | No | `60000` | Cumulative wallclock budget (ms) for all retries of one tool call -- the effective bound. A retry that would overshoot the deadline is skipped and the call fails fast. |
+| `AGENTCORE_JSONRPC_RETRY_DEADLINE_MS` | No | `60000` | Cumulative wallclock budget (ms) for all retries of one tool call -- the effective bound. A retry that would overshoot the deadline is skipped and the call fails fast, and each in-flight TCP try is clamped to the time left, so the whole call never outlasts it (SIO-1871). The agent bridge's AgentCore connect timeout is derived from this value plus 15s. |
 
 **Tradeoff:** a genuinely-unavailable runtime is retried up to the deadline before the call fails, so a higher deadline trades faster cold-start recovery for slower fast-fail on a hard-down runtime.
 

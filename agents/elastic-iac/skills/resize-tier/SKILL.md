@@ -32,7 +32,7 @@ Verify the layout with `gitlab_get_repository_tree` first. Typical paths in the 
 
 ```
 stacks/<cluster>/topology.tf       # tier sizing
-stacks/<cluster>/ilm.tf            # ILM policies
+environments/<cluster>/lifecycle-policies/<policy>.json  # ILM policies (GitOps JSON, SIO-880)
 modules/elastic-cloud-deployment/  # shared module
 ```
 

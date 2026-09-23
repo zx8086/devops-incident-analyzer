@@ -375,6 +375,71 @@ describe("JSON-RPC -320xx retry", () => {
 		}
 	});
 
+	// SIO-1871: the deadline is a HARD bound. A hung upstream used to hold the call for
+	// two full 30s TCP tries regardless of the deadline, so the agent bridge's connect
+	// timeout (deadline + margin) could fire while the proxy was still working.
+	test("a hung upstream is cut at the cumulative deadline, not after 2 x 30s TCP tries", async () => {
+		process.env.AGENTCORE_JSONRPC_RETRY_DEADLINE_MS = "300";
+		const hung = (): Promise<Response> =>
+			new Promise((_, reject) => {
+				const signal = fetchCalls[fetchCalls.length - 1]?.init.signal;
+				signal?.addEventListener("abort", () => reject(signal.reason));
+			});
+		try {
+			scriptedResponses = [hung, hung, hung];
+			const started = Date.now();
+			const res = await callTool();
+			const elapsed = Date.now() - started;
+			const body = await res.text();
+			expect(res.status).toBe(502);
+			expect(body).toContain('"code":-32000');
+			expect(elapsed).toBeLessThan(3_000);
+			expect(fetchCalls.length).toBe(1);
+		} finally {
+			delete process.env.AGENTCORE_JSONRPC_RETRY_DEADLINE_MS;
+		}
+	});
+
+	// SIO-1871 (Greptile round 2): credential retrieval (an unbounded `aws configure
+	// export-credentials` spawn for profile creds) must count against the deadline. If it
+	// finishes past the deadline, the upstream call gets no time, so no success can land
+	// after the bridge (deadline + margin) has already given up.
+	test("slow credential retrieval eats the deadline instead of extending it", async () => {
+		process.env.AGENTCORE_JSONRPC_RETRY_DEADLINE_MS = "300";
+		const slowCreds = async (): Promise<ProxyCredentials> => {
+			await Bun.sleep(400);
+			return TEST_CREDS;
+		};
+		const quickOk = (): Promise<Response> =>
+			new Promise((resolve, reject) => {
+				const signal = fetchCalls[fetchCalls.length - 1]?.init.signal;
+				const timer = setTimeout(() => resolve(jsonRpcOk()), 50);
+				signal?.addEventListener("abort", () => {
+					clearTimeout(timer);
+					reject(signal.reason);
+				});
+			});
+		const slowProxy = await startAgentCoreProxy({ ...TEST_CONFIG, credentials: slowCreds }, TEST_CARD, "kafka-proxy");
+		try {
+			scriptedResponses = [quickOk, quickOk, quickOk];
+			const res = await ORIG_FETCH(`${slowProxy.url}/mcp`, {
+				method: "POST",
+				headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					method: "tools/call",
+					params: { name: "kafka_get_cluster_info", arguments: {} },
+				}),
+			});
+			expect(res.status).toBe(502);
+			expect(await res.text()).toContain('"code":-32000');
+		} finally {
+			await slowProxy.close();
+			delete process.env.AGENTCORE_JSONRPC_RETRY_DEADLINE_MS;
+		}
+	});
+
 	test("preserves mcp-session-id across retried attempts", async () => {
 		scriptedResponses = [jsonRpcOk()];
 		await ORIG_FETCH(`${proxy.url}/mcp`, {
