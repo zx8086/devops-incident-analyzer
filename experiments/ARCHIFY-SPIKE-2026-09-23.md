@@ -17,7 +17,7 @@ Can Archify (https://github.com/tt-a1i/archify, MIT) replace the ECharts force l
 | CLI wrapper (`deliver --json`, temp dir, diagnostics) | `apps/web/src/lib/server/archify/render.ts` |
 | Deterministic converter (banded grid, VPC/subnet boundaries, gutter routing) | `apps/web/src/lib/server/archify/to-archify.ts` |
 | LLM author plus repair loop on Bedrock (`diagramAuthor` role, max 3 attempts). **Measured, then removed before the PR** (see Recommendation) | was `apps/web/src/lib/server/archify/describe.ts` |
-| `POST /api/diagram` (Zod-validated, cached by hash); `GET` reports the flag | `apps/web/src/routes/api/diagram/+server.ts` |
+| `POST /api/diagram` (Zod-validated, cached by hash); `GET` reports the flag. Bounded after the Greptile review on #904: the builders' node/edge caps, a 512 KB body cap, a 50-entry cache, and at most 2 renders running + 8 queued (503 beyond that) | `apps/web/src/routes/api/diagram/+server.ts` |
 | `Map / Diagram` tabs (the spike also had a `Diagram (LLM)` tab), sandboxed srcdoc iframe | `apps/web/src/lib/components/ArchifyDiagram.svelte` |
 
 `describe.ts` was a port of `archify/integrations/bun-svelte/describe.ts`. The Anthropic SDK was swapped for `createLlm`, which meant no new dependency, no new secret, the topology never left the AWS account, and the call was traced and deadline-bound. The measurements below were taken with it. It was then deleted, together with the `diagramAuthor` role, the prompt-only vendored files (`SKILL.md`, the authoring contract, the example) and the LLM tab. Archify itself uses no model, so the shipped path makes no LLM call.

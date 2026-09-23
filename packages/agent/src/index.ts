@@ -49,6 +49,11 @@ export {
 export { installAgentMemory } from "./agent-memory-install.ts";
 export { aggregate } from "./aggregator.ts";
 export { checkAlignment, getDataSourceErrorCategories, routeAfterAlignment } from "./alignment.ts";
+// SIO-1876: the builders' caps, so /api/diagram rejects a client-sent topology no builder could produce.
+export {
+	MAX_EDGES as APPLICATION_TOPOLOGY_MAX_EDGES,
+	MAX_NODES as APPLICATION_TOPOLOGY_MAX_NODES,
+} from "./application-topology.ts";
 export { AttachmentError, type ProcessedAttachments, processAttachments } from "./attachment-processor.ts";
 export { classify } from "./classifier.ts";
 export { checkConfidence } from "./confidence-gate.ts";
@@ -242,6 +247,10 @@ export {
 export { extractStreamDeltaText, extractTextFromContent } from "./message-utils.ts";
 export { aggregateMitigation } from "./mitigation.ts";
 export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
+export {
+	MAX_EDGES as NETWORK_TOPOLOGY_MAX_EDGES,
+	MAX_NODES as NETWORK_TOPOLOGY_MAX_NODES,
+} from "./network-topology.ts";
 export { normalizeIncident } from "./normalizer.ts";
 export { getWorkspaceRoot, skillFilePath } from "./paths.ts";
 // SIO-1655: the in-process fleet console graph (Phase 2c). Gated OFF by default.
