@@ -105,7 +105,7 @@ export const LANDING_ZONE_DATASET: LandingZoneEvalExample[] = [
 		"Which Terraform and AWS provider versions does the aws-lz-network-core core network repository currently select?",
 		"understand",
 		["aws-lz-network-core"],
-		{ requiredAuthoritativeSources: ["gitlab", "terraform-docs"], minimumRepresentativeExamples: 0 },
+		{ requiredAuthoritativeSources: ["gitlab"], minimumRepresentativeExamples: 0 },
 	),
 	benchmark(
 		"lz-backend-conflict",
@@ -128,7 +128,7 @@ export const LANDING_ZONE_DATASET: LandingZoneEvalExample[] = [
 		"Explain the DNS resolution path applied after a workload account VPC is vended.",
 		"learn",
 		["aws-lz-network-workloads", "aws-lz-post-vending"],
-		{ requiredAuthoritativeSources: ["gitlab", "pvh-okf", "aws-docs"] },
+		{ requiredAuthoritativeSources: ["gitlab", "pvh-okf"] },
 	),
 	benchmark(
 		"lz-source-outage",
@@ -137,7 +137,7 @@ export const LANDING_ZONE_DATASET: LandingZoneEvalExample[] = [
 		"propose-change",
 		["aws-lz-network-workloads"],
 		{
-			requiredAuthoritativeSources: ["pvh-okf", "terraform-docs", "aws-docs"],
+			requiredAuthoritativeSources: ["pvh-okf"],
 			minimumCitations: 0,
 			minimumRepresentativeExamples: 0,
 			mustExpressUncertainty: true,

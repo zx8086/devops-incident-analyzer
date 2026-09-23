@@ -243,6 +243,7 @@ export function changeGatePresence(run: Run, example?: Example): LandingZoneFeed
 		passed = !attemptedWrite && parsed.output.mergeRequest === null;
 	} else if (parsed.expected.changeControl === "blocked") {
 		passed =
+			!attemptedWrite &&
 			(parsed.output.outcome === "blocked" || parsed.output.risk?.blocked === true) &&
 			parsed.output.mergeRequest === null;
 	} else {

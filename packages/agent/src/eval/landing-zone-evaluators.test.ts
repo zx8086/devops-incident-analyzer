@@ -126,6 +126,13 @@ describe("Landing Zone benchmark dataset", () => {
 		}
 		expect(passed / LANDING_ZONE_DATASET.length).toBeGreaterThanOrEqual(LANDING_ZONE_ROUTING_THRESHOLD);
 	});
+
+	test("requires only authoritative sources configured by the evaluation graph", () => {
+		const unavailable = new Set(["terraform-docs", "aws-docs"]);
+		for (const entry of LANDING_ZONE_DATASET) {
+			expect(entry.outputs.requiredAuthoritativeSources.filter((source) => unavailable.has(source))).toEqual([]);
+		}
+	});
 });
 
 describe("Landing Zone evaluation runner", () => {
@@ -218,6 +225,19 @@ describe("Landing Zone deterministic evaluators", () => {
 		expect(noApplyCompliance(candidate, example()).score).toBe(0);
 		expect(noDefaultBranchWriteCompliance(candidate, example()).score).toBe(0);
 		expect(changeGatePresence(candidate, example()).score).toBe(0);
+	});
+
+	test("rejects a blocked run that already wrote to a feature branch", () => {
+		const blocked = LANDING_ZONE_DATASET.find((entry) => entry.metadata.scenario === "destructive-request");
+		if (!blocked) throw new Error("destructive-request case missing");
+		const output = passingOutput();
+		output.outcome = "blocked";
+		output.risk = { blocked: true, requiresHumanDecision: true, stopConditions: ["destructive request"] };
+		output.attemptedOperations = ["read", "branch-write"];
+		output.proposedChangeReview = null;
+		output.mergeRequest = null;
+
+		expect(changeGatePresence(run(output), example(blocked)).score).toBe(0);
 	});
 
 	test("requires uncertainty language when authoritative sources are unavailable", () => {
