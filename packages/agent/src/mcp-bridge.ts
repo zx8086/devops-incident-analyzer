@@ -3,7 +3,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { getLogger } from "@devops-agent/observability";
-import type { IdentityCard, McpRole, ReadinessSnapshot } from "@devops-agent/shared";
+import { type IdentityCard, jsonRpcRetryDeadlineMs, type McpRole, type ReadinessSnapshot } from "@devops-agent/shared";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { context, propagation } from "@opentelemetry/api";
 import { z } from "zod";
@@ -164,19 +164,22 @@ export function isClosedModuleRunnerError(error: unknown): boolean {
 	return error instanceof Error && error.message.includes("module runner has been closed");
 }
 
-// SIO-774: AgentCore-backed servers cold-start through a SigV4 proxy whose
-// JSON-RPC retry ladder runs to ~30s (see agentcore-proxy.ts JSONRPC_RETRY_DEADLINE_MS).
-// Bridge connect timeout must exceed that so the proxy's retry succeeds before
-// the bridge bails. Non-AgentCore servers have no cold-start cost and stay on 10s.
+// SIO-774: AgentCore-backed servers cold-start through a SigV4 proxy that retries
+// JSON-RPC -320xx errors until jsonRpcRetryDeadlineMs() (60s default since SIO-868,
+// AGENTCORE_JSONRPC_RETRY_DEADLINE_MS overrides). The bridge connect timeout must
+// EXCEED that deadline or it abandons a connect the proxy would have recovered.
+// SIO-1871: derived from the same reader instead of a copied constant (the copy sat
+// at 35s after SIO-868 moved the deadline to 60s). The margin covers the attempt
+// still in flight when the deadline passes: the proxy only stops scheduling NEW
+// retries at the deadline, and a cold -32010 round trip is ~4-5s server-side.
+// Non-AgentCore servers have no cold-start cost and stay on 10s.
 const DEFAULT_MCP_CONNECT_TIMEOUT_MS = 10_000;
-const AGENTCORE_MCP_CONNECT_TIMEOUT_MS = 35_000;
-const PER_SERVER_CONNECT_TIMEOUTS: Record<string, number> = {
-	"kafka-mcp": AGENTCORE_MCP_CONNECT_TIMEOUT_MS,
-	"aws-mcp": AGENTCORE_MCP_CONNECT_TIMEOUT_MS,
-};
+const AGENTCORE_CONNECT_MARGIN_MS = 15_000;
+const AGENTCORE_SERVERS = new Set(["kafka-mcp", "aws-mcp"]);
 
 function connectTimeoutFor(serverName: string): number {
-	return PER_SERVER_CONNECT_TIMEOUTS[serverName] ?? DEFAULT_MCP_CONNECT_TIMEOUT_MS;
+	if (AGENTCORE_SERVERS.has(serverName)) return jsonRpcRetryDeadlineMs() + AGENTCORE_CONNECT_MARGIN_MS;
+	return DEFAULT_MCP_CONNECT_TIMEOUT_MS;
 }
 
 // SIO-893: per-server tool-call timeout. The @langchain/mcp-adapters default tool

@@ -48,19 +48,31 @@ The agent must refuse to draft an MR that introduces any of:
 
 ## Build the diff
 
-Stack module path: `stacks/<cluster>/ilm.tf`.
+ILM policies are GitOps JSON, one file per policy: `environments/<cluster>/lifecycle-policies/<policy>.json`
+(SIO-880 migrated them off the old `stacks/<cluster>/ilm.tf` Terraform HCL; do not write HCL).
+Not every cluster has a `lifecycle-policies/` directory -- check with `gitlab_get_repository_tree`
+first. For a MODIFY, read the existing file and change only the fields the request names.
 
-For Terraform, the resource is typically:
+Shape (mirrors `modules/lifecycle/variables.tf`; SIO-931): `name` plus phase keys at the TOP
+LEVEL (no `phases` wrapper, not the live-ES `phases.<p>.actions.<a>` API shape), with actions as
+NESTED objects:
 
-```hcl
-resource "elasticstack_elasticsearch_index_lifecycle" "<policy_name>" {
-  name = "<policy_name>"
-  # Paste the JSON body from knowledge/playbook/3-index-lifecycle-management-ilm.md §3.1 or §3.6
-  # Substitute only: max_primary_shard_size, min_age values, delete_after_days
+```json
+{
+  "name": "<policy_name>",
+  "hot": { "priority": 100, "max_age": "7d", "max_primary_shard_size": "10gb", "rollover": true },
+  "warm": { "min_age": "1d", "priority": 50, "allocate": { "number_of_replicas": 0 }, "forcemerge": { "max_num_segments": 1 } },
+  "frozen": { "min_age": "7d", "searchable_snapshot": { "snapshot_repository": "found-snapshots", "force_merge_index": true } },
+  "delete": { "min_age": "60d", "delete_searchable_snapshot": true, "wait_for_snapshot": { "policy": "cloud-snapshot-policy" } }
 }
 ```
 
-Cite the playbook section in a `# ref:` comment above the resource block so future readers know which pattern this implements.
+Take the phase values from `knowledge/playbook/3-index-lifecycle-management-ilm.md` §3.1 or §3.6
+and substitute only `max_primary_shard_size`, the `min_age` values and the retention
+(`delete.min_age`). Never write the flat forms (`set_priority`, `searchable_snapshot_repository`,
+`forcemerge_max_num_segments`): `validateIlmPolicy` (`packages/agent/src/iac/nodes.ts`) blocks
+them before commit and the module rejects them. `CANONICAL_ILM_SHAPE` in the same file is the
+reference shape. JSON has no comments, so cite the playbook section in the MR body instead.
 
 ## Open the MR
 

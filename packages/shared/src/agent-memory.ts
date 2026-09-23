@@ -7,8 +7,10 @@
 //
 // The interface deliberately exposes only the operations the agent lifecycle
 // needs: idempotent user/session creation, fact/message writes, semantic
-// recall, session end, and a readiness probe. There is no delete/list/update —
-// memory pruning is the service's TTL concern, not the agent's.
+// recall, session end, and a readiness probe. There is no list/update, and
+// memory pruning is the service's TTL concern, not the agent's. The one
+// exception is the optional deleteMemoryBlocks (SIO-1072), which removes
+// specific blocks by id for reconciliation; it is not a general pruning path.
 //
 // Embeddings: the service generates the vector embedding + summary for each
 // block (there is no client-supplied vector field). Search sends a natural

@@ -1268,7 +1268,8 @@ function markRecoveredToolErrors(errors: ToolError[], messages: TrajectoryMessag
 // The derived prompt-name budget is MAX_TOOLS_PER_AGENT - MIN_ACTION_TOOLS = 17, enforced as
 // PROMPT_TOOL_BUDGET in gitagent-bridge/src/skill-tool-coverage.test.ts:28. That test is the
 // authority on who is over it -- read KNOWN_OVERSUBSCRIBED there rather than any figure quoted
-// in a ticket. As of 2026-09-16 the only entry is aws-agent at 62; SIO-1238 removed gitlab-agent
+// in a ticket. As of 2026-09-23 the only entry is aws-agent at 35 (SIO-1239 lowered it from 62,
+// PR #799); SIO-1238 removed gitlab-agent
 // (18 -> 16). Note that test hardcodes its own copy of this constant (`:21`, "keep in sync"),
 // so changing the value here silently desynchronizes the budget it enforces until both move.
 //
@@ -1513,8 +1514,8 @@ export function describeTruncation(
 	// Head drops first, then tail -- same order as the slice in composeBoundTools, so the names
 	// read in the order the budget discarded them.
 	const allDropped = [...head.slice(headQuota), ...tail.slice(actionQuota)].map((t) => t.name);
-	// aws-agent's head alone is 62 (skill-tool-coverage.test.ts:38), so an uncapped list would put
-	// ~77 names in one line. Cap it, but keep droppedHead/droppedTail EXACT so the counts never
+	// aws-agent's head alone is 35 (KNOWN_OVERSUBSCRIBED in skill-tool-coverage.test.ts; 62 before
+	// SIO-1239), so an uncapped list would put ~50 names in one line. Cap it, but keep droppedHead/droppedTail EXACT so the counts never
 	// lie about how much was cut -- and flag the cap rather than letting a reader assume the list
 	// is complete. The repo's sampling convention elsewhere (extract-findings.ts:105) is a bare
 	// slice(0, 3); this keeps far more because WHICH names dropped is the whole point (SIO-1234's

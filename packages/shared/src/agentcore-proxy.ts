@@ -670,8 +670,11 @@ export async function startAgentCoreProxy(
 
 						// SIO-737: Outer JSON-RPC -320xx retry loop. Bails on success,
 						// non-retryable code, attempt-budget exhaustion, or cumulative
-						// deadline. The 5-attempt budget is independent of the inner TCP
-						// retry counter; both share the cumulative 30s wallclock deadline.
+						// deadline. The attempt budget (9 by default since SIO-868) is independent
+						// of the inner TCP retry counter; both share the cumulative wallclock
+						// deadline (jsonRpcRetryDeadlineMs, 60s default). The deadline only stops
+						// NEW retries: an attempt in flight can finish after it, which is why the
+						// agent bridge's connect timeout adds a margin on top (SIO-1871).
 						let response: Response | undefined;
 						let clonedBody = "";
 						let terminalFailure = false;
