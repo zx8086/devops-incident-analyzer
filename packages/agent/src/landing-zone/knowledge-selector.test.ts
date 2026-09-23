@@ -7,6 +7,7 @@ import { selectLandingZoneKnowledge } from "./knowledge-selector.ts";
 describe("selectLandingZoneKnowledge", () => {
 	const cases = [
 		["account vending", "aws-lz-account-creator"],
+		["show me Terraform for creating an AWS account", "aws-lz-account-creator"],
 		["Cloud WAN core network", "aws-lz-network-core"],
 		["workload VPC and subnets", "aws-lz-network-workloads"],
 		["GitLab project", "dhco-gitlab-terraform"],

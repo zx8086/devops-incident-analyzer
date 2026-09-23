@@ -509,6 +509,7 @@ describe("buildLandingZoneGraph", () => {
 		["Delete the workload VPC resource", "destructive plan"],
 		["Remove the subnet resource", "destructive plan"],
 		["Migrate backend locking", "Backend and locking"],
+		["Run terraform state rm for the account resource and recreate it", "Terraform state operations"],
 	] as const)("routes high-risk imperative requests through the stop gates: %s", async (request, reason) => {
 		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
 		const result = await graph.invoke(
