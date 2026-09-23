@@ -824,8 +824,16 @@ export async function getIacTurnOutcome(threadId: string): Promise<IacTurnOutcom
 // not a later reset state. The projection deliberately contains categorical
 // metadata only; prompts, evidence content, account scope, and identifiers stay
 // in the graph checkpoint and are never copied into logs or SSE events.
-export async function getLandingZoneTurnTelemetry(threadId: string): Promise<LandingZoneTurnTelemetry> {
-	const graph = await getLandingZoneGraph();
-	const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
-	return projectLandingZoneTurnTelemetry(snapshot.values as LandingZoneStateType);
+export async function getLandingZoneTurnTelemetry(threadId: string): Promise<LandingZoneTurnTelemetry | undefined> {
+	try {
+		const graph = await getLandingZoneGraph();
+		const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+		return projectLandingZoneTurnTelemetry(snapshot.values as LandingZoneStateType);
+	} catch (error) {
+		getLogger("web:landing-zone").warn(
+			{ threadId, error: error instanceof Error ? error.message : String(error) },
+			"Landing Zone completion telemetry failed; continuing without telemetry",
+		);
+		return undefined;
+	}
 }

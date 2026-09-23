@@ -80,7 +80,7 @@ LangSmith invocation metadata includes `agent_id` and `graph_used`; the trace ta
 - risk tier and outcome;
 - graph, Agent Memory, and knowledge-graph usage booleans.
 
-The projection is validated by Zod in `packages/agent/src/landing-zone/telemetry.ts`. It excludes prompts, responses, evidence summaries and reasons, account scope, account IDs, ARNs, request IDs, file paths, candidate content, review instructions, and credentials. Do not add any of those fields to logs, metrics labels, or LangSmith metadata.
+The projection is derived in `packages/agent/src/landing-zone/telemetry.ts` and validated against the shared Zod stream contract in `packages/shared/src/agent-state.ts`. It excludes prompts, responses, evidence summaries and reasons, account scope, account IDs, ARNs, request IDs, file paths, candidate content, review instructions, and credentials. If the completion snapshot or projection fails, the route warns and finishes the successful turn without telemetry; observability must not become a completion dependency. Do not add excluded fields to logs, metrics labels, or LangSmith metadata.
 
 ## Security review
 

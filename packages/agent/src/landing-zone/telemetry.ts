@@ -1,37 +1,14 @@
 // packages/agent/src/landing-zone/telemetry.ts
 
-import { z } from "zod";
+import { type LandingZoneTurnTelemetry, LandingZoneTurnTelemetrySchema } from "@devops-agent/shared";
 import type { LandingZoneStateType } from "./state.ts";
 
-const EvidenceAvailabilitySchema = z.enum(["collected", "unavailable", "skipped", "not-attempted"]);
+export type { LandingZoneTurnTelemetry };
+export { LandingZoneTurnTelemetrySchema };
 
-export const LandingZoneTurnTelemetrySchema = z
-	.object({
-		agent: z.literal("landing-zone-terraform"),
-		intent: z.enum(["learn", "understand", "review", "propose-change"]),
-		repositories: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,99}$/)).max(23),
-		evidenceAvailability: z
-			.object({
-				gitlab: EvidenceAvailabilitySchema,
-				okf: EvidenceAvailabilitySchema,
-				terraformDocs: EvidenceAvailabilitySchema,
-				awsDocs: EvidenceAvailabilitySchema,
-				awsApi: EvidenceAvailabilitySchema,
-				memory: EvidenceAvailabilitySchema,
-				knowledgeGraph: EvidenceAvailabilitySchema,
-			})
-			.strict(),
-		riskTier: z.enum(["low", "medium", "high", "blocked", "unassessed"]),
-		outcome: z.enum(["pending", "answered", "blocked", "failed"]),
-		graphUsed: z.literal(true),
-		memoryUsed: z.boolean(),
-		knowledgeGraphUsed: z.boolean(),
-	})
-	.strict();
-
-export type LandingZoneTurnTelemetry = z.infer<typeof LandingZoneTurnTelemetrySchema>;
-
-function availability(value: LandingZoneStateType["gitlabEvidence"]): z.infer<typeof EvidenceAvailabilitySchema> {
+function availability(
+	value: LandingZoneStateType["gitlabEvidence"],
+): LandingZoneTurnTelemetry["evidenceAvailability"]["gitlab"] {
 	return value?.status ?? "not-attempted";
 }
 

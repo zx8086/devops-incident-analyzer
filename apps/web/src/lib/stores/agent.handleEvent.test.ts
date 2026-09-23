@@ -112,6 +112,30 @@ describe("applyStreamEvent", () => {
 		expect(next.lastLowConfidence).toBe(true);
 	});
 
+	test("done retains Landing Zone telemetry at the reducer boundary", () => {
+		const telemetry = {
+			agent: "landing-zone-terraform" as const,
+			intent: "review" as const,
+			repositories: ["aws-lz-account-creator"],
+			evidenceAvailability: {
+				gitlab: "collected" as const,
+				okf: "collected" as const,
+				terraformDocs: "unavailable" as const,
+				awsDocs: "unavailable" as const,
+				awsApi: "skipped" as const,
+				memory: "collected" as const,
+				knowledgeGraph: "collected" as const,
+			},
+			riskTier: "high" as const,
+			outcome: "answered" as const,
+			graphUsed: true as const,
+			memoryUsed: true,
+			knowledgeGraphUsed: true,
+		};
+		const next = applyStreamEvent(initialReducerState(), { type: "done", threadId: "t-1", telemetry });
+		expect(next.lastLandingZoneTelemetry).toEqual(telemetry);
+	});
+
 	test("done without the cap fields resets them (no stale carryover across turns)", () => {
 		let state = applyStreamEvent(initialReducerState(), {
 			type: "done",

@@ -231,7 +231,9 @@ export const POST: RequestHandler = async ({ request }) => {
 									const telemetry = await getLandingZoneTurnTelemetry(threadId);
 									await pruneThreadState(threadId, body.agentName);
 									await runPostTurn({ agentName: body.agentName, threadId });
-									log.info({ ...telemetry, responseTime: Date.now() - startTime }, "agent.landing-zone.turn");
+									if (telemetry) {
+										log.info({ ...telemetry, responseTime: Date.now() - startTime }, "agent.landing-zone.turn");
+									}
 									send({
 										type: "done",
 										threadId,

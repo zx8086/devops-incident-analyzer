@@ -13,6 +13,7 @@ import type {
 	HilMatchCandidate,
 	KafkaFindings,
 	LandingZoneTopologyEvent,
+	LandingZoneTurnTelemetry,
 	LearningProposal,
 	MlAnomalyExplainer,
 	NetworkTopology,
@@ -422,6 +423,7 @@ export interface ReducerState {
 	lastSuggestions: string[];
 	lastResponseTime: number | undefined;
 	lastToolsUsed: string[];
+	lastLandingZoneTelemetry: LandingZoneTurnTelemetry | undefined;
 	lastRunId: string | undefined;
 	// SIO-1134: the turn's requestId (== KG incident id), carried on the done
 	// event; the Create-ticket flow sends it so creation curates the incident.
@@ -508,6 +510,7 @@ export function initialReducerState(): ReducerState {
 		lastSuggestions: [],
 		lastResponseTime: undefined,
 		lastToolsUsed: [],
+		lastLandingZoneTelemetry: undefined,
 		lastRunId: undefined,
 		lastRequestId: undefined,
 		lastConfidence: undefined,
@@ -629,6 +632,7 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 				threadId: event.threadId,
 				lastResponseTime: event.responseTime,
 				lastToolsUsed: event.toolsUsed ?? [],
+				lastLandingZoneTelemetry: event.telemetry,
 				// SIO-1835: `done.runId` is the route's local request correlator, NOT the
 				// LangSmith trace root. Taking it here overwrote the real id that the
 				// `run_id` event delivered mid-stream, so feedback went on filing against an

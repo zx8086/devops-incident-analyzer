@@ -8,6 +8,7 @@ import type {
 	HilApplyReport,
 	HilItemEdits,
 	LandingZoneTopologyEvent,
+	LandingZoneTurnTelemetry,
 	MlAnomalyExplainer,
 	NetworkTopology,
 	PendingAction,
@@ -151,6 +152,7 @@ function createAgentStore() {
 	let lastSuggestions = $state<string[]>([]);
 	let lastResponseTime = $state<number | undefined>(undefined);
 	let lastToolsUsed = $state<string[]>([]);
+	let lastLandingZoneTelemetry = $state<LandingZoneTurnTelemetry | undefined>(undefined);
 	let lastRunId = $state<string | undefined>(undefined);
 	let lastRequestId = $state<string | undefined>(undefined);
 	let lastConfidence = $state<number | undefined>(undefined);
@@ -393,6 +395,7 @@ function createAgentStore() {
 			lastSuggestions,
 			lastResponseTime,
 			lastToolsUsed,
+			lastLandingZoneTelemetry,
 			lastRunId,
 			lastRequestId,
 			lastConfidence,
@@ -439,6 +442,7 @@ function createAgentStore() {
 		lastSuggestions = next.lastSuggestions;
 		lastResponseTime = next.lastResponseTime;
 		lastToolsUsed = next.lastToolsUsed;
+		lastLandingZoneTelemetry = next.lastLandingZoneTelemetry;
 		lastRunId = next.lastRunId;
 		lastRequestId = next.lastRequestId;
 		lastConfidence = next.lastConfidence;
@@ -686,6 +690,7 @@ function createAgentStore() {
 		completedNodes = new Map();
 		lastSuggestions = [];
 		lastDataSourceContext = undefined;
+		lastLandingZoneTelemetry = undefined;
 		pendingAttachments = [];
 		pendingActions = [];
 		actionResults = [];
@@ -1078,6 +1083,9 @@ function createAgentStore() {
 		},
 		get lastDataSourceContext() {
 			return lastDataSourceContext;
+		},
+		get lastLandingZoneTelemetry() {
+			return lastLandingZoneTelemetry;
 		},
 		get pendingAttachments() {
 			return pendingAttachments;

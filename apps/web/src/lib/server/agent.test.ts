@@ -453,6 +453,11 @@ test("reads privacy-safe Landing Zone telemetry from the checkpoint", async () =
 	});
 });
 
+test("treats Landing Zone completion telemetry as best-effort", async () => {
+	mockGetState.mockRejectedValueOnce(new Error("checkpoint unavailable"));
+	expect(await getLandingZoneTurnTelemetry("thread-landing-zone-telemetry-failure")).toBeUndefined();
+});
+
 describe("pruneThreadState", () => {
 	test("pruneThreadState removes ids via updateState when over threshold", async () => {
 		mockUpdateState.mockClear();

@@ -913,6 +913,31 @@ export const DataSourceContextSchema = z.object({
 });
 export type DataSourceContext = z.infer<typeof DataSourceContextSchema>;
 
+export const LandingZoneTurnTelemetrySchema = z
+	.object({
+		agent: z.literal("landing-zone-terraform"),
+		intent: z.enum(["learn", "understand", "review", "propose-change"]),
+		repositories: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,99}$/)).max(23),
+		evidenceAvailability: z
+			.object({
+				gitlab: z.enum(["collected", "unavailable", "skipped", "not-attempted"]),
+				okf: z.enum(["collected", "unavailable", "skipped", "not-attempted"]),
+				terraformDocs: z.enum(["collected", "unavailable", "skipped", "not-attempted"]),
+				awsDocs: z.enum(["collected", "unavailable", "skipped", "not-attempted"]),
+				awsApi: z.enum(["collected", "unavailable", "skipped", "not-attempted"]),
+				memory: z.enum(["collected", "unavailable", "skipped", "not-attempted"]),
+				knowledgeGraph: z.enum(["collected", "unavailable", "skipped", "not-attempted"]),
+			})
+			.strict(),
+		riskTier: z.enum(["low", "medium", "high", "blocked", "unassessed"]),
+		outcome: z.enum(["pending", "answered", "blocked", "failed"]),
+		graphUsed: z.literal(true),
+		memoryUsed: z.boolean(),
+		knowledgeGraphUsed: z.boolean(),
+	})
+	.strict();
+export type LandingZoneTurnTelemetry = z.infer<typeof LandingZoneTurnTelemetrySchema>;
+
 // SIO-935: version partition of a fleet-upgrade preview's resolved set. Optional on the two fleet
 // events below so old CI reports (no version_crosstab) still validate.
 export const FleetVersionCrosstabSchema = z.object({
@@ -1011,6 +1036,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		lowConfidence: z.boolean().optional(),
 		responseTime: z.number().optional(),
 		toolsUsed: z.array(z.string()).optional(),
+		telemetry: LandingZoneTurnTelemetrySchema.optional(),
 		dataSourceContext: DataSourceContextSchema.optional(),
 		// SIO-930: the elastic-iac per-turn outcome, used to label the completion chip. Absent for
 		// the incident agent (treated as "completed" by the reducer).

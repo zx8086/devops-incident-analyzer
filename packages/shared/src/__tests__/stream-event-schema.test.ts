@@ -61,6 +61,34 @@ describe("StreamEventSchema datasource_result", () => {
 // SIO-1194: done carries the cap-transparency fields so the UI can explain a
 // capped confidence (pre-cap evidence score + machine-readable reasons).
 describe("StreamEventSchema done cap-transparency fields", () => {
+	test("parses privacy-safe Landing Zone completion telemetry", () => {
+		const parsed = StreamEventSchema.parse({
+			type: "done",
+			threadId: "t-1",
+			telemetry: {
+				agent: "landing-zone-terraform",
+				intent: "review",
+				repositories: ["aws-lz-account-creator"],
+				evidenceAvailability: {
+					gitlab: "collected",
+					okf: "collected",
+					terraformDocs: "unavailable",
+					awsDocs: "unavailable",
+					awsApi: "skipped",
+					memory: "collected",
+					knowledgeGraph: "collected",
+				},
+				riskTier: "high",
+				outcome: "answered",
+				graphUsed: true,
+				memoryUsed: true,
+				knowledgeGraphUsed: true,
+			},
+		});
+		if (parsed.type !== "done") throw new Error("narrow");
+		expect(parsed.telemetry?.repositories).toEqual(["aws-lz-account-creator"]);
+	});
+
 	test("parses done with confidencePreCap, capReasons, and lowConfidence", () => {
 		const parsed = StreamEventSchema.parse({
 			type: "done",

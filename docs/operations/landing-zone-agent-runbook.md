@@ -88,6 +88,7 @@ Alert on sustained changes in categorical outcomes, not high-cardinality values:
 - rising `failed` or `blocked` outcomes;
 - GitLab availability changing from `collected` to `unavailable`;
 - memory or knowledge-graph usage unexpectedly dropping after enablement;
+- `Landing Zone completion telemetry failed` warnings, which indicate an observability gap but do not fail the user turn;
 - any write tool appearing while write mode is intended to be off;
 - any attempted write before the human review interrupt.
 
