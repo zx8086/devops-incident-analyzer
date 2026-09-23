@@ -10,7 +10,17 @@ import type {
 } from "@devops-agent/shared";
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 import type { EvidenceCollectionOutcome } from "./evidence.ts";
-import type { LandingZoneIntent, LandingZoneOutcome, LandingZonePriorMemory, ProposedChangeReview } from "./types.ts";
+import type {
+	LandingZoneCandidate,
+	LandingZoneCandidateValidation,
+	LandingZoneIntent,
+	LandingZoneMergeRequest,
+	LandingZoneOutcome,
+	LandingZonePipelineObservation,
+	LandingZonePriorMemory,
+	LandingZoneReviewDecision,
+	ProposedChangeReview,
+} from "./types.ts";
 
 const replace = <T>(fallback: T) => ({
 	reducer: (_previous: T, next: T) => next,
@@ -42,7 +52,17 @@ export const LandingZoneState = Annotation.Root({
 	landingZoneTopology: Annotation<LandingZoneTopologyEvent | null>(replace<LandingZoneTopologyEvent | null>(null)),
 	blockedReason: Annotation<string | null>(replace<string | null>(null)),
 	outcome: Annotation<LandingZoneOutcome>(replace<LandingZoneOutcome>("pending")),
+	changeCandidate: Annotation<LandingZoneCandidate | null>(replace<LandingZoneCandidate | null>(null)),
+	candidateValidations: Annotation<LandingZoneCandidateValidation[]>(replace<LandingZoneCandidateValidation[]>([])),
+	candidateValidationPassed: Annotation<boolean>(replace(false)),
 	proposedChangeReview: Annotation<ProposedChangeReview | null>(replace<ProposedChangeReview | null>(null)),
+	reviewDecision: Annotation<LandingZoneReviewDecision | null>(replace<LandingZoneReviewDecision | null>(null)),
+	amendmentInstructions: Annotation<string | null>(replace<string | null>(null)),
+	proposalIteration: Annotation<number>(replace(0)),
+	mergeRequest: Annotation<LandingZoneMergeRequest | null>(replace<LandingZoneMergeRequest | null>(null)),
+	pipelineObservation: Annotation<LandingZonePipelineObservation | null>(
+		replace<LandingZonePipelineObservation | null>(null),
+	),
 });
 
 export type LandingZoneStateType = typeof LandingZoneState.State;

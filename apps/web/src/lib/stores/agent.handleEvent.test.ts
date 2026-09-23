@@ -5,6 +5,38 @@ import type { StreamEvent } from "@devops-agent/shared";
 import { applyStreamEvent, initialReducerState } from "./agent-reducer.ts";
 
 describe("applyStreamEvent", () => {
+	test("stores and clears the Landing Zone proposal review gate", () => {
+		const review = {
+			reviewId: "11111111-1111-4111-8111-111111111111",
+			repository: "aws-lz-account-creator",
+			projectId: 42,
+			baseBranch: "main",
+			baseSha: "a".repeat(40),
+			targetBranch: "agent/landing-zone/martech",
+			changeSummary: "Add MarTech account",
+			title: "Add MarTech account",
+			files: [{ path: "accounts/martech.yml", contentSha256: "b".repeat(64), expectedFileSha: null }],
+			diffSummary: "Create accounts/martech.yml",
+			standardsComparison: [],
+			validations: [{ command: "schema", status: "passed" as const, required: true, summary: "Passed." }],
+			expectedPlan: "One account addition and no deletion.",
+			stopConditions: [],
+			destructiveFlags: [],
+			unresolvedEvidence: [],
+			riskLevel: "high" as const,
+		};
+		let state = applyStreamEvent(initialReducerState(), {
+			type: "landing_zone_plan_review",
+			threadId: "thread-lz",
+			message: "Approval opens an MR; it does not apply.",
+			review,
+		});
+		expect(state.landingZonePlanReview?.review.repository).toBe("aws-lz-account-creator");
+		expect(state.threadId).toBe("thread-lz");
+		state = applyStreamEvent(state, { type: "landing_zone_review_resolved" });
+		expect(state.landingZonePlanReview).toBeNull();
+	});
+
 	test("replaces the Landing Zone topology with the latest turn projection", () => {
 		const topology = {
 			generatedAt: "2026-09-23T08:00:00.000Z",

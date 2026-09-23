@@ -2,7 +2,7 @@
 // SIO-775: verify pumpEventStream emits datasource_result events with typed
 // findings when extractFindings completes.
 import { describe, expect, test } from "bun:test";
-import { emitIacInterrupt, pumpEventStream as pumpEventStreamImpl } from "./sse-pump.ts";
+import { emitIacInterrupt, emitLandingZoneInterrupt, pumpEventStream as pumpEventStreamImpl } from "./sse-pump.ts";
 
 type LangGraphEvent = {
 	event?: string;
@@ -49,6 +49,46 @@ const PIPELINE: ReadonlySet<string> = new Set([
 function pumpEventStream(eventStream: AsyncIterable<LangGraphEvent>, send: (event: Record<string, unknown>) => void) {
 	return pumpEventStreamImpl(eventStream, send, PIPELINE);
 }
+
+describe("emitLandingZoneInterrupt", () => {
+	const review = {
+		reviewId: "11111111-1111-4111-8111-111111111111",
+		repository: "aws-lz-account-creator",
+		projectId: 42,
+		baseBranch: "main",
+		baseSha: "a".repeat(40),
+		targetBranch: "agent/add-martech",
+		changeSummary: "Add the reviewed account request",
+		title: "Add MarTech account request",
+		files: [{ path: "accounts/martech.yml", contentSha256: "b".repeat(64), expectedFileSha: null }],
+		diffSummary: "Create accounts/martech.yml",
+		standardsComparison: [],
+		validations: [{ command: "schema", status: "passed", required: true, summary: "Passed." }],
+		expectedPlan: "One account addition.",
+		stopConditions: [],
+		destructiveFlags: [],
+		unresolvedEvidence: [],
+		riskLevel: "high",
+	};
+
+	test("emits only a fully validated Landing Zone review", () => {
+		const sent: Record<string, unknown>[] = [];
+		expect(
+			emitLandingZoneInterrupt((event) => sent.push(event), "thread-lz", {
+				type: "landing_zone_plan_review",
+				review,
+				message: "Review this proposal.",
+			}),
+		).toBeTrue();
+		expect(sent[0]).toMatchObject({ type: "landing_zone_plan_review", threadId: "thread-lz", review });
+		expect(
+			emitLandingZoneInterrupt(() => undefined, "thread-lz", {
+				type: "landing_zone_plan_review",
+				review: { ...review, baseSha: "not-a-sha" },
+			}),
+		).toBeFalse();
+	});
+});
 
 describe("pumpEventStream datasource_result", () => {
 	test("emits one datasource_result per dataSourceResults entry on extractFindings end", async () => {

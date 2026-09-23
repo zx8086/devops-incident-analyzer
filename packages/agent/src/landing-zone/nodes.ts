@@ -73,6 +73,15 @@ export async function bootstrapLandingZone(state: LandingZoneStateType): Promise
 		knowledgeGraphEvidence: null,
 		landingZoneTopology: null,
 		priorMemory: [],
+		changeCandidate: null,
+		candidateValidations: [],
+		candidateValidationPassed: false,
+		proposedChangeReview: null,
+		reviewDecision: null,
+		amendmentInstructions: null,
+		proposalIteration: 0,
+		mergeRequest: null,
+		pipelineObservation: null,
 	};
 }
 

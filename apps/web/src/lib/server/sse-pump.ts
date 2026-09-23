@@ -700,6 +700,24 @@ export function emitTopicShiftPrompt(send: SendFn, threadId: string, interruptVa
 	return true;
 }
 
+export function emitLandingZoneInterrupt(send: SendFn, threadId: string, interruptValue: unknown): boolean {
+	if (typeof interruptValue !== "object" || interruptValue === null) return false;
+	const obj = interruptValue as { type?: unknown; review?: unknown; message?: unknown };
+	if (obj.type !== "landing_zone_plan_review") return false;
+	const event = StreamEventSchema.safeParse({
+		type: "landing_zone_plan_review",
+		threadId,
+		review: obj.review,
+		message:
+			typeof obj.message === "string"
+				? obj.message
+				: "Review the Landing Zone proposal. Approval opens or updates an MR; it never applies.",
+	});
+	if (!event.success) return false;
+	send(event.data);
+	return true;
+}
+
 // elastic-iac interrupts: the maker graph pauses on either a one-line clarification
 // (parseIntent) or the plan-review gate (reviewGate). Surface each to the UI; the
 // UI POSTs the resume value to /api/agent/iac/resume.

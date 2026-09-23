@@ -103,6 +103,14 @@ export interface IacClarifyPrompt {
 	question: string;
 }
 
+export type LandingZonePlanReview = Extract<StreamEvent, { type: "landing_zone_plan_review" }>["review"];
+
+export interface LandingZonePlanReviewPrompt {
+	threadId: string;
+	message: string;
+	review: LandingZonePlanReview;
+}
+
 // SIO-882: drift sub-flow UI state.
 export type ReconcileDirection = "reconcile-to-json" | "reconcile-to-live" | "skip";
 
@@ -454,6 +462,7 @@ export interface ReducerState {
 	// elastic-iac maker graph interrupts.
 	iacClarify: IacClarifyPrompt | null;
 	iacPlanReview: IacPlanReviewPrompt | null;
+	landingZonePlanReview: LandingZonePlanReviewPrompt | null;
 	// SIO-876: live pipeline-watch status lines (e.g. "Pipeline #355: running"),
 	// shown in the streaming area; the final status+plan+approval lands as the message.
 	iacPipelineProgress: string[];
@@ -515,6 +524,7 @@ export function initialReducerState(): ReducerState {
 		hilLearningOutcome: null,
 		iacClarify: null,
 		iacPlanReview: null,
+		landingZonePlanReview: null,
 		iacPipelineProgress: [],
 		iacDriftReport: null,
 		iacReconcileChoice: null,
@@ -725,6 +735,18 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 				threadId: event.threadId,
 				iacPlanReview: { threadId: event.threadId, message: event.message, review: event.review },
 			};
+		case "landing_zone_plan_review":
+			return {
+				...state,
+				threadId: event.threadId,
+				landingZonePlanReview: {
+					threadId: event.threadId,
+					message: event.message,
+					review: event.review,
+				},
+			};
+		case "landing_zone_review_resolved":
+			return { ...state, landingZonePlanReview: null };
 		case "iac_pipeline_progress": {
 			const label = event.pipelineId ? `Pipeline #${event.pipelineId}: ${event.status}` : `Pipeline: ${event.status}`;
 			return { ...state, iacPipelineProgress: [...state.iacPipelineProgress, label] };

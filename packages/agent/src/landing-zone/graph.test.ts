@@ -26,6 +26,13 @@ const EXPECTED_NODES = [
 	"reconcileEvidence",
 	"assessRisk",
 	"answerQuestion",
+	"draftChange",
+	"validateCandidate",
+	"prepareReview",
+	"reviewGate",
+	"openMergeRequest",
+	"watchPipeline",
+	"recordOutcome",
 	"projectTopology",
 	"teardown",
 ];
@@ -40,6 +47,8 @@ const EXPECTED_EDGES = [
 	["reconcileEvidence", "assessRisk"],
 	["assessRisk", "answerQuestion"],
 	["answerQuestion", "projectTopology"],
+	["watchPipeline", "recordOutcome"],
+	["recordOutcome", "teardown"],
 	["projectTopology", "teardown"],
 	["teardown", "__end__"],
 ];
@@ -68,7 +77,15 @@ const BASE_STATE_INPUT = {
 	topologyStates: [],
 	blockedReason: null,
 	outcome: "pending",
+	changeCandidate: null,
+	candidateValidations: [],
+	candidateValidationPassed: false,
 	proposedChangeReview: null,
+	reviewDecision: null,
+	amendmentInstructions: null,
+	proposalIteration: 0,
+	mergeRequest: null,
+	pipelineObservation: null,
 } as const;
 
 const observedEvidence = {
@@ -115,7 +132,15 @@ function proposedChangeState(evidenceResults: EvidenceItem[]): LandingZoneStateT
 		landingZoneTopology: null,
 		blockedReason: null,
 		outcome: "pending",
+		changeCandidate: null,
+		candidateValidations: [],
+		candidateValidationPassed: false,
 		proposedChangeReview: null,
+		reviewDecision: null,
+		amendmentInstructions: null,
+		proposalIteration: 0,
+		mergeRequest: null,
+		pipelineObservation: null,
 	};
 }
 

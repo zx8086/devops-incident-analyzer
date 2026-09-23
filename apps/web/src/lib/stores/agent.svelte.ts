@@ -35,6 +35,7 @@ import {
 	type IacPlanReviewPrompt,
 	type IacReconcileChoice,
 	type IacReconcileResultRow,
+	type LandingZonePlanReviewPrompt,
 	type ReconcileDirection,
 	type ReducerState,
 	type RenovateTriggerChoice,
@@ -176,6 +177,7 @@ function createAgentStore() {
 	// elastic-iac HITL banners.
 	let iacClarify = $state<IacClarifyPrompt | null>(null);
 	let iacPlanReview = $state<IacPlanReviewPrompt | null>(null);
+	let landingZonePlanReview = $state<LandingZonePlanReviewPrompt | null>(null);
 	let iacPipelineProgress = $state<string[]>([]);
 	// SIO-982: snapshot of the pipeline ticker captured on `done`, so a GitOps MR turn keeps a
 	// persistent collapsed pipeline log after streaming (the GitOps analogue of fleet's progressLog).
@@ -239,6 +241,7 @@ function createAgentStore() {
 	function isPausedOnIacInterrupt(): boolean {
 		return (
 			iacPlanReview !== null ||
+			landingZonePlanReview !== null ||
 			iacClarify !== null ||
 			iacReconcileChoice !== null ||
 			syntheticsPushChoice !== null ||
@@ -280,6 +283,7 @@ function createAgentStore() {
 		lastRequestId = undefined;
 		lastOutcome = "completed";
 		iacPipelineProgress = [];
+		landingZonePlanReview = null;
 		// SIO-882: a new message starts a fresh drift pass (the prompt/report persist
 		// across interrupt pauses, so they're cleared here, not in the stream's finally).
 		iacDriftReport = null;
@@ -405,6 +409,7 @@ function createAgentStore() {
 			hilLearningOutcome,
 			iacClarify,
 			iacPlanReview,
+			landingZonePlanReview,
 			iacPipelineProgress,
 			iacPipelineLog,
 			iacDriftReport,
@@ -450,6 +455,7 @@ function createAgentStore() {
 		hilLearningOutcome = next.hilLearningOutcome;
 		iacClarify = next.iacClarify;
 		iacPlanReview = next.iacPlanReview;
+		landingZonePlanReview = next.landingZonePlanReview;
 		iacPipelineProgress = next.iacPipelineProgress;
 		iacPipelineLog = next.iacPipelineLog;
 		iacDriftReport = next.iacDriftReport;
@@ -689,6 +695,7 @@ function createAgentStore() {
 		hilLearningOutcome = null;
 		iacClarify = null;
 		iacPlanReview = null;
+		landingZonePlanReview = null;
 		iacPipelineProgress = [];
 		iacDriftReport = null;
 		iacReconcileChoice = null;
@@ -788,6 +795,45 @@ function createAgentStore() {
 			// SIO-876: the final status+plan+approval now lives in the message; clear the live
 			// watch-ticker so it doesn't linger (per-leg; unchanged from before SIO-934).
 			iacPipelineProgress = [];
+		}
+	}
+
+	async function resolveLandingZonePlanReview(
+		decision:
+			| { decision: "approve" }
+			| { decision: "reject"; reason: string }
+			| { decision: "amend"; instructions: string },
+	) {
+		if (!landingZonePlanReview || isStreaming) return;
+		const pendingReview = landingZonePlanReview;
+		landingZonePlanReview = null;
+		isStreaming = true;
+		currentContent = "";
+		activeNodes = new Map();
+		try {
+			const response = await fetch("/api/agent/landing-zone/resume", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					threadId: pendingReview.threadId,
+					reviewId: pendingReview.review.reviewId,
+					...decision,
+				}),
+			});
+			if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+			for await (const event of parseSseChunks(response.body)) handleEvent(event);
+		} catch (error) {
+			landingZonePlanReview = landingZonePlanReview ?? pendingReview;
+			currentContent += `\n\n[Error resuming Landing Zone agent: ${error instanceof Error ? error.message : String(error)}]`;
+			lastOutcome = "error";
+		} finally {
+			if (currentContent) {
+				messages = [...messages, buildAssistantMessage(currentContent)];
+				currentContent = "";
+			}
+			isStreaming = false;
+			activeNodes = new Map();
+			if (!isPausedOnIacInterrupt()) completedNodes = new Map();
 		}
 	}
 
@@ -1069,6 +1115,9 @@ function createAgentStore() {
 		get iacPlanReview() {
 			return iacPlanReview;
 		},
+		get landingZonePlanReview() {
+			return landingZonePlanReview;
+		},
 		get iacPipelineProgress() {
 			return iacPipelineProgress;
 		},
@@ -1121,6 +1170,7 @@ function createAgentStore() {
 		dismissHilLearningOutcome,
 		switchAgent,
 		resolveIacPlanReview,
+		resolveLandingZonePlanReview,
 		submitIacClarify,
 		resolveReconcileChoice,
 		approveSyntheticsPush,

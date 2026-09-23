@@ -59,7 +59,15 @@ function state(
 		landingZoneTopology: null,
 		blockedReason: null,
 		outcome: "pending",
+		changeCandidate: null,
+		candidateValidations: [],
+		candidateValidationPassed: false,
 		proposedChangeReview: null,
+		reviewDecision: null,
+		amendmentInstructions: null,
+		proposalIteration: 0,
+		mergeRequest: null,
+		pipelineObservation: null,
 	};
 }
 

@@ -31,6 +31,7 @@ import { buildLangSmithTags } from "$lib/server/langsmith-tags";
 import {
 	emitHilLearningInterrupt,
 	emitIacInterrupt,
+	emitLandingZoneInterrupt,
 	emitTopicShiftPrompt,
 	pumpEventStream,
 } from "$lib/server/sse-pump";
@@ -212,6 +213,15 @@ export const POST: RequestHandler = async ({ request }) => {
 								}
 
 								if (body.agentName === "landing-zone-terraform") {
+									const landingZoneInterrupt = await getPendingInterrupt(threadId, "landing-zone-terraform");
+									if (landingZoneInterrupt) {
+										if (emitLandingZoneInterrupt(send, threadId, landingZoneInterrupt.value)) {
+											log.info({ responseTime: Date.now() - startTime, interrupted: true }, "agent.request.end");
+											return;
+										}
+										send({ type: "error", message: "The Landing Zone turn paused at an unsupported review gate." });
+										return;
+									}
 									const finalText = await getLastAssistantText(threadId, "landing-zone-terraform");
 									if (finalText) send({ type: "message", content: finalText });
 									await pruneThreadState(threadId, body.agentName);
