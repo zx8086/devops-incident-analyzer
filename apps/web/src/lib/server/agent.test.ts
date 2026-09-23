@@ -74,6 +74,8 @@ mock.module("@devops-agent/observability", () => ({
 }));
 
 mock.module("@devops-agent/agent", () => ({
+	accountIdForEstate: (estate: string) =>
+		estate === "eu-authorized-prd" ? "111122223333" : estate === "us-authorized-prd" ? "444455556666" : undefined,
 	buildGraph: mock(() =>
 		Promise.resolve({
 			streamEvents: mockStreamEvents,
@@ -264,6 +266,23 @@ mock.module("@devops-agent/shared", () => {
 			edges: z.array(z.object({ from: z.string(), to: z.string(), kind: z.string() }).passthrough()),
 			truncated: z.boolean().optional(),
 		}),
+		ApplicationTopologySchema: z.object({
+			builtAtTurn: z.number(),
+			sources: z.array(z.string()),
+			nodes: z.array(z.object({ id: z.string(), kind: z.string() }).passthrough()),
+			edges: z.array(z.object({ from: z.string(), to: z.string(), kind: z.string() }).passthrough()),
+			truncated: z.boolean().optional(),
+		}),
+		LandingZoneTopologyEventSchema: z.object({
+			type: z.literal("landing_zone_topology"),
+			view: z.enum(["network", "dns", "path"]),
+			topology: z
+				.object({
+					nodes: z.array(z.object({ id: z.string(), kind: z.string() }).passthrough()),
+					edges: z.array(z.object({ id: z.string(), from: z.string(), to: z.string() }).passthrough()),
+				})
+				.passthrough(),
+		}),
 		// SIO-1215: sse-pump value-imports this to validate the ml_anomaly_explainer
 		// payload before forwarding (same last-wins mock-cache race noted above).
 		// SIO-1652: sse-pump value-imports this to validate the fleet_inbox payload.
@@ -390,12 +409,14 @@ describe("invokeAgent", () => {
 		await invokeAgent([{ role: "user", content: "Explain account vending" }], {
 			threadId: "thread-landing-zone",
 			agentName: "landing-zone-terraform",
+			uiAwsEstates: ["eu-authorized-prd", "unknown-prd", "us-authorized-prd"],
 			metadata: { request_id: "request-landing-zone" },
 		});
 
 		const call = mockStreamEvents.mock.calls[0] as unknown as [Record<string, unknown>, Record<string, unknown>];
 		expect(call[0].requestId).toBe("request-landing-zone");
 		expect(call[0].messages).toBeDefined();
+		expect(call[0].authorizedAccountScope).toEqual(["111122223333", "444455556666"]);
 		expect(call[0].targetDataSources).toBeUndefined();
 	});
 });

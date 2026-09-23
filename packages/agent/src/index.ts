@@ -57,6 +57,7 @@ export { extractEntities } from "./entity-extractor.ts";
 export { buildSearchEvidenceTool, EvidenceIndex, isEvidenceIndexEnabled } from "./evidence-index.ts";
 // SIO-1687: the evidence table of contents that survives per-turn pruning.
 export { buildEvidenceToc, isEvidenceTocEnabled } from "./evidence-toc.ts";
+export { accountIdForEstate } from "./fleet-inbox.ts";
 export { generateFallbackSuggestions, generateSuggestions } from "./follow-up-generator.ts";
 export { buildGraph } from "./graph.ts";
 export {

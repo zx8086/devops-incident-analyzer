@@ -4,6 +4,7 @@ import type {
 	EvidenceItem,
 	EvidenceReconciliation,
 	LandingZoneRiskAssessment,
+	LandingZoneTopologyEvent,
 	ResponseCitation,
 	TopologyEvidenceState,
 } from "@devops-agent/shared";
@@ -22,6 +23,7 @@ export const LandingZoneState = Annotation.Root({
 	intent: Annotation<LandingZoneIntent>(replace<LandingZoneIntent>("understand")),
 	repositoryScope: Annotation<string[]>(replace<string[]>([])),
 	accountScope: Annotation<string[]>(replace<string[]>([])),
+	authorizedAccountScope: Annotation<string[]>(replace<string[]>([])),
 	selectedKnowledge: Annotation<string[]>(replace<string[]>([])),
 	gitlabEvidence: Annotation<EvidenceCollectionOutcome | null>(replace<EvidenceCollectionOutcome | null>(null)),
 	okfEvidence: Annotation<EvidenceCollectionOutcome | null>(replace<EvidenceCollectionOutcome | null>(null)),
@@ -37,6 +39,7 @@ export const LandingZoneState = Annotation.Root({
 	response: Annotation<string | null>(replace<string | null>(null)),
 	responseCitations: Annotation<ResponseCitation[]>(replace<ResponseCitation[]>([])),
 	topologyStates: Annotation<TopologyEvidenceState[]>(replace<TopologyEvidenceState[]>([])),
+	landingZoneTopology: Annotation<LandingZoneTopologyEvent | null>(replace<LandingZoneTopologyEvent | null>(null)),
 	blockedReason: Annotation<string | null>(replace<string | null>(null)),
 	outcome: Annotation<LandingZoneOutcome>(replace<LandingZoneOutcome>("pending")),
 	proposedChangeReview: Annotation<ProposedChangeReview | null>(replace<ProposedChangeReview | null>(null)),

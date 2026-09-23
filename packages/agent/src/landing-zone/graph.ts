@@ -17,11 +17,13 @@ import {
 	teardownLandingZone,
 } from "./nodes.ts";
 import { LandingZoneState } from "./state.ts";
+import { type LandingZoneTopologyTool, projectLandingZoneTopologyNode } from "./topology-node.ts";
 
 export interface BuildLandingZoneGraphOptions {
 	checkpointerType?: "memory" | "sqlite";
 	collectors?: LandingZoneEvidenceCollectors;
 	awsLiveStateAuthorized?: boolean;
+	topologyTools?: LandingZoneTopologyTool[];
 }
 
 export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOptions = {}) {
@@ -55,6 +57,7 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		.addNode("reconcileEvidence", reconcileLandingZoneEvidence)
 		.addNode("assessRisk", assessLandingZoneRisk)
 		.addNode("answerQuestion", answerLandingZoneQuestion)
+		.addNode("projectTopology", (state) => projectLandingZoneTopologyNode(state, { tools: options.topologyTools }))
 		.addNode("teardown", teardownLandingZone)
 		.addEdge(START, "bootstrap")
 		.addEdge("bootstrap", "classifyRequest")
@@ -64,7 +67,8 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		.addEdge("joinEvidence", "reconcileEvidence")
 		.addEdge("reconcileEvidence", "assessRisk")
 		.addEdge("assessRisk", "answerQuestion")
-		.addEdge("answerQuestion", "teardown")
+		.addEdge("answerQuestion", "projectTopology")
+		.addEdge("projectTopology", "teardown")
 		.addEdge("teardown", END);
 	for (const collectorNode of collectorNodes) graph.addEdge("selectPvhKnowledge", collectorNode);
 	graph.addEdge([...collectorNodes], "joinEvidence");

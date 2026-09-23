@@ -26,6 +26,7 @@ const EXPECTED_NODES = [
 	"reconcileEvidence",
 	"assessRisk",
 	"answerQuestion",
+	"projectTopology",
 	"teardown",
 ];
 
@@ -38,7 +39,8 @@ const EXPECTED_EDGES = [
 	["joinEvidence", "reconcileEvidence"],
 	["reconcileEvidence", "assessRisk"],
 	["assessRisk", "answerQuestion"],
-	["answerQuestion", "teardown"],
+	["answerQuestion", "projectTopology"],
+	["projectTopology", "teardown"],
 	["teardown", "__end__"],
 ];
 
@@ -48,6 +50,7 @@ const BASE_STATE_INPUT = {
 	intent: "learn",
 	repositoryScope: ["aws-lz-account-creator"],
 	accountScope: [],
+	authorizedAccountScope: [],
 	selectedKnowledge: ["repos/aws-lz-account-creator.md"],
 	gitlabEvidence: null,
 	okfEvidence: null,
@@ -87,6 +90,7 @@ function proposedChangeState(evidenceResults: EvidenceItem[]): LandingZoneStateT
 		intent: "propose-change",
 		repositoryScope: ["aws-lz-account-creator"],
 		accountScope: [],
+		authorizedAccountScope: [],
 		selectedKnowledge: [],
 		gitlabEvidence: null,
 		okfEvidence: null,
@@ -108,6 +112,7 @@ function proposedChangeState(evidenceResults: EvidenceItem[]): LandingZoneStateT
 		response: null,
 		responseCitations: [],
 		topologyStates: [],
+		landingZoneTopology: null,
 		blockedReason: null,
 		outcome: "pending",
 		proposedChangeReview: null,
@@ -296,6 +301,58 @@ describe("buildLandingZoneGraph", () => {
 		expect(calls).toContainAllValues(["pvh-okf", "gitlab", "terraform-docs", "aws-docs", "memory", "knowledge-graph"]);
 		expect(calls).not.toContain("aws-api");
 		expect(result.evidenceResults.map((item) => item.source)).toContain("gitlab");
+	});
+
+	test("projects graph-recorded topology on the production graph path", async () => {
+		const calls: EvidenceSource[] = [];
+		const topologyFact = {
+			id: "vpc-1",
+			fact: {
+				id: "vpc-1",
+				kind: "vpc",
+				name: "workload-vpc",
+				accountId: "111122223333",
+				properties: {},
+				provenance: {
+					state: "observed",
+					source: "aws-api",
+					resourceId: "vpc-1",
+					observedAt: "2026-09-23T08:00:00.000Z",
+				},
+			},
+			provenance: [
+				{
+					state: "observed",
+					source: "aws-api",
+					resourceId: "vpc-1",
+					observedAt: "2026-09-23T08:00:00.000Z",
+				},
+			],
+			reconciliation: { status: "aligned", confidence: "verified" },
+			validFrom: "2026-09-23T08:00:00.000Z",
+			consecutiveMisses: 0,
+		};
+		const graph = await buildLandingZoneGraph({
+			checkpointerType: "memory",
+			collectors: successfulCollectors(calls),
+			topologyTools: [
+				{
+					name: "kg_run_cypher",
+					invoke: async () => ({
+						content: [{ type: "text", text: JSON.stringify([{ payload: JSON.stringify(topologyFact) }]) }],
+					}),
+				},
+			],
+		});
+		const result = await graph.invoke(
+			{
+				messages: [new HumanMessage("Show the network topology for account 111122223333")],
+				authorizedAccountScope: ["111122223333"],
+			},
+			{ configurable: { thread_id: "thread-topology" } },
+		);
+		expect(result.accountScope).toEqual(["111122223333"]);
+		expect(result.landingZoneTopology?.topology.nodes.map((node) => node.id)).toEqual(["vpc-1"]);
 	});
 
 	test("persists the user-facing answer as the final assistant message", async () => {

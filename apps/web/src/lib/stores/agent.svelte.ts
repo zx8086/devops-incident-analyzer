@@ -7,6 +7,7 @@ import type {
 	FleetInboxDigest,
 	HilApplyReport,
 	HilItemEdits,
+	LandingZoneTopologyEvent,
 	MlAnomalyExplainer,
 	NetworkTopology,
 	PendingAction,
@@ -72,6 +73,7 @@ export interface ChatMessage {
 	dataSourceFindings?: Map<string, DataSourceFindings>;
 	// SIO-1204: this turn's merged network map (NetworkTopologyCard).
 	networkTopology?: NetworkTopology;
+	landingZoneTopology?: LandingZoneTopologyEvent;
 	// SIO-1457: this turn's merged application map (ApplicationTopologyCard).
 	applicationTopology?: ApplicationTopology;
 	// SIO-1215: this turn's ML anomaly explainer (MlAnomalyExplainerCard).
@@ -116,6 +118,7 @@ function createAgentStore() {
 	let dataSourceProgress = $state<Map<string, { status: string; message?: string }>>(new Map());
 	let dataSourceFindings = $state<Map<string, DataSourceFindings>>(new Map());
 	let networkTopology = $state<NetworkTopology | null>(null);
+	let landingZoneTopology = $state<LandingZoneTopologyEvent | null>(null);
 	let fleetInboxDigest = $state<FleetInboxDigest | null>(null);
 	let applicationTopology = $state<ApplicationTopology | null>(null);
 	let mlAnomalyExplainer = $state<MlAnomalyExplainer | null>(null);
@@ -210,6 +213,7 @@ function createAgentStore() {
 			dataSourceResults: new Map(dataSourceProgress),
 			dataSourceFindings: new Map(dataSourceFindings),
 			...(networkTopology && { networkTopology }),
+			...(landingZoneTopology && { landingZoneTopology }),
 			...(applicationTopology && { applicationTopology }),
 			...(mlAnomalyExplainer && { mlAnomalyExplainer }),
 			...(fleetInboxDigest && { fleetInboxDigest }),
@@ -256,6 +260,7 @@ function createAgentStore() {
 		dataSourceProgress = new Map();
 		dataSourceFindings = new Map();
 		networkTopology = null;
+		landingZoneTopology = null;
 		applicationTopology = null;
 		mlAnomalyExplainer = null;
 		fleetInboxDigest = null;
@@ -351,6 +356,7 @@ function createAgentStore() {
 			dataSourceProgress = new Map();
 			dataSourceFindings = new Map();
 			networkTopology = null;
+			landingZoneTopology = null;
 			applicationTopology = null;
 			mlAnomalyExplainer = null;
 			fleetInboxDigest = null;
@@ -375,6 +381,7 @@ function createAgentStore() {
 			dataSourceProgress,
 			dataSourceFindings,
 			networkTopology,
+			landingZoneTopology,
 			applicationTopology,
 			mlAnomalyExplainer,
 			fleetInboxDigest,
@@ -419,6 +426,7 @@ function createAgentStore() {
 		dataSourceProgress = next.dataSourceProgress;
 		dataSourceFindings = next.dataSourceFindings;
 		networkTopology = next.networkTopology;
+		landingZoneTopology = next.landingZoneTopology;
 		applicationTopology = next.applicationTopology;
 		mlAnomalyExplainer = next.mlAnomalyExplainer;
 		fleetInboxDigest = next.fleetInboxDigest;
@@ -663,6 +671,7 @@ function createAgentStore() {
 		dataSourceProgress = new Map();
 		dataSourceFindings = new Map();
 		networkTopology = null;
+		landingZoneTopology = null;
 		applicationTopology = null;
 		mlAnomalyExplainer = null;
 		fleetInboxDigest = null;
@@ -909,6 +918,7 @@ function createAgentStore() {
 			mlAnomalyExplainer = null;
 			fleetInboxDigest = null;
 			networkTopology = null;
+			landingZoneTopology = null;
 			applicationTopology = null;
 		}
 		try {
@@ -940,6 +950,7 @@ function createAgentStore() {
 			dataSourceProgress = new Map();
 			dataSourceFindings = new Map();
 			networkTopology = null;
+			landingZoneTopology = null;
 			applicationTopology = null;
 			mlAnomalyExplainer = null;
 			fleetInboxDigest = null;
@@ -965,6 +976,9 @@ function createAgentStore() {
 		},
 		get currentContent() {
 			return currentContent;
+		},
+		get landingZoneTopology() {
+			return landingZoneTopology;
 		},
 		get selectedDataSources() {
 			return selectedDataSources;

@@ -71,6 +71,7 @@ export async function bootstrapLandingZone(state: LandingZoneStateType): Promise
 		awsApiEvidence: null,
 		memoryEvidence: null,
 		knowledgeGraphEvidence: null,
+		landingZoneTopology: null,
 		priorMemory: [],
 	};
 }
@@ -91,6 +92,7 @@ export async function classifyLandingZoneRequest(state: LandingZoneStateType): P
 export async function resolveLandingZoneScope(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
 	const text = latestText(state.messages);
 	const repositoryScope = new Set<string>();
+	const accountScope = [...new Set(text.match(/\b\d{12}\b/g) ?? [])];
 	if (/\b(account|vending)\b/.test(text)) repositoryScope.add("aws-lz-account-creator");
 	if (/\b(vpc|subnet|workload network)\b/.test(text)) repositoryScope.add("aws-lz-network-workloads");
 	if (/\b(core network|cloud wan|ipam|transit gateway|direct connect)\b/.test(text)) {
@@ -99,7 +101,7 @@ export async function resolveLandingZoneScope(state: LandingZoneStateType): Prom
 	if (/\b(dns|post-vending|post vending)\b/.test(text)) repositoryScope.add("aws-lz-post-vending");
 	if (/\b(gitlab project|repository)\b/.test(text)) repositoryScope.add("dhco-gitlab-terraform");
 	if (/\b(runner|runners)\b/.test(text)) repositoryScope.add("gitlab-k8s-runners-lzv2");
-	return { repositoryScope: [...repositoryScope] };
+	return { repositoryScope: [...repositoryScope], accountScope };
 }
 
 export async function selectPvhKnowledge(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {

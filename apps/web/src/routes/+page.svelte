@@ -12,6 +12,7 @@ import ElasticDeploymentSelector from "$lib/components/ElasticDeploymentSelector
 import FleetUpgradeChoiceCard from "$lib/components/FleetUpgradeChoiceCard.svelte";
 import GraphTriagePanel from "$lib/components/GraphTriagePanel.svelte";
 import Icon from "$lib/components/Icon.svelte";
+import LandingZoneTopologyCard from "$lib/components/LandingZoneTopologyCard.svelte";
 import LearningMatchCard from "$lib/components/LearningMatchCard.svelte";
 import LearningOutcomeCard from "$lib/components/LearningOutcomeCard.svelte";
 import LearningProposalCard from "$lib/components/LearningProposalCard.svelte";
@@ -536,6 +537,9 @@ function handleSuggestionClick(suggestion: string) {
             canCommentOnThreadTicket={agentStore.threadTicket !== null && i > agentStore.threadTicketCreatedAtIndex}
             onTicketCreated={(ticket) => agentStore.setThreadTicket(msg.id, ticket)}
           />
+          {#if msg.landingZoneTopology}
+            <LandingZoneTopologyCard event={msg.landingZoneTopology} />
+          {/if}
         {/if}
       {/each}
 
@@ -579,6 +583,10 @@ function handleSuggestionClick(suggestion: string) {
               </div>
             </div>
           </div>
+        {/if}
+
+        {#if agentStore.landingZoneTopology}
+          <LandingZoneTopologyCard event={agentStore.landingZoneTopology} />
         {/if}
       {/if}
 

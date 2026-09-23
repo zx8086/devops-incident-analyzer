@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { PendingActionSchema } from "./action-types.ts";
 import { HilApplyReportSchema, HilMatchCandidateSchema, LearningProposalSchema } from "./hil-learning.ts";
+import { LandingZoneTopologyEventSchema } from "./landing-zone-topology.ts";
 import { FleetInboxDigestSchema } from "./pi-coms-types.ts";
 
 export const ToolOutputSchema = z.object({
@@ -985,6 +986,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 	// SIO-1457: once-per-turn merged application map (replace semantics), emitted from
 	// the extractFindings on_chain_end branch when the builder produced any nodes.
 	z.object({ type: z.literal("application_topology"), topology: ApplicationTopologySchema }),
+	LandingZoneTopologyEventSchema,
 	// SIO-1215: once-per-turn ML anomaly explainer (replace semantics), emitted from
 	// the extractFindings on_chain_end branch when the builder found matching records.
 	z.object({ type: z.literal("ml_anomaly_explainer"), explainer: MlAnomalyExplainerSchema }),
