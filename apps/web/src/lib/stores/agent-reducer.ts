@@ -12,6 +12,7 @@ import type {
 	HilApplyReport,
 	HilMatchCandidate,
 	KafkaFindings,
+	LandingZoneTopologyEvent,
 	LearningProposal,
 	MlAnomalyExplainer,
 	NetworkTopology,
@@ -394,6 +395,7 @@ export interface ReducerState {
 	// SIO-1204: once-per-turn merged network map from the network_topology event.
 	// Replace semantics (a turn emits at most one); null until the event arrives.
 	networkTopology: NetworkTopology | null;
+	landingZoneTopology: LandingZoneTopologyEvent | null;
 	// SIO-1457: once-per-turn merged application map from the application_topology
 	// event. Same replace semantics as networkTopology.
 	applicationTopology: ApplicationTopology | null;
@@ -489,6 +491,7 @@ export function initialReducerState(): ReducerState {
 		dataSourceProgress: new Map(),
 		dataSourceFindings: new Map(),
 		networkTopology: null,
+		landingZoneTopology: null,
 		applicationTopology: null,
 		mlAnomalyExplainer: null,
 		fleetInboxDigest: null,
@@ -575,6 +578,8 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 		// SIO-1204: merged per-turn network map.
 		case "network_topology":
 			return { ...state, networkTopology: event.topology };
+		case "landing_zone_topology":
+			return { ...state, landingZoneTopology: event };
 		// SIO-1457: merged per-turn application map.
 		case "application_topology":
 			return { ...state, applicationTopology: event.topology };

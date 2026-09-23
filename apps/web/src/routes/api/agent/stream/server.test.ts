@@ -187,6 +187,16 @@ mock.module("@devops-agent/shared", () => ({
 		edges: z.array(z.object({ from: z.string(), to: z.string(), kind: z.string() }).passthrough()),
 		truncated: z.boolean().optional(),
 	}),
+	LandingZoneTopologyEventSchema: z.object({
+		type: z.literal("landing_zone_topology"),
+		view: z.enum(["network", "dns", "path"]),
+		topology: z
+			.object({
+				nodes: z.array(z.object({ id: z.string(), kind: z.string() }).passthrough()),
+				edges: z.array(z.object({ id: z.string(), from: z.string(), to: z.string() }).passthrough()),
+			})
+			.passthrough(),
+	}),
 	// SIO-1215: sse-pump value-imports this to validate the ml_anomaly_explainer
 	// payload before forwarding. Mirrors the real schema's load-bearing shape
 	// (records array) closely enough to reject malformed payloads.

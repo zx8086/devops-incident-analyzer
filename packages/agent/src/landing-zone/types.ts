@@ -82,6 +82,7 @@ export const LandingZoneStateInputSchema = z
 		intent: LandingZoneIntentSchema,
 		repositoryScope: z.array(z.string()),
 		accountScope: z.array(z.string()),
+		authorizedAccountScope: z.array(z.string()),
 		selectedKnowledge: z.array(z.string()),
 		gitlabEvidence: EvidenceCollectionOutcomeSchema,
 		okfEvidence: EvidenceCollectionOutcomeSchema,

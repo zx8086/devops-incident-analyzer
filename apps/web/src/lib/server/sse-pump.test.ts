@@ -40,6 +40,7 @@ const PIPELINE: ReadonlySet<string> = new Set([
 	"applyLearnings",
 	"openMr",
 	"watchPipeline",
+	"projectTopology",
 	"detectFleetUpgrade",
 	"fleetUpgradeGate",
 	"applyFleetUpgrade",
@@ -850,6 +851,65 @@ describe("pumpEventStream parallel-branch durations (SIO-1641)", () => {
 		expect(ends).toHaveLength(2);
 		// Second run must not include the gap spent before its own start (would be >= 60).
 		expect(ends[1]?.duration).toBeLessThan(60);
+	});
+});
+
+describe("pumpEventStream landing_zone_topology", () => {
+	const topologyEvent = {
+		type: "landing_zone_topology" as const,
+		view: "network" as const,
+		topology: {
+			generatedAt: "2026-09-23T08:00:00.000Z",
+			title: "Account network topology",
+			summary: "1 node and 0 relationships.",
+			nodes: [
+				{
+					id: "vpc-1",
+					kind: "vpc" as const,
+					label: "workload-vpc",
+					visualState: "confirmed" as const,
+					sourceIds: [],
+				},
+			],
+			edges: [],
+			sources: [],
+			legend: [],
+			text: ["workload-vpc [vpc] confirmed"],
+			mermaid: 'flowchart LR\n  n0["workload-vpc"]',
+			truncated: false,
+		},
+	};
+
+	test("forwards the validated projection node output to the browser", async () => {
+		const captured: Record<string, unknown>[] = [];
+		await pumpEventStreamImpl(
+			fromArray([
+				{
+					event: "on_chain_end",
+					name: "projectTopology",
+					data: { output: { landingZoneTopology: topologyEvent } },
+				},
+			]),
+			(event) => captured.push(event),
+			new Set(["projectTopology"]),
+		);
+		expect(captured.filter((event) => event.type === "landing_zone_topology")).toEqual([topologyEvent]);
+	});
+
+	test("drops malformed or empty topology output", async () => {
+		const captured: Record<string, unknown>[] = [];
+		await pumpEventStreamImpl(
+			fromArray([
+				{
+					event: "on_chain_end",
+					name: "projectTopology",
+					data: { output: { landingZoneTopology: { ...topologyEvent, extra: true } } },
+				},
+			]),
+			(event) => captured.push(event),
+			new Set(["projectTopology"]),
+		);
+		expect(captured.some((event) => event.type === "landing_zone_topology")).toBeFalse();
 	});
 });
 

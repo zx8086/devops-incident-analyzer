@@ -5,6 +5,42 @@ import type { StreamEvent } from "@devops-agent/shared";
 import { applyStreamEvent, initialReducerState } from "./agent-reducer.ts";
 
 describe("applyStreamEvent", () => {
+	test("replaces the Landing Zone topology with the latest turn projection", () => {
+		const topology = {
+			generatedAt: "2026-09-23T08:00:00.000Z",
+			title: "Account network topology",
+			summary: "1 node and 0 relationships.",
+			nodes: [
+				{
+					id: "vpc-a",
+					kind: "vpc" as const,
+					label: "workload-vpc",
+					visualState: "confirmed" as const,
+					sourceIds: [],
+				},
+			],
+			edges: [],
+			sources: [],
+			legend: [],
+			text: ["workload-vpc [vpc] confirmed"],
+			mermaid: 'flowchart LR\n  n0["workload-vpc"]',
+			truncated: false,
+		};
+		let state = applyStreamEvent(initialReducerState(), {
+			type: "landing_zone_topology",
+			view: "network",
+			topology,
+		});
+		expect(state.landingZoneTopology?.view).toBe("network");
+		state = applyStreamEvent(state, {
+			type: "landing_zone_topology",
+			view: "dns",
+			topology: { ...topology, title: "DNS resolution topology" },
+		});
+		expect(state.landingZoneTopology?.view).toBe("dns");
+		expect(state.landingZoneTopology?.topology.title).toBe("DNS resolution topology");
+	});
+
 	test("appends message content", () => {
 		const next = applyStreamEvent(initialReducerState(), { type: "message", content: "hi " });
 		const next2 = applyStreamEvent(next, { type: "message", content: "world" });

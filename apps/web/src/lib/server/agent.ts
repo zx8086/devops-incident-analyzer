@@ -1,6 +1,7 @@
 // apps/web/src/lib/server/agent.ts
 import {
 	type AgentStateType,
+	accountIdForEstate,
 	appliedSkillsForNames,
 	buildEvidenceToc,
 	buildGraph,
@@ -396,8 +397,15 @@ export async function invokeAgent(
 	if (agentName === "landing-zone-terraform") {
 		const landingZoneGraph = await getLandingZoneGraph();
 		const landingZoneTimeoutMs = getGraphTimeoutMs(agentName);
+		const authorizedAccountScope = [
+			...new Set(
+				(options.uiAwsEstates ?? [])
+					.map((estate) => accountIdForEstate(estate))
+					.filter((accountId): accountId is string => accountId !== undefined),
+			),
+		];
 		return landingZoneGraph.streamEvents(
-			{ messages: langchainMessages, requestId },
+			{ messages: langchainMessages, requestId, authorizedAccountScope },
 			{
 				configurable: {
 					thread_id: options.threadId,

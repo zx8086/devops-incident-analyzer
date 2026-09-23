@@ -236,6 +236,23 @@ export { createHashChainDestination, verifyHashChain } from "./immutable-log.ts"
 export { ipInCidr, parseIpv4 } from "./ip-cidr.ts";
 export { isKillSwitchActive, type KillSwitchConfig, KillSwitchError } from "./kill-switch.ts";
 export {
+	type LandingZoneTopology,
+	type LandingZoneTopologyEdge,
+	LandingZoneTopologyEdgeSchema,
+	type LandingZoneTopologyEvent,
+	LandingZoneTopologyEventSchema,
+	type LandingZoneTopologyNode,
+	LandingZoneTopologyNodeKindSchema,
+	LandingZoneTopologyNodeSchema,
+	LandingZoneTopologySchema,
+	type LandingZoneTopologySource,
+	LandingZoneTopologySourceSchema,
+	type TopologyDiagramView,
+	TopologyDiagramViewSchema,
+	type TopologyVisualState,
+	TopologyVisualStateSchema,
+} from "./landing-zone-topology.ts";
+export {
 	type Alignment,
 	AlignmentSchema,
 	type ComparisonAction,

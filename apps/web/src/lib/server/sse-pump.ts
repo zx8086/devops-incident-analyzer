@@ -10,6 +10,7 @@ import {
 	ApplicationTopologySchema,
 	FleetInboxDigestSchema,
 	HilApplyReportSchema,
+	LandingZoneTopologyEventSchema,
 	MlAnomalyExplainerSchema,
 	NetworkTopologySchema,
 	redactPiiContent,
@@ -346,6 +347,13 @@ export async function pumpEventStream(
 						send({ type: "fleet_inbox", digest: parsed.data });
 					}
 				}
+			}
+
+			if (event.name === "projectTopology") {
+				const parsed = LandingZoneTopologyEventSchema.safeParse(
+					(event.data?.output as { landingZoneTopology?: unknown })?.landingZoneTopology,
+				);
+				if (parsed.success && parsed.data.topology.nodes.length > 0) send(parsed.data);
 			}
 
 			if (event.name === "aggregateMitigation") {
