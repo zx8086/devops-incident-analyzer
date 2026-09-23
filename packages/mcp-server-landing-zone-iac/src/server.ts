@@ -18,10 +18,22 @@ import {
 	type GitLabReadClient,
 	LANDING_ZONE_REPOSITORIES,
 	readRepositoryFiles,
+	resolveRepository,
 } from "./tools/repositories.ts";
 import { extractTerraformTopology } from "./tools/topology.ts";
+import {
+	CommitAllowedFilesInputSchema,
+	CreateBranchInputSchema,
+	commitAllowedFiles,
+	createAllowedBranch,
+	createGitLabWriteClient,
+	type GitLabWriteClient,
+	OpenMergeRequestInputSchema,
+	openAllowedMergeRequest,
+} from "./tools/write.ts";
 
 const READ_ONLY_ANNOTATIONS: ToolAnnotations = { readOnlyHint: true, destructiveHint: false };
+const GOVERNED_WRITE_ANNOTATIONS: ToolAnnotations = { readOnlyHint: false, destructiveHint: false };
 const RepositoryParam = z.string().min(1).describe("Approved Landing Zone repository name or catalog path");
 const PathParam = z.string().min(1).max(500).describe("Repository-relative path");
 
@@ -180,24 +192,123 @@ function registerAll(server: McpServer, client: GitLabReadClient): void {
 	);
 }
 
+function registerGovernedWrites(
+	server: McpServer,
+	readClient: GitLabReadClient,
+	writeClient: GitLabWriteClient,
+	policy: Config["write"],
+): void {
+	server.registerTool(
+		"lz_create_branch",
+		{
+			description: "Create an isolated agent branch from an exact, current default-branch SHA after policy review.",
+			inputSchema: CreateBranchInputSchema.shape,
+			annotations: GOVERNED_WRITE_ANNOTATIONS,
+		},
+		async (args) => createAllowedBranch(writeClient, policy, args).then(textResult).catch(errorResult),
+	);
+
+	server.registerTool(
+		"lz_commit_allowed_files",
+		{
+			description:
+				"Commit a bounded allowlist of reviewed files with branch and per-file optimistic concurrency checks.",
+			inputSchema: CommitAllowedFilesInputSchema.shape,
+			annotations: GOVERNED_WRITE_ANNOTATIONS,
+		},
+		async (args) => commitAllowedFiles(writeClient, policy, args).then(textResult).catch(errorResult),
+	);
+
+	server.registerTool(
+		"lz_open_merge_request",
+		{
+			description:
+				"Open a ready-for-review merge request with evidence, validation, risk, and expected Terraform plan details.",
+			inputSchema: OpenMergeRequestInputSchema.shape,
+			annotations: GOVERNED_WRITE_ANNOTATIONS,
+		},
+		async (args) => openAllowedMergeRequest(writeClient, policy, args).then(textResult).catch(errorResult),
+	);
+
+	server.registerTool(
+		"lz_watch_pipeline",
+		{
+			description:
+				"Observe existing merge-request pipelines and optional Terraform plan evidence without triggering CI.",
+			inputSchema: {
+				repository: RepositoryParam,
+				projectId: z.number().int().positive().describe("Verified GitLab project ID"),
+				iid: z.number().int().positive().describe("Existing merge request IID"),
+				pipelineId: z.number().int().positive().optional().describe("Existing pipeline ID whose plan evidence to read"),
+			},
+			annotations: READ_ONLY_ANNOTATIONS,
+		},
+		async (args) => {
+			try {
+				const repository = resolveRepository(args.repository);
+				if (!policy.allowedProjects.includes(repository.projectPath)) {
+					throw new Error(`${repository.projectPath} is not write-allowlisted`);
+				}
+				const project = await readClient.project(repository.projectPath);
+				if (project.id !== args.projectId || project.path !== repository.projectPath) {
+					throw new Error("GitLab project identity did not match the approved catalog entry");
+				}
+				const pipelines = await listMergeRequestPipelines(readClient, {
+					repository: repository.name,
+					iid: args.iid,
+				});
+				if (args.pipelineId && !pipelines.pipelines.some((pipeline) => pipeline.id === args.pipelineId)) {
+					throw new Error(`Pipeline ${args.pipelineId} does not belong to merge request !${args.iid}`);
+				}
+				const plan = args.pipelineId
+					? await readPipelinePlan(readClient, { repository: repository.name, pipelineId: args.pipelineId })
+					: undefined;
+				return textResult({ pipelines, ...(plan && { plan }) });
+			} catch (error) {
+				return errorResult(error);
+			}
+		},
+	);
+}
+
 function createBareServer(): McpServer {
 	return new McpServer({
 		name: "landing-zone-iac-mcp-server",
 		version: pkg.version,
-		description: "Read-only PVH Landing Zone repository, review, pipeline, and topology evidence.",
+		description: "PVH Landing Zone evidence with an optional, policy-gated GitOps proposal facade.",
 	});
 }
 
-export function createMcpServerFactory(config: Config, injectedClient?: GitLabReadClient): () => McpServer {
-	const client = injectedClient ?? createGitLabReadClient(config.gitlab);
+export function createMcpServerFactory(
+	config: Config,
+	injectedClient?: GitLabReadClient,
+	injectedWriteClient?: GitLabWriteClient,
+): () => McpServer {
+	const readClient = injectedClient ?? createGitLabReadClient(config.gitlab);
+	const writeClient = config.write.enabled
+		? (injectedWriteClient ?? createGitLabWriteClient({ ...config.gitlab, token: config.write.token ?? "" }))
+		: undefined;
 	return createCachedServerFactory({
 		createBareServer,
-		registerAll: (server) => registerAll(server, client),
+		registerAll: (server) => {
+			registerAll(server, readClient);
+			if (writeClient) registerGovernedWrites(server, readClient, writeClient, config.write);
+		},
 	});
 }
 
-export function createServer(config: Config, injectedClient?: GitLabReadClient): McpServer {
+export function createServer(
+	config: Config,
+	injectedClient?: GitLabReadClient,
+	injectedWriteClient?: GitLabWriteClient,
+): McpServer {
 	const server = createBareServer();
-	registerAll(server, injectedClient ?? createGitLabReadClient(config.gitlab));
+	const readClient = injectedClient ?? createGitLabReadClient(config.gitlab);
+	registerAll(server, readClient);
+	if (config.write.enabled) {
+		const writeClient =
+			injectedWriteClient ?? createGitLabWriteClient({ ...config.gitlab, token: config.write.token ?? "" });
+		registerGovernedWrites(server, readClient, writeClient, config.write);
+	}
 	return server;
 }
