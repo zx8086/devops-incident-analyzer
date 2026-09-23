@@ -16,7 +16,7 @@ import type {
 
 // 0.05 mirrors ElasticFindingsCard's red errorRateClass threshold -- one
 // definition of "unhealthy" across the APM surfaces.
-const UNHEALTHY_ERROR_RATE = 0.05;
+export const UNHEALTHY_ERROR_RATE = 0.05;
 
 const KIND_CATEGORIES: ReadonlyArray<{ kind: ApplicationTopologyNode["kind"]; label: string; color: string }> = [
 	{ kind: "service", label: "Service", color: "#0F766E" }, // teal-700
