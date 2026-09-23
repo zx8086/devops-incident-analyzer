@@ -29,18 +29,18 @@ const REVIEW_PATTERN = /\b(review|validate|check|plan|assessment|audit)\b/;
 const LEARNING_PATTERN =
 	/\b(learn|teach|example|show me|how|what is|explain|explanation|summary|guide|documentation)\b/;
 const CHANGE_PATTERN =
-	/\b(change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b/;
+	/\b(change|create|recreate|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate|import|force-unlock)\b|\bterraform state (?:rm|mv|push|pull)\b/;
 const INFORMATIONAL_ARTIFACT_PATTERN =
 	/^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:create|write|provide|give(?: me)?|show me|update)\s+(?:an?\s+|the\s+)?(?:review|plan|assessment|audit|check|example|explanation|summary|guide|documentation)\b/;
 const DIRECT_CHANGE_PATTERN =
-	/^(?:please\s+)?(?:change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b|\b(?:can you|could you|would you|need to|want to|go ahead and|we should|we must|i should|i need to)\s+(?:change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b/;
+	/^(?:please\s+)?(?:change|create|recreate|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate|import|force-unlock)\b|^terraform state (?:rm|mv|push|pull)\b|\b(?:can you|could you|would you|need to|want to|go ahead and|we should|we must|i should|i need to)\s+(?:change|create|recreate|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate|import|force-unlock)\b/;
 const CONJUNCTIVE_CHANGE_PATTERN =
-	/\band\s+(?:please\s+)?(?:change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b/;
+	/\band\s+(?:please\s+)?(?:change|create|recreate|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate|import|force-unlock)\b/;
 const HOW_ACTION_PATTERN =
-	/\b(change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate|review|validate|check|plan|assess|audit)\b/;
+	/\b(change|create|recreate|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate|import|force-unlock|review|validate|check|plan|assess|audit)\b|\bterraform state (?:rm|mv|push|pull)\b/;
 const INFORMATIONAL_QUESTION_PATTERN = /^(?:what|which|who|where|when|why|how|does|do|did|is|are|was|were)\b/;
 const PROSPECTIVE_QUESTION_CHANGE_PATTERN =
-	/^(?:what|which|who|where|when|why)\b.*(?:\b(?:should|can|could|would|will|may|might)\s+(?:we|i|you|be)\s+|\bto\s+)(?:change|create|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate)\b/;
+	/^(?:what|which|who|where|when|why)\b.*(?:\b(?:should|can|could|would|will|may|might)\s+(?:we|i|you|be)\s+|\bto\s+)(?:change|create|recreate|add|modify|update|implement|apply|destroy|delete|remove|allow|grant|commit|migrate|import|force-unlock)\b/;
 
 function clauseRequestsChange(clause: string): boolean {
 	if (INFORMATIONAL_ARTIFACT_PATTERN.test(clause)) return false;
@@ -102,14 +102,28 @@ export async function resolveLandingZoneScope(state: LandingZoneStateType): Prom
 	const text = latestText(state.messages);
 	const repositoryScope = new Set<string>();
 	const accountScope = [...new Set(text.match(/\b\d{12}\b/g) ?? [])];
-	if (/\b(account|vending)\b/.test(text)) repositoryScope.add("aws-lz-account-creator");
-	if (/\b(vpc|subnet|workload network)\b/.test(text)) repositoryScope.add("aws-lz-network-workloads");
-	if (/\b(core network|cloud wan|ipam|transit gateway|direct connect)\b/.test(text)) {
+	if (
+		/\baws-lz-account-creator\b|\b(account vending|vending account|new (?:aws )?account)\b|\b(?:creat(?:e|ing)|request|provision)(?:\s+[\w-]+){0,4}\s+(?:aws\s+)?account\b/.test(
+			text,
+		)
+	) {
+		repositoryScope.add("aws-lz-account-creator");
+	}
+	if (/\baws-lz-network-workloads\b|\b(vpc|subnet|workload network)\b/.test(text)) {
+		repositoryScope.add("aws-lz-network-workloads");
+	}
+	if (/\baws-lz-network-core\b|\b(core network|cloud wan|ipam|transit gateway|direct connect)\b/.test(text)) {
 		repositoryScope.add("aws-lz-network-core");
 	}
-	if (/\b(dns|post-vending|post vending)\b/.test(text)) repositoryScope.add("aws-lz-post-vending");
-	if (/\b(gitlab project|repository)\b/.test(text)) repositoryScope.add("dhco-gitlab-terraform");
-	if (/\b(runner|runners)\b/.test(text)) repositoryScope.add("gitlab-k8s-runners-lzv2");
+	if (/\baws-lz-post-vending\b|\b(dns|post-vending|post vending)\b/.test(text)) {
+		repositoryScope.add("aws-lz-post-vending");
+	}
+	if (/\bdhco-gitlab-terraform\b|\b(gitlab project|gitlab repository)\b/.test(text)) {
+		repositoryScope.add("dhco-gitlab-terraform");
+	}
+	if (/\bgitlab-k8s-runners-lzv2\b|\b(runner|runners)\b/.test(text)) {
+		repositoryScope.add("gitlab-k8s-runners-lzv2");
+	}
 	return { repositoryScope: [...repositoryScope], accountScope };
 }
 

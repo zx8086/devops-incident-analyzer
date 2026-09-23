@@ -36,12 +36,31 @@ const KNOWN_REPOSITORIES = new Set([
 ]);
 
 const REPOSITORY_ROUTES: ReadonlyArray<{ pattern: RegExp; repository: string }> = [
-	{ pattern: /\b(account|account vending|vending)\b/, repository: "aws-lz-account-creator" },
-	{ pattern: /\b(core network|cloud wan|ipam|transit gateway|direct connect)\b/, repository: "aws-lz-network-core" },
-	{ pattern: /\b(workload network|vpc|subnet|endpoint)\b/, repository: "aws-lz-network-workloads" },
-	{ pattern: /\b(dns|post[- ]vending|route 53|route53)\b/, repository: "aws-lz-post-vending" },
-	{ pattern: /\b(gitlab project|gitlab repository)\b/, repository: "dhco-gitlab-terraform" },
-	{ pattern: /\b(runner|runners)\b/, repository: "gitlab-k8s-runners-lzv2" },
+	{
+		pattern:
+			/\baws-lz-account-creator\b|\b(account vending|vending account|new (?:aws )?account)\b|\b(?:creat(?:e|ing)|request|provision)(?:\s+[\w-]+){0,4}\s+(?:aws\s+)?account\b/,
+		repository: "aws-lz-account-creator",
+	},
+	{
+		pattern: /\baws-lz-network-core\b|\b(core network|cloud wan|ipam|transit gateway|direct connect)\b/,
+		repository: "aws-lz-network-core",
+	},
+	{
+		pattern: /\baws-lz-network-workloads\b|\b(workload network|vpc|subnet|endpoint)\b/,
+		repository: "aws-lz-network-workloads",
+	},
+	{
+		pattern: /\baws-lz-post-vending\b|\b(dns|post[- ]vending|route 53|route53)\b/,
+		repository: "aws-lz-post-vending",
+	},
+	{
+		pattern: /\bdhco-gitlab-terraform\b|\b(gitlab project|gitlab repository)\b/,
+		repository: "dhco-gitlab-terraform",
+	},
+	{
+		pattern: /\bgitlab-k8s-runners-lzv2\b|\b(runner|runners)\b/,
+		repository: "gitlab-k8s-runners-lzv2",
+	},
 ];
 
 export interface LandingZoneKnowledgeSelection {
