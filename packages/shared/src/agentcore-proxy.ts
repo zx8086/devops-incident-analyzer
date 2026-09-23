@@ -621,8 +621,7 @@ export async function startAgentCoreProxy(
 								// call the proxy was still completing. Clamp each try to the time left.
 								// The first try always goes out (the outer loop only starts attempts
 								// before the deadline); a TCP retry past the deadline is skipped.
-								const remainingMs = deadline - Date.now();
-								if (attempt > 1 && remainingMs <= 0) {
+								if (attempt > 1 && deadline - Date.now() <= 0) {
 									const envelope = Response.json(
 										{
 											jsonrpc: "2.0",
@@ -639,6 +638,11 @@ export async function startAgentCoreProxy(
 									const headers = signRequest("POST", targetUrl, body, creds, config.region);
 									if (mcpSessionId) headers["mcp-session-id"] = mcpSessionId;
 
+									// Measured AFTER getCredentials: a cold `aws configure export-credentials`
+									// spawn (lazy profile creds) has no timeout of its own, so the upstream
+									// call gets only what is left. A success can then only land before the
+									// deadline, never after the bridge (deadline + margin) has given up.
+									const remainingMs = deadline - Date.now();
 									const response = await fetch(targetUrl.toString(), {
 										method: "POST",
 										headers,
