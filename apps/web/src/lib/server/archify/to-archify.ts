@@ -72,24 +72,83 @@ function makeIdMap(ids: Iterable<string>): Map<string, string> {
 	return map;
 }
 
-// Groups are laid out in first-seen order; within a group each band fills downward, so the
-// block height is the tallest band in it.
+// SIO-1878: columns follow the traffic, left to right like the Archify gallery: a node's column is
+// the longest chain of traffic edges leading to it. Back edges (a target already on the DFS stack)
+// are skipped, so a cycle cannot inflate depths. A node with no traffic edge keeps its kind band.
+// Recursion is bounded by DIAGRAM_NODE_BUDGET: larger maps are focused down before they get here.
+function byFlow(items: Placeable[], flow: Array<{ from: string; to: string }>): Placeable[] {
+	const out = new Map<string, string[]>();
+	const indegree = new Map<string, number>();
+	for (const e of flow) {
+		out.set(e.from, [...(out.get(e.from) ?? []), e.to]);
+		indegree.set(e.to, (indegree.get(e.to) ?? 0) + 1);
+	}
+	const linked = new Set(flow.flatMap((e) => [e.from, e.to]));
+	const depth = new Map<string, number>();
+	const onStack = new Set<string>();
+	const visit = (id: string, d: number) => {
+		if ((depth.get(id) ?? -1) >= d) return;
+		depth.set(id, d);
+		onStack.add(id);
+		for (const next of out.get(id) ?? []) if (!onStack.has(next)) visit(next, d + 1);
+		onStack.delete(id);
+	};
+	const roots = items.filter((i) => linked.has(i.id) && !indegree.get(i.id)).map((i) => i.id);
+	for (const id of roots) visit(id, 0);
+	// Every node on a pure cycle has an incoming edge, so no root reaches it; start it at 0.
+	for (const i of items) if (linked.has(i.id) && !depth.has(i.id)) visit(i.id, 0);
+	// A long call chain would need a column per hop (16 at the node budget), past Archify's 12-column
+	// grid and unreadable in a card; the gallery flows use at most 6. Deeper flows are scaled into
+	// MAX_FLOW_COLUMNS, keeping left-to-right order.
+	const deepest = Math.max(0, ...depth.values());
+	const column = (d: number) => (deepest < MAX_FLOW_COLUMNS ? d : Math.floor((d * (MAX_FLOW_COLUMNS - 1)) / deepest));
+	return items.map((i) => (linked.has(i.id) ? { ...i, band: column(depth.get(i.id) ?? 0) } : i));
+}
+const MAX_FLOW_COLUMNS = 6;
+
+// Boundary groups (subnet, else VPC) are laid out as row blocks in first-seen order; within a block
+// each column fills downward, so the block is as tall as its tallest column. A block's boundary is
+// the bounding box of its members, so blocks never share rows.
+// SIO-1878: members of no boundary (FREE_GROUP) are not stacked below the blocks. They fill each
+// column from the top, except that in a column the blocks occupy they start below the blocks, so a
+// dashed box can never appear to take them in. Before this, three unlinked brokers and a VPC made a
+// diagonal staircase with two empty quadrants.
+export const FREE_GROUP = "";
 function place(items: Placeable[], bandCount: number): ArchifyComponent[] {
+	// SIO-1878: bands with no member are dropped and the rest keep their order, so a map holding
+	// only endpoints and workloads is two adjacent columns, not four with an empty gap between.
+	const used = [...new Set(items.map((i) => i.band))].sort((a, b) => a - b);
+	const column = new Map(used.map((band, index) => [band, index]));
+	const width = Math.max(bandCount, (used.at(-1) ?? 0) + 1);
 	const groups = new Map<string, Placeable[]>();
 	for (const item of items) {
-		const list = groups.get(item.group) ?? [];
-		list.push(item);
-		groups.set(item.group, list);
+		if (item.group === FREE_GROUP) continue;
+		groups.set(item.group, [...(groups.get(item.group) ?? []), item]);
 	}
 	const out: ArchifyComponent[] = [];
 	let rowBase = 0;
+	const blockColumns = new Set<number>();
 	for (const members of groups.values()) {
-		const fill = new Array<number>(bandCount).fill(0);
+		const fill = new Array<number>(width).fill(0);
 		for (const { band, group: _g, ...component } of members) {
-			out.push({ ...component, size: [CELL_W, CELL_H], row: rowBase + (fill[band] ?? 0), col: band });
+			const col = column.get(band) ?? band;
+			blockColumns.add(col);
+			out.push({ ...component, size: [CELL_W, CELL_H], row: rowBase + (fill[band] ?? 0), col });
 			fill[band] = (fill[band] ?? 0) + 1;
 		}
 		rowBase += Math.max(...fill);
+	}
+	// Block rows span every column between the leftmost and rightmost block member (that is the
+	// boundary's width), so free members in that range go below all the blocks.
+	const cols = [...blockColumns];
+	const [lo, hi] = cols.length ? [Math.min(...cols), Math.max(...cols)] : [1, 0];
+	const freeRow = new Map<number, number>();
+	for (const { band, group, ...component } of items) {
+		if (group !== FREE_GROUP) continue;
+		const col = column.get(band) ?? band;
+		const row = freeRow.get(col) ?? (col >= lo && col <= hi ? rowBase : 0);
+		out.push({ ...component, size: [CELL_W, CELL_H], row, col });
+		freeRow.set(col, row + 1);
 	}
 	return out;
 }
@@ -194,7 +253,11 @@ export function networkToArchify(full: NetworkTopology): ArchifyArchitecture {
 	const drawn = t.nodes.filter((n) => n.kind !== "vpc" && n.kind !== "subnet");
 	const ids = makeIdMap(drawn.map((n) => n.id));
 	// Sort so each VPC's subnets are adjacent row blocks, keeping the VPC boundary contiguous.
-	const groupKey = (id: string) => `${vpcFor(id) ?? "~"}|${subnetOf.get(id) ?? "~"}`;
+	const groupKey = (id: string) => {
+		const vpc = vpcFor(id);
+		const subnet = subnetOf.get(id);
+		return vpc || subnet ? `${vpc ?? "~"}|${subnet ?? "~"}` : FREE_GROUP;
+	};
 	const ordered = [...drawn].sort((a, b) => groupKey(a.id).localeCompare(groupKey(b.id)));
 
 	const items: Placeable[] = ordered.map((n) => {
@@ -213,7 +276,13 @@ export function networkToArchify(full: NetworkTopology): ArchifyArchitecture {
 			group: groupKey(n.id),
 		};
 	});
-	const components = place(items, 4);
+	// Traffic edges between drawn nodes (containment edges end at a vpc/subnet, which has no id here).
+	const flow = t.edges.flatMap((e) => {
+		const from = ids.get(e.from);
+		const to = ids.get(e.to);
+		return from && to ? [{ from, to }] : [];
+	});
+	const components = place(byFlow(items, flow), 4);
 	const cellOf = new Map(components.map((c) => [c.id, c]));
 
 	const boundaries: ArchifyBoundary[] = [];
@@ -279,10 +348,16 @@ export function applicationToArchify(full: ApplicationTopology): ArchifyArchitec
 			...(sublabel ? { sublabel } : {}),
 			...(unhealthy && n.errorRate !== undefined ? { tag: `err ${(n.errorRate * 100).toFixed(1)}%` } : {}),
 			band: APP_BANDS[n.kind],
-			group: "all",
+			group: FREE_GROUP,
 		};
 	});
-	const components = place(items, 3);
+	// Traffic edges between drawn nodes (containment edges end at a vpc/subnet, which has no id here).
+	const flow = t.edges.flatMap((e) => {
+		const from = ids.get(e.from);
+		const to = ids.get(e.to);
+		return from && to ? [{ from, to }] : [];
+	});
+	const components = place(byFlow(items, flow), 3);
 	const cellOf = new Map(components.map((c) => [c.id, c]));
 
 	const connections: ArchifyConnection[] = [];

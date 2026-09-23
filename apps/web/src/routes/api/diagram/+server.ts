@@ -10,7 +10,14 @@ import { ApplicationTopologySchema, NetworkTopologySchema } from "@devops-agent/
 import { error, json } from "@sveltejs/kit";
 import { z } from "zod";
 import { isArchifyEnabled } from "$lib/server/archify/flag";
-import { embedHtml, RendererBusyError, type RenderResult, remember, renderDiagram } from "$lib/server/archify/render";
+import {
+	embedHtml,
+	RendererBusyError,
+	type RenderResult,
+	remember,
+	renderDiagram,
+	svgViewBox,
+} from "$lib/server/archify/render";
 import { applicationToArchify, networkToArchify } from "$lib/server/archify/to-archify";
 import type { RequestHandler } from "./$types";
 
@@ -114,8 +121,14 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const headers = { "x-archify-ms": String(result.ms) };
 	if (!result.ok) return json({ error: result.error, diagnostics: result.diagnostics }, { status: 422, headers });
+	// SIO-1878: the card sizes its frame to the diagram's aspect ratio from this.
+	const box = svgViewBox(result.html);
 	return new Response(embedHtml(result.html, body.theme), {
-		headers: { ...headers, "content-type": "text/html; charset=utf-8" },
+		headers: {
+			...headers,
+			...(box ? { "x-archify-viewbox": `${box.width} ${box.height}` } : {}),
+			"content-type": "text/html; charset=utf-8",
+		},
 	});
 };
 

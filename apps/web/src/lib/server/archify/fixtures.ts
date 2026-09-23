@@ -71,3 +71,78 @@ export const APPLICATION_FIXTURE: ApplicationTopology = {
 		},
 	],
 };
+
+// SIO-1878: the two shapes from a user report, synthetic names. Network: every link is containment
+// (so the diagram has boundaries and no connections) plus three unlinked brokers. Application: five
+// services and one dependency, tall enough to overflow a fixed-height frame.
+export const REPORTED_NETWORK_FIXTURE: NetworkTopology = {
+	builtAtTurn: 1,
+	sources: ["kafka", "aws"],
+	nodes: [
+		{ id: "vpc-0aa", kind: "vpc", name: "example-prd-vpc", cidr: "10.35.0.0/16" },
+		{ id: "subnet-a", kind: "subnet", cidr: "10.35.12.0/24" },
+		{ id: "subnet-b", kind: "subnet", cidr: "10.35.13.0/24" },
+		{ id: "subnet-c", kind: "subnet", cidr: "10.35.14.0/24" },
+		{
+			id: "arn:task/a",
+			kind: "workload",
+			name: "orders-service",
+			privateIps: ["10.35.12.10"],
+			service: "orders-service",
+		},
+		{
+			id: "arn:task/b",
+			kind: "workload",
+			name: "orders-service",
+			privateIps: ["10.35.13.10"],
+			service: "orders-service",
+		},
+		{
+			id: "arn:task/c",
+			kind: "workload",
+			name: "orders-service",
+			privateIps: ["10.35.14.10"],
+			service: "orders-service",
+		},
+		...[1, 2, 3].map((i) => ({
+			id: `ep:kafka:b-${i}.example.com:9098`,
+			kind: "serviceEndpoint" as const,
+			name: `broker-${i}`,
+			endpoint: { host: `b-${i}.example.com`, port: 9098, datasource: "kafka" },
+		})),
+	],
+	edges: [
+		{ from: "subnet-a", to: "vpc-0aa", kind: "in-vpc" },
+		{ from: "subnet-b", to: "vpc-0aa", kind: "in-vpc" },
+		{ from: "subnet-c", to: "vpc-0aa", kind: "in-vpc" },
+		{ from: "arn:task/a", to: "subnet-a", kind: "in-subnet", derived: true },
+		{ from: "arn:task/b", to: "subnet-b", kind: "in-subnet", derived: true },
+		{ from: "arn:task/c", to: "subnet-c", kind: "in-subnet", derived: true },
+	],
+};
+
+export const REPORTED_APPLICATION_FIXTURE: ApplicationTopology = {
+	builtAtTurn: 1,
+	sources: ["elastic", "kafka"],
+	nodes: [
+		{ id: "svc:orders-service", kind: "service", name: "orders-service", errorRate: 0, avgDurationMs: 23 },
+		{ id: "svc:catalog-service", kind: "service", name: "catalog-service", errorRate: 0, avgDurationMs: 360 },
+		{ id: "svc:checkout-service", kind: "service", name: "checkout-service", errorRate: 0, avgDurationMs: 28 },
+		{ id: "svc:orders.example.com:443", kind: "service", name: "orders.example.com:443" },
+		{ id: "svc:orders.dev.example.com:443", kind: "service", name: "orders.dev.example.com:443", errorRate: 1 },
+		{ id: "dep:storefront", kind: "dependency", name: "storefront (29 locales)" },
+	],
+	edges: [
+		{ from: "svc:catalog-service", to: "dep:storefront", kind: "calls", detail: "avg 360ms, 0.0% err" },
+		{ from: "svc:orders-service", to: "dep:storefront", kind: "calls", detail: "avg 23ms, 0.0% err" },
+		{ from: "svc:checkout-service", to: "dep:storefront", kind: "calls", detail: "avg 28ms, 0.0% err" },
+		{ from: "svc:orders.example.com:443", to: "svc:checkout-service", kind: "calls", detail: "avg 6ms, 0.0% err" },
+		{ from: "svc:orders.example.com:443", to: "svc:catalog-service", kind: "calls", detail: "avg 38ms, 0.0% err" },
+		{
+			from: "svc:orders.dev.example.com:443",
+			to: "svc:catalog-service",
+			kind: "calls",
+			detail: "avg 21ms, 100.0% err",
+		},
+	],
+};

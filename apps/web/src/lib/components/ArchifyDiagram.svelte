@@ -20,6 +20,7 @@ function archifyEnabled(): Promise<boolean> {
 // origin, so the viewer's scripts run but cannot reach the app's cookies or DOM. allow-downloads
 // keeps Archify's own PNG/SVG export working.
 import type { ApplicationTopology, NetworkTopology } from "@devops-agent/shared";
+import { diagramFrameHeight } from "$lib/archify-frame";
 
 type Tab = "map" | "diagram";
 type Props =
@@ -28,7 +29,7 @@ type Props =
 
 let { view, topology, tab = $bindable("map") }: Props = $props();
 
-type Loaded = { html: string; ms: string } | { error: string; details: string[] };
+type Loaded = { html: string; ms: string; viewBox: string | null } | { error: string; details: string[] };
 
 const enabled = archifyEnabled();
 
@@ -43,10 +44,15 @@ async function open(next: Tab) {
 		const response = await fetch("/api/diagram", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ view, theme: "light", topology }),
+			// SIO-1878: dark, like the Archify gallery; the diagram is its own panel inside the light card.
+			body: JSON.stringify({ view, theme: "dark", topology }),
 		});
 		if (response.ok) {
-			loaded = { html: await response.text(), ms: response.headers.get("x-archify-ms") ?? "?" };
+			loaded = {
+				html: await response.text(),
+				ms: response.headers.get("x-archify-ms") ?? "?",
+				viewBox: response.headers.get("x-archify-viewbox"),
+			};
 		} else {
 			const body = (await response.json().catch(() => ({}))) as {
 				error?: string;
@@ -70,6 +76,7 @@ const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
 	{ id: "diagram", label: "Diagram" },
 ];
 const current = $derived(tab === "map" ? undefined : loaded);
+let frameWidth = $state(0);
 </script>
 
 {#await enabled then on}
@@ -99,7 +106,9 @@ const current = $derived(tab === "map" ? undefined : loaded);
           title="{view} map diagram"
           srcdoc={current.html}
           sandbox="allow-scripts allow-downloads"
-          class="h-[28rem] w-full rounded border-0 bg-white"
+          bind:clientWidth={frameWidth}
+          style:height="{diagramFrameHeight(current.viewBox, frameWidth)}px"
+          class="w-full rounded border-0 bg-slate-950"
         ></iframe>
         <p class="mt-1 text-[0.5625rem] text-gray-500 tabular-nums">
           Rendered in {current.ms} ms
