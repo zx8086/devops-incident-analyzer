@@ -75,8 +75,11 @@ export function logsWindow(
 // (`...Cannot invoke "java.util.UUID.toString()" bec...`), which defeats the
 // purpose above -- an excerpt that stops before the distinguishing part tells
 // two signatures apart no better than the hash did. The digest now wraps the
-// summary onto its own lines, so a wider excerpt costs no readability: 200 over
-// NOTABLE_CAP is ~2 KB against a 256 KiB message budget.
+// summary onto its own lines, so a wider excerpt costs no readability.
+// SIO-1873: this used to be costed against a 10-entry digest cap. That cap is
+// gone (it hid whole families), so the bound is now the SNS 256 KiB message
+// limit that report-email.ts truncates against: a 200-char excerpt is ~2 KB per
+// ten findings, and the worst real account measured 11 KB in total.
 const SAMPLE_EXCERPT = 200;
 
 export function summariseLogSample(sample: string, max = SAMPLE_EXCERPT): string {

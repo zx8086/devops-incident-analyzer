@@ -158,7 +158,6 @@ export function parseDiagnoses(raw: unknown): Map<string, Diagnosis> | null {
 }
 
 const SEV_ORDER: Record<Severity, number> = { critical: 0, warn: 1, info: 2 };
-const NOTABLE_CAP = 10;
 
 // SIO-1832: every header names the account the same way -- `aws-<id>` alone, or
 // `aws-<id> (<name>)` when the host knows its friendly name. One helper so the
@@ -333,11 +332,14 @@ export function checkErrorCountsFromJournal(rows: { payload: string }[]): Journa
 
 // A flapping alarm journals one row per transition, so the same alarm can fill
 // the whole notables section (observed live: 10 identical
-// DatabaseServerCPUUtilization rows consumed all of NOTABLE_CAP and pushed 24
-// other findings into "+N more in the journal"). Rows are collapsed on
-// `dedup_key` -- the identity the checks already assign (`alarm:<name>:<state>`)
-// -- so a recurring alarm reads as ONE finding with a count, and the cap is
-// spent on distinct problems instead of repeats.
+// DatabaseServerCPUUtilization rows crowded out 24 other findings). Rows are
+// collapsed on `dedup_key` -- the identity the checks already assign
+// (`alarm:<name>:<state>`) -- so a recurring alarm reads as ONE finding with a
+// count and the section is spent on distinct problems instead of repeats.
+//
+// SIO-1873 removed the display cap those repeats used to exhaust, so this no
+// longer decides what SURVIVES. It still decides what is readable: 10 identical
+// lines are noise whether or not they are all printed.
 //
 // The occurrence count is kept, not discarded: "entered ALARM (x10)" is a
 // materially different signal from a single transition, and dropping it would
@@ -570,13 +572,27 @@ export function formatDigest(d: DigestInput): string {
 		// signatures from one log group read as one problem rather than several
 		// unrelated ones. Display only: notablesFromJournal has already collapsed
 		// on dedup_key, so those entries are genuinely distinct signatures and
-		// each keeps its own line. The cap counts ENTRIES, not printed lines.
+		// each keeps its own line.
 		//
 		// The repeat keeps the severity/family tag rather than a "same as above"
 		// marker: the tag is what the web pane badges, and a reader scrolling a
 		// long digest should not have to look upwards to identify a line.
+		//
+		// SIO-1873: EVERY warn+ finding is printed. There was a 10-entry cap here
+		// with a "+N more in the journal" line, which contradicted the reason this
+		// block exists (name every warn+ finding so the digest is reviewable
+		// without a journal round-trip). On eu-oit-prd it hid 21 of 31 findings and
+		// three whole families -- 12 health, 4 queues and 2 compliance findings did
+		// not appear AT ALL, because one noisy log group filled all ten slots, so
+		// the digest read as "no queue problems". The cap also made the digest a
+		// constant 3556 bytes whether there were 31 findings or 400.
+		//
+		// Size is bounded where it actually matters: report-email.ts truncates at
+		// the SNS 256 KiB limit with a pointer to the hub mailbox. Uncapped, the
+		// worst real account measured 11 KB (4.4% of that limit), and the limit is
+		// only reached near 800 notables.
 		let lastResource: string | null = null;
-		for (const [i, n] of notables.slice(0, NOTABLE_CAP).entries()) {
+		for (const [i, n] of notables.entries()) {
 			// One blank line between entries so each resource plus its wrapped
 			// summary reads as a block. A run of nine required-tags lines was a wall
 			// of text otherwise. Not a heading: the digest is also parsed by
@@ -594,9 +610,6 @@ export function formatDigest(d: DigestInput): string {
 			// The message goes on its own indented line(s) rather than being
 			// squeezed onto the resource line and cut mid-token.
 			for (const line of wrapSummary(n.summary)) lines.push(`      ${line}`);
-		}
-		if (notables.length > NOTABLE_CAP) {
-			lines.push("", `  - +${notables.length - NOTABLE_CAP} more warn+ finding(s) in the journal`);
 		}
 		// Blank line first: with entries now separated, a flush `- uninvestigated:`
 		// would read as part of the last entry's block rather than as the summary

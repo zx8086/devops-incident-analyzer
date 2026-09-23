@@ -282,25 +282,46 @@ describe("digest notables", () => {
 		expect(text.split("\n").find((l) => l.includes("i-other"))).not.toContain("[uninvestigated]");
 	});
 
-	test("caps the list at 10 and counts the overflow", () => {
-		const notables = Array.from({ length: 13 }, (_, i) => notable({ resource: `i-${i}` }));
-		const text = formatDigest({ ...quietDigest, findingCounts: { drift: 13 }, notables });
-		expect(text).toContain("i-9");
-		// The resource now ends its line, so the cap is checked on that shape.
-		expect(text).not.toContain("i-10\n");
-		expect(text).toContain("+3 more warn+ finding(s)");
+	test("every warn+ finding is printed; nothing is deferred to the journal", () => {
+		// SIO-1873: a 10-entry cap used to print "+N more in the journal", which
+		// contradicted the reason this section exists.
+		const notables = Array.from({ length: 31 }, (_, i) => notable({ resource: `i-${i}` }));
+		const text = formatDigest({ ...quietDigest, findingCounts: { drift: 31 }, notables });
+		for (let i = 0; i < 31; i++) expect(text).toContain(`i-${i}`);
+		expect(text).not.toContain("more warn+ finding(s)");
 	});
 
-	test("uninvestigated findings are always named, even past the display cap", () => {
-		// The shared-services digest of 2026-09-03 reported "uninvestigated: 2"
-		// while the two drift findings sat past the cap, so the operator had
-		// to dig through the source journal to learn which ones they were.
+	test("no family is dropped when one is noisy (the eu-oit-prd shape)", () => {
+		// The 2026-09-23 eu-oit-prd digest: 31 notables, 10 printed, and 12 health,
+		// 4 queues and 2 compliance findings did not appear AT ALL, because one log
+		// group filled every slot. The digest read as "no queue problems".
+		const notables = [
+			...Array.from({ length: 13 }, (_, i) =>
+				notable({ family: "logs", resource: `/ecs/fargate/log-${i}`, uninvestigated: true }),
+			),
+			...Array.from({ length: 12 }, (_, i) => notable({ family: "health", resource: `health-${i}` })),
+			...Array.from({ length: 4 }, (_, i) => notable({ family: "queues", resource: `dlq-${i}` })),
+			...Array.from({ length: 2 }, (_, i) => notable({ family: "compliance", resource: `eni-${i}` })),
+		];
+		const text = formatDigest({
+			...quietDigest,
+			findingCounts: { logs: 27, health: 12, queues: 4, compliance: 2 },
+			notables,
+		});
+		for (const fam of ["logs", "health", "queues", "compliance"]) expect(text).toContain(`/${fam})`);
+		expect(text).toContain("dlq-3");
+		expect(text).toContain("eni-1");
+		expect(text).toContain("health-11");
+	});
+
+	test("uninvestigated findings are all named and still lead", () => {
 		const notables = Array.from({ length: 12 }, (_, i) => notable({ resource: `i-${i}`, uninvestigated: i === 11 }));
 		const text = formatDigest({ ...quietDigest, findingCounts: { drift: 12 }, notables });
 		expect(text).toContain("uninvestigated: 1");
 		const line = text.split("\n").find((l) => l.includes("i-11"));
 		expect(line).toContain("[uninvestigated]");
-		expect(text).toContain("+2 more warn+ finding(s)");
+		// It leads rather than merely surviving: nothing is cut now.
+		expect(text.indexOf("i-11")).toBeLessThan(text.indexOf("i-0"));
 	});
 
 	test("uninvestigated findings lead the list, then severity orders the rest", () => {
@@ -357,14 +378,16 @@ describe("digest notables", () => {
 		expect(lines[total - 1]).toBe("");
 	});
 
-	test("blank lines do not consume the display cap", () => {
-		// The cap counts ENTRIES; a regression that counted printed lines would
-		// cut the list at five entries and report the wrong overflow.
-		const notables = Array.from({ length: 13 }, (_, i) => notable({ resource: `i-${i}` }));
-		const text = formatDigest({ ...quietDigest, findingCounts: { drift: 13 }, notables });
-		expect(text).toContain("i-9");
-		expect(text).not.toContain("i-10\n");
-		expect(text).toContain("+3 more warn+ finding(s)");
+	test("a large digest stays far inside the SNS message budget", () => {
+		// The only real bound. report-email.ts truncates at 256 KiB with a pointer
+		// to the hub mailbox; the worst real account measured 11 KB.
+		const notables = Array.from({ length: 120 }, (_, i) =>
+			notable({ resource: `/ecs/fargate/svc-${i}`, summary: "x".repeat(200) }),
+		);
+		const text = formatDigest({ ...quietDigest, findingCounts: { logs: 120 }, notables });
+		const bytes = new TextEncoder().encode(text).length;
+		expect(bytes).toBeLessThan(262_144 / 4);
+		expect(text).toContain("svc-119");
 	});
 
 	test("groups by family under uninvestigated and severity", () => {
