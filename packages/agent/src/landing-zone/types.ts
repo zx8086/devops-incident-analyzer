@@ -17,6 +17,85 @@ import { z } from "zod";
 export const LandingZoneIntentSchema = z.enum(["learn", "understand", "review", "propose-change"]);
 export type LandingZoneIntent = z.infer<typeof LandingZoneIntentSchema>;
 
+export const LANDING_ZONE_REPOSITORIES = [
+	"aws-lz-account-creator",
+	"aws-lz-ami",
+	"aws-lz-app-proxy",
+	"aws-lz-backup",
+	"aws-lz-citrix",
+	"aws-lz-dc",
+	"aws-lz-dfs",
+	"aws-lz-f5-ingress",
+	"aws-lz-finops",
+	"aws-lz-infra-ss-components",
+	"aws-lz-logging",
+	"aws-lz-monitoring",
+	"aws-lz-network-core",
+	"aws-lz-network-workloads",
+	"aws-lz-post-vending",
+	"aws-lz-security-tools",
+	"aws-lz-shared-tools",
+	"aws-lz-ssm",
+	"aws-lz-storage",
+	"aws-lz-vending-orchestrator",
+	"dhco-gitlab-terraform",
+	"gitlab-k8s-runners-lzv2",
+	"gitlab-k8s-runners-terraform",
+] as const;
+
+export const LandingZoneRepositorySchema = z.enum(LANDING_ZONE_REPOSITORIES);
+export type LandingZoneRepository = z.infer<typeof LandingZoneRepositorySchema>;
+
+export const AwsAccountIdSchema = z.string().regex(/^\d{12}$/);
+export const LandingZoneResolutionSourceSchema = z.enum([
+	"explicit",
+	"deterministic",
+	"model",
+	"session",
+	"unresolved",
+]);
+export const LandingZoneRequestSubjectSchema = z.enum([
+	"account-vending",
+	"repository-explanation",
+	"topology",
+	"standards-comparison",
+	"general",
+]);
+export const LandingZoneTopologyViewSchema = z.enum(["network", "dns", "path"]);
+
+export const LandingZoneRequestResolutionSchema = z
+	.object({
+		intent: LandingZoneIntentSchema,
+		subject: LandingZoneRequestSubjectSchema,
+		repositories: z.array(LandingZoneRepositorySchema).max(LANDING_ZONE_REPOSITORIES.length),
+		accountIds: z.array(AwsAccountIdSchema).max(20),
+		application: z.string().trim().min(1).max(100).nullable(),
+		environment: z.string().trim().min(1).max(20).nullable(),
+		topologyView: LandingZoneTopologyViewSchema.nullable(),
+		clarification: z.string().trim().min(1).max(500).nullable(),
+		repositoryResolution: LandingZoneResolutionSourceSchema,
+		accountResolution: LandingZoneResolutionSourceSchema,
+	})
+	.strict();
+export type LandingZoneRequestResolution = z.infer<typeof LandingZoneRequestResolutionSchema>;
+
+export const LandingZoneAnswerSchema = z
+	.object({
+		answerMarkdown: z.string().trim().min(1).max(32_768),
+		citations: z.array(ResponseCitationSchema).max(100),
+		limitations: z.array(z.string().trim().min(1).max(2_000)).max(50),
+	})
+	.strict();
+export type LandingZoneAnswer = z.infer<typeof LandingZoneAnswerSchema>;
+
+export const LandingZoneAnswerValidationSchema = z
+	.object({
+		valid: z.boolean(),
+		issues: z.array(z.string().trim().min(1).max(2_000)).max(50),
+	})
+	.strict();
+export type LandingZoneAnswerValidation = z.infer<typeof LandingZoneAnswerValidationSchema>;
+
 export const LandingZoneMemoryKindSchema = z.enum([
 	"terraform-change",
 	"account-vending",
@@ -177,6 +256,8 @@ export const LandingZoneStateInputSchema = z
 		messages: z.array(z.unknown()),
 		requestId: z.string().min(1),
 		intent: LandingZoneIntentSchema,
+		requestResolution: LandingZoneRequestResolutionSchema.nullable(),
+		clarificationCount: z.number().int().min(0).max(2),
 		repositoryScope: z.array(z.string()),
 		accountScope: z.array(z.string()),
 		authorizedAccountScope: z.array(z.string()),
@@ -192,6 +273,9 @@ export const LandingZoneStateInputSchema = z
 		priorMemory: z.array(LandingZonePriorMemorySchema),
 		reconciliation: LandingZoneReconciliationSchema.nullable(),
 		risk: LandingZoneRiskSchema.nullable(),
+		answerResult: LandingZoneAnswerSchema.nullable(),
+		answerValidation: LandingZoneAnswerValidationSchema.nullable(),
+		answerRetryCount: z.number().int().min(0).max(2),
 		response: z.string().nullable(),
 		blockedReason: z.string().nullable(),
 		outcome: LandingZoneOutcomeSchema,

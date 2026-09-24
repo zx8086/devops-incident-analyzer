@@ -91,6 +91,7 @@ function projectState(state: LandingZoneStateType, operations: string[]) {
 	const response = state.response ?? extractTextFromContent(lastMessage?.content) ?? "";
 	return {
 		response,
+		clarification: state.requestResolution?.clarification ?? null,
 		intent: state.intent,
 		repositoryScope: state.repositoryScope,
 		evidenceResults: state.evidenceResults,

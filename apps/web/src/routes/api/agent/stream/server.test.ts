@@ -399,7 +399,10 @@ describe("POST /api/agent/stream -- clientTimeZone", () => {
 
 describe("POST /api/agent/stream — SSE stream", () => {
 	test("surfaces the final Landing Zone assistant message before completion", async () => {
-		getLastAssistantTextMock.mockImplementationOnce(async () => "PVH account vending uses the account YAML surface.");
+		getLastAssistantTextMock.mockImplementationOnce(
+			async () =>
+				"Use `accounts/<application>.yml`; the repository generator produces reviewed Terraform. [citation-account]\n\n## Sources\n- [citation-account] Current repository evidence",
+		);
 
 		const response = await POST(
 			makeRequest({
@@ -412,7 +415,8 @@ describe("POST /api/agent/stream — SSE stream", () => {
 		const events = await collectSse(response);
 		expect(events).toContainEqual({
 			type: "message",
-			content: "PVH account vending uses the account YAML surface.",
+			content:
+				"Use `accounts/<application>.yml`; the repository generator produces reviewed Terraform. [citation-account]\n\n## Sources\n- [citation-account] Current repository evidence",
 		});
 		expect(events.at(-1)?.type).toBe("done");
 		expect(events.at(-1)?.telemetry).toEqual(landingZoneTelemetry);

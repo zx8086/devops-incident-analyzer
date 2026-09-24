@@ -2,6 +2,7 @@
 
 import { createCheckpointer } from "@devops-agent/checkpointer";
 import { END, START, StateGraph } from "@langchain/langgraph";
+import type { LandingZoneAnswerGenerator } from "./answer.ts";
 import { createLandingZoneChangeNodes, type LandingZoneChangeTools } from "./change-nodes.ts";
 import type { LandingZoneEvidenceCollectors } from "./evidence.ts";
 import {
@@ -10,12 +11,17 @@ import {
 	bootstrapLandingZone,
 	classifyLandingZoneRequest,
 	createLandingZoneEvidenceNode,
+	createSynthesizeLandingZoneAnswerNode,
+	degradeLandingZoneAnswer,
+	gateLandingZoneScope,
 	joinLandingZoneEvidence,
+	publishLandingZoneAnswer,
 	recallLandingZoneMemory,
 	reconcileLandingZoneEvidence,
 	resolveLandingZoneScope,
 	selectPvhKnowledge,
 	teardownLandingZone,
+	validateLandingZoneAnswerNode,
 } from "./nodes.ts";
 import { LandingZoneState } from "./state.ts";
 import { type LandingZoneTopologyTool, projectLandingZoneTopologyNode } from "./topology-node.ts";
@@ -26,6 +32,7 @@ export interface BuildLandingZoneGraphOptions {
 	awsLiveStateAuthorized?: boolean;
 	topologyTools?: LandingZoneTopologyTool[];
 	changeTools?: LandingZoneChangeTools;
+	answerGenerator?: LandingZoneAnswerGenerator;
 }
 
 export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOptions = {}) {
@@ -47,6 +54,7 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		.addNode("bootstrap", bootstrapLandingZone)
 		.addNode("classifyRequest", classifyLandingZoneRequest)
 		.addNode("resolveScope", resolveLandingZoneScope)
+		.addNode("scopeGate", gateLandingZoneScope)
 		.addNode("recallMemory", recallLandingZoneMemory)
 		.addNode("selectPvhKnowledge", selectPvhKnowledge)
 		.addNode("collectGitLabEvidence", createLandingZoneEvidenceNode("gitlab", evidenceOptions))
@@ -60,6 +68,10 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		.addNode("reconcileEvidence", reconcileLandingZoneEvidence)
 		.addNode("assessRisk", assessLandingZoneRisk)
 		.addNode("answerQuestion", answerLandingZoneQuestion)
+		.addNode("synthesizeAnswer", createSynthesizeLandingZoneAnswerNode(options.answerGenerator))
+		.addNode("validateAnswer", validateLandingZoneAnswerNode)
+		.addNode("degradedAnswer", degradeLandingZoneAnswer)
+		.addNode("publishAnswer", publishLandingZoneAnswer)
 		.addNode("draftChange", changeNodes.draftChange)
 		.addNode("validateCandidate", changeNodes.validateCandidate)
 		.addNode("prepareReview", changeNodes.prepareReview)
@@ -72,7 +84,11 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		.addEdge(START, "bootstrap")
 		.addEdge("bootstrap", "classifyRequest")
 		.addEdge("classifyRequest", "resolveScope")
-		.addEdge("resolveScope", "recallMemory")
+		.addEdge("resolveScope", "scopeGate")
+		.addConditionalEdges("scopeGate", (state) => (state.blockedReason ? "answerQuestion" : "recallMemory"), [
+			"answerQuestion",
+			"recallMemory",
+		])
 		.addEdge("recallMemory", "selectPvhKnowledge")
 		.addEdge("joinEvidence", "reconcileEvidence")
 		.addEdge("reconcileEvidence", "assessRisk")
@@ -81,9 +97,23 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 			(state) =>
 				state.intent === "propose-change" && !state.risk?.blocked && !state.blockedReason
 					? "draftChange"
-					: "answerQuestion",
-			["draftChange", "answerQuestion"],
+					: state.risk?.blocked || state.blockedReason
+						? "answerQuestion"
+						: "synthesizeAnswer",
+			["draftChange", "answerQuestion", "synthesizeAnswer"],
 		)
+		.addEdge("synthesizeAnswer", "validateAnswer")
+		.addConditionalEdges(
+			"validateAnswer",
+			(state) =>
+				state.answerValidation?.valid
+					? "publishAnswer"
+					: state.answerRetryCount < 2
+						? "synthesizeAnswer"
+						: "degradedAnswer",
+			["publishAnswer", "synthesizeAnswer", "degradedAnswer"],
+		)
+		.addEdge("degradedAnswer", "publishAnswer")
 		.addConditionalEdges("draftChange", (state) => (state.blockedReason ? "answerQuestion" : "validateCandidate"), [
 			"validateCandidate",
 			"answerQuestion",
@@ -114,6 +144,7 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		.addEdge("watchPipeline", "recordOutcome")
 		.addEdge("recordOutcome", "teardown")
 		.addEdge("answerQuestion", "projectTopology")
+		.addEdge("publishAnswer", "projectTopology")
 		.addEdge("projectTopology", "teardown")
 		.addEdge("teardown", END);
 	for (const collectorNode of collectorNodes) graph.addEdge("selectPvhKnowledge", collectorNode);

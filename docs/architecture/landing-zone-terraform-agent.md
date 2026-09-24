@@ -9,10 +9,11 @@ The supported authoring surface comes from current repository evidence. For exam
 ```text
 request
   -> classify intent and resolve repository/account scope
+  -> clarify missing topology targets or explicit topic shifts, then resume from the same checkpoint
   -> recall advisory Agent Memory and select PVH OKF concepts
   -> collect GitLab, OKF, Terraform, AWS, memory, and graph evidence in parallel
   -> reconcile claims and assess risk
-     -> learn / understand / review: answer, optionally project topology
+     -> learn / understand / review: synthesize -> validate -> retry once or degrade -> optionally project topology
      -> propose-change: draft -> validate -> human review interrupt
           -> reject: stop
           -> amend: redraft, at most three iterations
@@ -20,7 +21,11 @@ request
   -> record a redacted breadcrumb and finish
 ```
 
-The graph is defined in `packages/agent/src/landing-zone/graph.ts`. The UI selects it through `apps/web/src/lib/agent-ids.ts` and `apps/web/src/lib/server/graph-registry.ts`. Both initial turns and resumed review turns use the same checkpoint and completion telemetry.
+The graph is defined in `packages/agent/src/landing-zone/graph.ts`. The UI selects it through `apps/web/src/lib/agent-ids.ts` and `apps/web/src/lib/server/graph-registry.ts`. Initial turns, scope clarifications, and resumed review turns use the same checkpoint and completion telemetry.
+
+Request resolution combines deterministic repository vocabulary, established session scope, and a bounded structured-model fallback. The fixed repository catalog remains authoritative: model output is intersected with it and cannot broaden access. Terse follow-ups inherit established repository and account scope; an explicit repository topic shift pauses once to ask whether the user wants to retain or replace that scope. Network maps require one authorized account, while DNS traces also require a hostname.
+
+Read-only answers are structured as answer Markdown, evidence citations, and limitations. A Landing Zone-specific validator rejects status-only text, unknown citations, invented account IDs, unavailable sources described as aligned, unsafe operations, and account-vending answers that do not lead with `accounts/<application>.yml` and the generator workflow. One repair attempt is allowed. A second failure produces a deterministic evidence-bounded answer with exact source limitations.
 
 ## Evidence contract
 
@@ -48,6 +53,8 @@ Topology cards are generated only when all of these are true:
 2. The requested account is in the UI-authorized AWS estate scope.
 3. The knowledge graph contains current `TopologyFact` records for that account.
 4. The projection returns at least one node.
+
+When required topology scope is missing, the graph emits `landing_zone_clarify` before collecting evidence. The web client resumes the same checkpoint with the user's answer; it does not start a second turn or bypass the authorized-account check.
 
 Node and edge identifiers come from reconciled graph facts. The model does not invent diagram identifiers. No card is emitted when authorization, graph data, or projection evidence is absent.
 

@@ -1138,6 +1138,12 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		}),
 	}),
 	z.object({ type: z.literal("landing_zone_review_resolved") }),
+	z.object({
+		type: z.literal("landing_zone_clarify"),
+		threadId: z.string(),
+		question: z.string(),
+	}),
+	z.object({ type: z.literal("landing_zone_clarify_resolved") }),
 	// elastic-iac maker graph: a one-line clarification the planner needs, or the
 	// plan-review gate. The UI POSTs the resume value to /api/agent/iac/resume.
 	z.object({

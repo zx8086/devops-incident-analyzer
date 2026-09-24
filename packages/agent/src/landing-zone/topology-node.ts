@@ -23,12 +23,16 @@ const DEFAULT_PAGE_SIZE = 500;
 const DEFAULT_MAX_PAGES = 20;
 
 function messageText(messages: BaseMessage[]): string {
-	const content = messages.at(-1)?.content;
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.map((part) => (typeof part === "object" && part !== null && "text" in part ? String(part.text) : ""))
-		.join(" ");
+	return messages
+		.filter((message) => message._getType() === "human")
+		.map((message) => {
+			if (typeof message.content === "string") return message.content;
+			if (!Array.isArray(message.content)) return "";
+			return message.content
+				.map((part) => (typeof part === "object" && part !== null && "text" in part ? String(part.text) : ""))
+				.join(" ");
+		})
+		.join("\n");
 }
 
 function requestedView(text: string): TopologyDiagramView {

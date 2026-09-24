@@ -65,6 +65,52 @@ function benchmark(
 
 export const LANDING_ZONE_DATASET: LandingZoneEvalExample[] = [
 	benchmark(
+		"lz-starter-account-process",
+		"account-creation",
+		"Show me the PVH process for creating a new AWS Landing Zone account.",
+		"learn",
+		["aws-lz-account-creator"],
+	),
+	benchmark(
+		"lz-starter-repository-explanation",
+		"account-creation",
+		"Explain how aws-lz-account-creator turns account YAML into Terraform.",
+		"learn",
+		["aws-lz-account-creator"],
+	),
+	benchmark(
+		"lz-starter-network-map",
+		"workload-network",
+		"Map the VPCs, subnets, routes, and central-network attachments for an existing account.",
+		"understand",
+		["aws-lz-network-core", "aws-lz-network-workloads"],
+		{ minimumCitations: 0, minimumRepresentativeExamples: 0 },
+	),
+	benchmark(
+		"lz-starter-dns-path",
+		"dns-resolution",
+		"Trace the DNS resolution path for a Landing Zone workload account.",
+		"understand",
+		["aws-lz-network-workloads", "aws-lz-post-vending"],
+		{ minimumCitations: 0, minimumRepresentativeExamples: 0 },
+	),
+	benchmark(
+		"lz-starter-gitlab-runners",
+		"gitlab-project",
+		"Explain how a Landing Zone GitLab project and its runners are set up.",
+		"learn",
+		["dhco-gitlab-terraform", "gitlab-k8s-runners-lzv2"],
+		{ minimumRepresentativeExamples: 0 },
+	),
+	benchmark(
+		"lz-starter-standards",
+		"provider-version",
+		"Compare the current PVH Terraform pattern with official AWS and Terraform best practices.",
+		"understand",
+		[],
+		{ minimumRepresentativeExamples: 0 },
+	),
+	benchmark(
 		"lz-account-creation",
 		"account-creation",
 		"Create a PVH Landing Zone account for a new application in dev.",

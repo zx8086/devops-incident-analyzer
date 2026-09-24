@@ -148,12 +148,24 @@ describe("POST /api/agent/landing-zone/resume", () => {
 		expect((await POST(request({ threadId: "t", reviewId, decision: "approve", reason: "extra" }))).status).toBe(400);
 	});
 
+	test("forwards a clarification answer only to a pending Landing Zone clarification", async () => {
+		resumeAgentMock.mockClear();
+		seedPending({ value: { type: "landing_zone_clarify", question: "Which account?" } }, undefined);
+		const response = await POST(request({ threadId: "thread-lz", answer: "111122223333" }));
+		const streamed = await events(response);
+		const args = (resumeAgentMock.mock.calls as unknown as unknown[][])[0]?.[0] as { resumeValue?: unknown };
+		expect(args.resumeValue).toEqual({ answer: "111122223333" });
+		expect(streamed[0]?.type).toBe("landing_zone_clarify_resolved");
+		expect(streamed.at(-1)?.type).toBe("done");
+	});
+
 	test("rejects a stale resume when no Landing Zone review is pending", async () => {
 		seedPending(undefined);
 		expect((await POST(request({ threadId: "t", reviewId, decision: "approve" }))).status).toBe(409);
 	});
 
 	test("rejects a review capability that does not own the pending gate", async () => {
+		resumeAgentMock.mockClear();
 		seedPending({ value: { type: "landing_zone_plan_review", review: { reviewId } } });
 		const response = await POST(
 			request({ threadId: "t", reviewId: "22222222-2222-4222-8222-222222222222", decision: "approve" }),

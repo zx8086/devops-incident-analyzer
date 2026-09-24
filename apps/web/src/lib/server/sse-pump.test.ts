@@ -88,6 +88,23 @@ describe("emitLandingZoneInterrupt", () => {
 			}),
 		).toBeFalse();
 	});
+
+	test("emits a Landing Zone clarification with its thread", () => {
+		const sent: Record<string, unknown>[] = [];
+		expect(
+			emitLandingZoneInterrupt((event) => sent.push(event), "thread-lz", {
+				type: "landing_zone_clarify",
+				question: "Which Landing Zone account should I map?",
+			}),
+		).toBeTrue();
+		expect(sent).toEqual([
+			{
+				type: "landing_zone_clarify",
+				threadId: "thread-lz",
+				question: "Which Landing Zone account should I map?",
+			},
+		]);
+	});
 });
 
 describe("pumpEventStream datasource_result", () => {
