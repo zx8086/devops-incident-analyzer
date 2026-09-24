@@ -138,6 +138,28 @@ describe("Landing Zone answer synthesis", () => {
 		expect(answer.answerMarkdown).toContain("Helm release");
 	});
 
+	test("answers the standards comparison even when its bounded scope includes account creator", () => {
+		const answer = deterministicLandingZoneAnswer(
+			state({
+				requestResolution: {
+					intent: "learn",
+					subject: "standards-comparison",
+					repositories: ["aws-lz-account-creator", "aws-lz-network-core", "aws-lz-network-workloads"],
+					accountIds: [],
+					application: null,
+					environment: null,
+					topologyView: null,
+					clarification: null,
+					repositoryResolution: "deterministic",
+					accountResolution: "unresolved",
+				},
+			}),
+		);
+
+		expect(answer.answerMarkdown).toContain("PVH and external standards");
+		expect(answer.answerMarkdown).not.toContain("PVH account creation process");
+	});
+
 	test("falls back deterministically when synthesis fails without echoing repository instructions", async () => {
 		const result = await synthesizeLandingZoneAnswer(
 			state({

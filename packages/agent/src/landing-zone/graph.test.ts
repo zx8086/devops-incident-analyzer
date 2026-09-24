@@ -492,6 +492,7 @@ describe("buildLandingZoneGraph", () => {
 		const graph = await buildLandingZoneGraph({
 			checkpointerType: "memory",
 			collectors: successfulCollectors(calls),
+			authorizedTopologyAccounts: ["111122223333"],
 			topologyTools: [
 				{
 					name: "kg_run_cypher",
@@ -504,12 +505,39 @@ describe("buildLandingZoneGraph", () => {
 		const result = await graph.invoke(
 			{
 				messages: [new HumanMessage("Show the network topology for account 111122223333")],
-				authorizedAccountScope: ["111122223333"],
 			},
 			{ configurable: { thread_id: "thread-topology" } },
 		);
 		expect(result.accountScope).toEqual(["111122223333"]);
 		expect(result.landingZoneTopology?.topology.nodes.map((node) => node.id)).toEqual(["vpc-1"]);
+	});
+
+	test("does not accept topology authorization from request state", async () => {
+		let topologyCalls = 0;
+		const graph = await buildLandingZoneGraph({
+			checkpointerType: "memory",
+			collectors: successfulCollectors([]),
+			topologyTools: [
+				{
+					name: "kg_run_cypher",
+					invoke: async () => {
+						topologyCalls += 1;
+						return {};
+					},
+				},
+			],
+		});
+		const result = await graph.invoke(
+			{
+				messages: [new HumanMessage("Show the network topology for account 999900001111")],
+				authorizedAccountScope: ["999900001111"],
+			},
+			{ configurable: { thread_id: "thread-untrusted-topology-authorization" } },
+		);
+
+		expect(result.authorizedAccountScope).toEqual([]);
+		expect(result.landingZoneTopology).toBeNull();
+		expect(topologyCalls).toBe(0);
 	});
 
 	test("persists the user-facing answer as the final assistant message", async () => {

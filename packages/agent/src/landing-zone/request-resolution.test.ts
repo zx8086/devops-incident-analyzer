@@ -56,7 +56,7 @@ describe("resolveLandingZoneRequest", () => {
 		expect(result.repositoryResolution).toBe(resolutionSource);
 	});
 
-	test("matches plural and hyphenated network wording", async () => {
+	test("matches plural and hyphenated network wording without inheriting a foreign account selection", async () => {
 		const result = await resolveLandingZoneRequest({
 			messages: [new HumanMessage("How are central-network links, VPCs, routes, and subnets connected?")],
 			intent: "understand",
@@ -66,9 +66,9 @@ describe("resolveLandingZoneRequest", () => {
 		});
 
 		expect(result.repositories).toEqual(["aws-lz-network-core", "aws-lz-network-workloads"]);
-		expect(result.accountIds).toEqual(["111122223333"]);
-		expect(result.accountResolution).toBe("session");
-		expect(result.clarification).toBeNull();
+		expect(result.accountIds).toEqual([]);
+		expect(result.accountResolution).toBe("unresolved");
+		expect(result.clarification).toBe("Which Landing Zone account should I map? Provide the 12-digit account ID.");
 	});
 
 	test("inherits established repository and account scope for a terse follow-up", async () => {
@@ -127,7 +127,7 @@ describe("resolveLandingZoneRequest", () => {
 		expect(result.clarification).toBe("Which Landing Zone account should I map? Provide the 12-digit account ID.");
 	});
 
-	test("asks for a hostname before tracing DNS", async () => {
+	test("asks for a hostname and account instead of inheriting a foreign account selection", async () => {
 		const result = await resolveLandingZoneRequest({
 			messages: [new HumanMessage("Trace the DNS resolution path for a Landing Zone workload account.")],
 			intent: "understand",
@@ -136,7 +136,9 @@ describe("resolveLandingZoneRequest", () => {
 			authorizedAccountScope: ["111122223333"],
 		});
 
-		expect(result.clarification).toBe("Which hostname should I trace for the established Landing Zone account?");
+		expect(result.clarification).toBe(
+			"Which hostname and Landing Zone account should I trace? Provide the hostname and 12-digit account ID.",
+		);
 	});
 
 	test("asks whether to retain or replace established scope on a topic shift", async () => {

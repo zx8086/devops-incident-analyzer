@@ -46,7 +46,8 @@ function firstMatch(text: string, pattern: RegExp): string | undefined {
 }
 
 function requestedTargets(state: LandingZoneStateType): string[] {
-	return [...new Set(state.accountScope)].sort();
+	const authorized = new Set(state.authorizedAccountScope);
+	return [...new Set(state.accountScope.filter((accountId) => authorized.has(accountId)))].sort();
 }
 
 export async function projectLandingZoneTopologyNode(

@@ -117,7 +117,13 @@ export function deterministicLandingZoneAnswer(state: LandingZoneStateType): Lan
 	const examples = representativeExamples(state.evidenceResults).slice(0, 5);
 	let answerMarkdown: string;
 
-	if (subject === "account-vending" || repositories.includes("aws-lz-account-creator")) {
+	if (subject === "standards-comparison") {
+		answerMarkdown = `## PVH and external standards
+
+The comparison is bounded to ${repositories.map((repository) => `\`${repository}\``).join(", ") || "the resolved PVH Landing Zone repositories"}.${marker} Compare their current authoring surfaces, provider and module constraints, state and locking design, tagging and naming, account boundaries, validation, review gates, and destructive-change protections.
+
+PVH repository and accepted curated evidence remain authoritative for the implemented contract. Terraform and AWS recommendations are advisory layers and are compared only when their collectors return current evidence; unavailable guidance is reported below rather than described as aligned.`;
+	} else if (subject === "account-vending" || repositories.includes("aws-lz-account-creator")) {
 		const exampleLines =
 			examples.length > 0
 				? examples.map((path) => `- \`${path}\``).join("\n")
@@ -185,7 +191,7 @@ The repository-defined desired network is split across ${repositories.map((repos
 - \`aws-lz-network-core\`: shared IPAM, central attachments, Cloud WAN or transit routing, and shared network services.
 - \`aws-lz-post-vending\`: account-specific associations and post-vending dependencies, including the DNS handoff where applicable.
 
-The desired path is workload account → VPC → subnets and route tables → central attachment → core segment → shared services. Repository evidence describes intended state. A diagram is emitted when current Landing Zone topology facts are available; missing live AWS evidence leaves deployed state unverified but does not invalidate the repository-defined map.`;
+The desired path is workload account → VPC → subnets and route tables → central attachment → core segment → shared services. Repository evidence describes intended state. An account-specific diagram is emitted only when independent Landing Zone authorization and current topology facts are available; missing live AWS evidence leaves deployed state unverified but does not invalidate the repository-defined map.`;
 	} else if (repositories.includes("dhco-gitlab-terraform") || repositories.includes("gitlab-k8s-runners-lzv2")) {
 		answerMarkdown = `## Landing Zone GitLab project and runners
 
@@ -197,12 +203,6 @@ Use \`dhco-gitlab-terraform\` for the project definition and \`gitlab-k8s-runner
 4. The consuming \`aws-lz-*\` repository then runs on that registered runner.
 
 Keep project provisioning and runner onboarding as separate reviewed contracts. Verify the current module tag, runner schema, defaults, and active examples before proposing either change; a defaults change can affect every runner.`;
-	} else if (subject === "standards-comparison") {
-		answerMarkdown = `## PVH and external standards
-
-The comparison is bounded to ${repositories.map((repository) => `\`${repository}\``).join(", ") || "the resolved PVH Landing Zone repositories"}.${marker} Compare their current authoring surfaces, provider and module constraints, state and locking design, tagging and naming, account boundaries, validation, review gates, and destructive-change protections.
-
-PVH repository and accepted curated evidence remain authoritative for the implemented contract. Terraform and AWS recommendations are advisory layers and are compared only when their collectors return current evidence; unavailable guidance is reported below rather than described as aligned.`;
 	} else {
 		answerMarkdown = `## Landing Zone answer
 

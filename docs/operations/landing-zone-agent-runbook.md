@@ -31,9 +31,9 @@ Keep tokens in the deployment secret store, never in `.env.example`, committed m
 | AWS live-state question | `skipped` or `unavailable` in the current production graph; no deployed-state claim is presented as verified. |
 | Memory enabled | Recall is advisory and appears only after live claim revalidation. |
 | Knowledge graph disabled | Knowledge-graph evidence is unavailable and topology cards are absent; the text answer still completes when its required evidence exists. |
-| Unauthorized account topology | No topology card and no account data in completion telemetry. |
+| Account without independent Landing Zone topology authorization | Repository-defined answer only; no topology card and no account data in completion telemetry. |
 | Network map without one established account | The turn pauses with one account-selection question before evidence collection. |
-| DNS trace without a hostname | The turn pauses for the hostname and an authorized account, then resumes from the same checkpoint. |
+| DNS trace without a hostname | The turn pauses for the hostname and explicit Landing Zone account, then resumes from the same checkpoint. |
 | Synthesis or validation failure | One repair is attempted; repeated failure returns a substantive deterministic answer with explicit limitations. |
 
 ## Enabling governed proposal mode
@@ -105,9 +105,9 @@ If the final text is only an evidence-status sentence, inspect the `synthesizeAn
 
 ### Topology card is missing
 
-Confirm `KNOWLEDGE_GRAPH_ENABLED`, graph health, an authorized UI estate whose account ID matches the request, current `TopologyFact` rows, and a request containing topology/DNS/path intent. Missing data is a valid empty result. Do not create synthetic nodes to force a diagram.
+Confirm `KNOWLEDGE_GRAPH_ENABLED`, graph health, an independently supplied Landing Zone authorization whose account ID matches the request, current `TopologyFact` rows, and a request containing topology/DNS/path intent. Incident Analyzer and Elastic IaC selectors are never Landing Zone authorization. Missing data is a valid empty result. Do not create synthetic nodes to force a diagram.
 
-If the UI shows a scope question, answer it through the displayed form. Network maps require exactly one authorized 12-digit account. DNS traces also require a hostname. A rejected account or incomplete reply must remain blocked; do not add the account to telemetry or loosen `authorizedAccountScope`.
+If the UI shows a scope question, answer it through the displayed form. Network maps require exactly one explicit 12-digit account. DNS traces also require a hostname. That answer scopes repository evidence but does not grant knowledge-graph access. Do not add the account to telemetry or populate `authorizedTopologyAccounts` from request data, another application's selectors, or persisted foreign state.
 
 ### Proposal stops before review
 

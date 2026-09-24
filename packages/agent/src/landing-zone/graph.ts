@@ -33,6 +33,7 @@ export interface BuildLandingZoneGraphOptions {
 	topologyTools?: LandingZoneTopologyTool[];
 	changeTools?: LandingZoneChangeTools;
 	answerGenerator?: LandingZoneAnswerGenerator;
+	authorizedTopologyAccounts?: string[];
 }
 
 export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOptions = {}) {
@@ -51,7 +52,10 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 	] as const;
 	const changeNodes = createLandingZoneChangeNodes(options.changeTools);
 	const graph = new StateGraph(LandingZoneState)
-		.addNode("bootstrap", bootstrapLandingZone)
+		.addNode("bootstrap", async (state) => ({
+			...(await bootstrapLandingZone(state)),
+			authorizedAccountScope: [...new Set(options.authorizedTopologyAccounts ?? [])].sort(),
+		}))
 		.addNode("classifyRequest", classifyLandingZoneRequest)
 		.addNode("resolveScope", resolveLandingZoneScope)
 		.addNode("scopeGate", gateLandingZoneScope)

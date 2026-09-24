@@ -211,10 +211,6 @@ export async function resolveLandingZoneRequest(
 		];
 		accountResolution = accountIds.length > 0 ? "session" : "unresolved";
 	}
-	if (accountIds.length === 0 && subject === "topology" && (state.authorizedAccountScope ?? []).length === 1) {
-		accountIds = (state.authorizedAccountScope ?? []).filter((value) => AwsAccountIdSchema.safeParse(value).success);
-		accountResolution = accountIds.length > 0 ? "session" : "unresolved";
-	}
 	if (subject === "topology" && accountIds.length === 0 && topologyView === "network") {
 		clarification = ACCOUNT_CLARIFICATION;
 	}

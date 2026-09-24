@@ -97,7 +97,7 @@ describe("projectLandingZoneTopologyNode", () => {
 		});
 	});
 
-	test("queries Landing Zone topology for an explicit account without foreign application authorization", async () => {
+	test("does not query Landing Zone topology when only a different account is independently authorized", async () => {
 		let calls = 0;
 		const tool: LandingZoneTopologyTool = {
 			name: "kg_run_cypher",
@@ -114,7 +114,7 @@ describe("projectLandingZoneTopologyNode", () => {
 			{ tools: [tool] },
 		);
 		expect(result.landingZoneTopology).toBeNull();
-		expect(calls).toBe(1);
+		expect(calls).toBe(0);
 	});
 
 	test("does not query topology until a Landing Zone account is established", async () => {

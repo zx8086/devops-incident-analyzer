@@ -47,6 +47,7 @@ describe("parallel Landing Zone evidence collection", () => {
 		query: "review account vending",
 		repositories: ["aws-lz-account-creator"],
 		accountIds: [],
+		authorizedAccountIds: [],
 		selectedKnowledge: ["repos/aws-lz-account-creator.md"],
 		subject: "account-vending",
 		awsLiveStateRelevant: false,
@@ -72,6 +73,7 @@ describe("parallel Landing Zone evidence collection", () => {
 				query: "compare deployed resource state",
 				repositories: [],
 				accountIds: [],
+				authorizedAccountIds: [],
 				selectedKnowledge: [],
 				subject: "general",
 				awsLiveStateRelevant: true,
@@ -150,6 +152,55 @@ describe("parallel Landing Zone evidence collection", () => {
 		]);
 	});
 
+	test("keeps a large repository summary valid JSON and preserves paths and open changes", async () => {
+		const result = await collectGitLabEvidence(context, async () => ({
+			examples: Array.from({ length: 5 }, (_, index) => ({
+				path: `accounts/example-${index}.yml`,
+				content: "x".repeat(5_000),
+			})),
+			contracts: Array.from({ length: 3 }, (_, index) => ({
+				path: `schemas/contract-${index}.json`,
+				content: "y".repeat(5_000),
+			})),
+			openChanges: [
+				{
+					iid: 42,
+					title: "Add the current account example",
+					state: "opened",
+					updatedAt: "2026-09-24T08:00:00.000Z",
+					webUrl: "https://gitlab.example/mr/42",
+					paths: ["accounts/example-0.yml"],
+				},
+			],
+		}));
+		const raw = result[0]?.summary ?? "";
+		const summary = JSON.parse(raw) as {
+			examples: Array<{ path: string }>;
+			openChanges: Array<{ iid: number; paths: string[] }>;
+		};
+
+		expect(raw.length).toBeLessThanOrEqual(8_192);
+		expect(summary.examples.map((entry) => entry.path)).toContain("accounts/example-0.yml");
+		expect(summary.openChanges).toEqual([expect.objectContaining({ iid: 42, paths: ["accounts/example-0.yml"] })]);
+	});
+
+	test("keeps the final compact fallback valid when metadata is unexpectedly oversized", async () => {
+		const result = await collectGitLabEvidence(context, async () => ({
+			repository: { name: "z".repeat(20_000) },
+			project: { path: "p".repeat(20_000) },
+			provenance: { ref: "r".repeat(20_000) },
+			examples: [{ path: "accounts/alpha.yml", content: "x".repeat(20_000) }],
+			contracts: [{ path: "schema.json", content: "y".repeat(20_000) }],
+			openChanges: [{ iid: 7, title: "Current change", paths: ["accounts/alpha.yml"] }],
+		}));
+		const raw = result[0]?.summary ?? "";
+		const summary = JSON.parse(raw) as { examples: Array<{ path: string }>; openChanges: Array<{ iid: number }> };
+
+		expect(raw.length).toBeLessThanOrEqual(8_192);
+		expect(summary.examples).toEqual([{ path: "accounts/alpha.yml" }]);
+		expect(summary.openChanges).toEqual([expect.objectContaining({ iid: 7 })]);
+	});
+
 	test("emits the same structured authoring-surface claim from PVH repository knowledge", async () => {
 		const result = await DEFAULT_LANDING_ZONE_COLLECTORS["pvh-okf"](context);
 		const account = result.find((entry) => entry.id === "pvh-okf:repos/aws-lz-account-creator.md");
@@ -195,20 +246,53 @@ describe("parallel Landing Zone evidence collection", () => {
 		const calls: Record<string, unknown>[] = [];
 		const configs: { signal?: AbortSignal }[] = [];
 		const controller = new AbortController();
-		const result = await collectKnowledgeGraphEvidence({ ...context, signal: controller.signal }, [
+		const result = await collectKnowledgeGraphEvidence(
 			{
-				name: "kg_run_cypher",
-				invoke: async (input, config) => {
-					calls.push(input);
-					configs.push(config ?? {});
-					return { rows: [] };
-				},
+				...context,
+				accountIds: ["111122223333"],
+				authorizedAccountIds: ["111122223333"],
+				subject: "topology",
+				signal: controller.signal,
 			},
-		]);
+			[
+				{
+					name: "kg_run_cypher",
+					invoke: async (input, config) => {
+						calls.push(input);
+						configs.push(config ?? {});
+						return { rows: [] };
+					},
+				},
+			],
+		);
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.cypher).toContain("MATCH (f:TopologyFact)");
-		expect(calls[0]?.params).toEqual({ accountIds: [] });
+		expect(calls[0]?.params).toEqual({ accountIds: ["111122223333"] });
 		expect(configs[0]?.signal).toBe(controller.signal);
 		expect(result[0]?.status).toBe("observed");
+	});
+
+	test("does not query topology history without independent Landing Zone account authorization", async () => {
+		let calls = 0;
+		const result = await collectKnowledgeGraphEvidence(
+			{
+				...context,
+				accountIds: ["999900001111"],
+				authorizedAccountIds: ["111122223333"],
+				subject: "topology",
+			},
+			[
+				{
+					name: "kg_run_cypher",
+					invoke: async () => {
+						calls += 1;
+						return { rows: [] };
+					},
+				},
+			],
+		);
+
+		expect(calls).toBe(0);
+		expect(result).toEqual([]);
 	});
 });

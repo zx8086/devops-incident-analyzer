@@ -21,6 +21,7 @@ export interface EvidenceCollectionContext {
 	query: string;
 	repositories: string[];
 	accountIds: string[];
+	authorizedAccountIds: string[];
 	selectedKnowledge: string[];
 	subject: LandingZoneRequestResolution["subject"];
 	awsLiveStateRelevant: boolean;
@@ -118,30 +119,87 @@ function boundedEvidenceFiles(value: unknown, field: "contracts" | "examples", c
 	const entries = toolPayload(value)?.[field];
 	if (!Array.isArray(entries)) return [];
 	return entries.slice(0, 5).flatMap((entry) => {
-		if (typeof entry === "string") return [{ path: entry }];
+		if (typeof entry === "string") return [{ path: entry.slice(0, 500) }];
 		const item = record(entry);
 		if (!item || typeof item.path !== "string") return [];
 		return [
 			{
-				path: item.path,
+				path: item.path.slice(0, 500),
 				...(typeof item.kind === "string" && { kind: item.kind }),
-				...(typeof item.content === "string" && { content: item.content.slice(0, contentLimit) }),
+				...(typeof item.content === "string" && contentLimit > 0 && { content: item.content.slice(0, contentLimit) }),
 				...(typeof item.truncated === "boolean" && { truncated: item.truncated }),
 			},
 		];
 	});
 }
 
-function repositoryEvidenceSummary(value: unknown): Record<string, unknown> {
+function boundedOpenChanges(value: unknown): unknown[] {
+	const entries = toolPayload(value)?.openChanges;
+	if (!Array.isArray(entries)) return [];
+	return entries.slice(0, 5).flatMap((entry) => {
+		const item = record(entry);
+		if (!item || typeof item.iid !== "number") return [];
+		return [
+			{
+				iid: item.iid,
+				...(typeof item.title === "string" && { title: item.title.slice(0, 300) }),
+				...(typeof item.state === "string" && { state: item.state.slice(0, 50) }),
+				...(typeof item.updatedAt === "string" && { updatedAt: item.updatedAt }),
+				...(typeof item.webUrl === "string" && { webUrl: item.webUrl.slice(0, 500) }),
+				...(Array.isArray(item.paths) && {
+					paths: item.paths
+						.filter((path): path is string => typeof path === "string")
+						.slice(0, 5)
+						.map((path) => path.slice(0, 500)),
+				}),
+			},
+		];
+	});
+}
+
+function repositoryEvidenceSummary(value: unknown): string {
 	const payload = toolPayload(value) ?? {};
-	return {
-		...(record(payload.repository) && { repository: payload.repository }),
-		...(record(payload.project) && { project: payload.project }),
-		contracts: boundedEvidenceFiles(value, "contracts", 1_000),
-		examples: boundedEvidenceFiles(value, "examples", 1_500),
+	const repository = record(payload.repository);
+	const project = record(payload.project);
+	const provenance = record(payload.provenance);
+	const summary = {
+		...(repository && { repository }),
+		...(project && { project }),
+		contracts: boundedEvidenceFiles(value, "contracts", 600),
+		examples: boundedEvidenceFiles(value, "examples", 800),
+		openChanges: boundedOpenChanges(value),
 		...(Array.isArray(payload.warnings) && { warnings: payload.warnings.slice(0, 10) }),
-		...(record(payload.provenance) && { provenance: payload.provenance }),
+		...(provenance && { provenance }),
 	};
+	const serialized = JSON.stringify(summary);
+	if (serialized.length <= 8_000) return serialized;
+	const compact = JSON.stringify({
+		...(repository && { repository }),
+		...(project && { project }),
+		contracts: boundedEvidenceFiles(value, "contracts", 0),
+		examples: boundedEvidenceFiles(value, "examples", 0),
+		openChanges: boundedOpenChanges(value),
+		warnings: ["Repository evidence content was compacted to preserve a valid bounded summary."],
+		...(provenance && { provenance }),
+	});
+	if (compact.length <= 8_000) return compact;
+	return JSON.stringify({
+		contracts: resultPaths(value, "contracts")
+			.slice(0, 5)
+			.map((path) => ({ path: path.slice(0, 300) })),
+		examples: resultPaths(value, "examples")
+			.slice(0, 5)
+			.map((path) => ({ path: path.slice(0, 300) })),
+		openChanges: boundedOpenChanges(value).map((entry) => {
+			const item = record(entry) ?? {};
+			return {
+				iid: item.iid,
+				...(typeof item.title === "string" && { title: item.title.slice(0, 100) }),
+				...(typeof item.state === "string" && { state: item.state }),
+			};
+		}),
+		warnings: ["Repository evidence metadata was compacted to preserve a valid bounded summary."],
+	});
 }
 
 function canonicalSurfacePath(repository: string, path: string): string | undefined {
@@ -222,7 +280,7 @@ export async function collectGitLabEvidence(
 			return evidence(
 				"gitlab",
 				`gitlab:${repository}`,
-				JSON.stringify(repositoryEvidenceSummary(result)),
+				repositoryEvidenceSummary(result),
 				{ repository, path: "." },
 				claim,
 			);
@@ -244,13 +302,15 @@ export async function collectKnowledgeGraphEvidence(
 	context: EvidenceCollectionContext,
 	tools: EvidenceTool[] = getToolsForDataSource("knowledge-graph"),
 ): Promise<EvidenceItem[]> {
+	const accountIds = context.accountIds.filter((accountId) => context.authorizedAccountIds.includes(accountId));
+	if (accountIds.length === 0) return [];
 	const tool = tools.find((candidate) => candidate.name === "kg_run_cypher");
 	if (!tool) throw new Error("knowledge graph query tool is not connected");
 	const result = await tool.invoke(
 		{
 			cypher:
 				"MATCH (f:TopologyFact) WHERE f.validTo = '' AND f.accountId IN $accountIds RETURN f.id AS id, f.accountId AS accountId, f.payload AS payload ORDER BY f.id LIMIT 25",
-			params: { accountIds: context.accountIds },
+			params: { accountIds },
 		},
 		{ signal: context.signal },
 	);
@@ -330,6 +390,7 @@ export function evidenceContext(
 		intent: LandingZoneIntent;
 		repositoryScope: string[];
 		accountScope: string[];
+		authorizedAccountScope: string[];
 		selectedKnowledge: string[];
 		requestResolution?: { subject: LandingZoneRequestResolution["subject"] } | null;
 	},
@@ -341,6 +402,7 @@ export function evidenceContext(
 		query,
 		repositories: state.repositoryScope,
 		accountIds: state.accountScope,
+		authorizedAccountIds: state.authorizedAccountScope,
 		selectedKnowledge: state.selectedKnowledge,
 		subject: state.requestResolution?.subject ?? "general",
 		awsLiveStateRelevant: /\b(live|deployed|actual|drift|aws api|resource state)\b/i.test(query),
@@ -359,6 +421,17 @@ export async function collectEvidenceSource(
 	}
 	if (source === "knowledge-graph" && context.subject !== "topology") {
 		return { source, status: "skipped", evidence: [], reason: "Topology history was not required for this request." };
+	}
+	if (
+		source === "knowledge-graph" &&
+		!context.accountIds.some((accountId) => context.authorizedAccountIds.includes(accountId))
+	) {
+		return {
+			source,
+			status: "skipped",
+			evidence: [],
+			reason: "Account-specific topology history requires independent Landing Zone authorization.",
+		};
 	}
 	if (source === "aws-api" && !context.awsLiveStateRelevant) {
 		return { source, status: "skipped", evidence: [], reason: "AWS live state was not relevant to this request." };
