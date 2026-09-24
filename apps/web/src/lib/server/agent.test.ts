@@ -18,6 +18,14 @@ const mockRegisterSchedules = mock(() => {
 const mockCreateMcpClient = mock(async () => {
 	bootOrder.push("mcp");
 });
+const mockBuildLandingZoneGraph = mock(() =>
+	Promise.resolve({
+		streamEvents: mockStreamEvents,
+		getState: mockGetState,
+		updateState: mockUpdateState,
+		getGraphAsync: mock(() => Promise.resolve({ nodes: {}, edges: [] })),
+	}),
+);
 const mockMcpEvents = new EventEmitter();
 // SIO-1687: records what pruneThreadState stashed as the evidence TOC.
 const mockSetEvidenceToc = mock((_threadId: string, _toc?: string) => undefined);
@@ -92,14 +100,7 @@ mock.module("@devops-agent/agent", () => ({
 			updateState: mockUpdateState,
 		}),
 	),
-	buildLandingZoneGraph: mock(() =>
-		Promise.resolve({
-			streamEvents: mockStreamEvents,
-			getState: mockGetState,
-			updateState: mockUpdateState,
-			getGraphAsync: mock(() => Promise.resolve({ nodes: {}, edges: [] })),
-		}),
-	),
+	buildLandingZoneGraph: mockBuildLandingZoneGraph,
 	createMcpClient: mockCreateMcpClient,
 	// SIO-1655: graph-registry imports both from the barrel to gate the console:
 	// the capability flag AND whether a hub exists to serve it.
@@ -352,8 +353,14 @@ mock.module("@langchain/core/messages", () => ({
 	},
 }));
 
-const { _waitForAgentStartupForTest, ensureMcpConnected, getLandingZoneTurnTelemetry, invokeAgent, pruneThreadState } =
-	await import("./agent.ts");
+const {
+	_waitForAgentStartupForTest,
+	ensureMcpConnected,
+	getLandingZoneGraph,
+	getLandingZoneTurnTelemetry,
+	invokeAgent,
+	pruneThreadState,
+} = await import("./agent.ts");
 
 test("cold startup attempts MCP before its first schedule registration", async () => {
 	await _waitForAgentStartupForTest();
@@ -367,6 +374,21 @@ test("refreshes schedule readiness after a health reconnect transition", async (
 	const registrationsBeforeReconnect = mockRegisterSchedules.mock.calls.length;
 	mockMcpEvents.emit("mcp_connected", { type: "mcp_connected", server: "landing-zone-iac-mcp" });
 	expect(mockRegisterSchedules.mock.calls.length).toBeGreaterThan(registrationsBeforeReconnect);
+});
+
+test("builds the production Landing Zone graph with its independent topology allowlist", async () => {
+	const previous = process.env.LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS;
+	process.env.LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS = "444455556666,111122223333";
+	try {
+		await getLandingZoneGraph();
+		expect(mockBuildLandingZoneGraph).toHaveBeenCalledWith({
+			checkpointerType: "memory",
+			authorizedTopologyAccounts: ["111122223333", "444455556666"],
+		});
+	} finally {
+		if (previous === undefined) delete process.env.LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS;
+		else process.env.LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS = previous;
+	}
 });
 
 describe("invokeAgent", () => {
@@ -429,7 +451,7 @@ describe("invokeAgent", () => {
 		const call = mockStreamEvents.mock.calls[0] as unknown as [Record<string, unknown>, Record<string, unknown>];
 		expect(call[0].requestId).toBe("request-landing-zone");
 		expect(call[0].messages).toBeDefined();
-		expect(call[0].authorizedAccountScope).toEqual(["111122223333", "444455556666"]);
+		expect(call[0].authorizedAccountScope).toBeUndefined();
 		expect(call[0].targetDataSources).toBeUndefined();
 	});
 });

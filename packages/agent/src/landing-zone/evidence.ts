@@ -5,7 +5,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { getToolsForDataSource } from "../mcp-bridge.ts";
 import { searchAgentMemory } from "../memory-backend.ts";
 import { getAgentByName } from "../prompt-context.ts";
-import type { LandingZoneIntent } from "./types.ts";
+import type { LandingZoneIntent, LandingZoneRequestResolution } from "./types.ts";
 
 export type EvidenceCollectionStatus = "collected" | "unavailable" | "skipped";
 
@@ -20,7 +20,10 @@ export interface EvidenceCollectionContext {
 	intent: LandingZoneIntent;
 	query: string;
 	repositories: string[];
+	accountIds: string[];
+	authorizedAccountIds: string[];
 	selectedKnowledge: string[];
+	subject: LandingZoneRequestResolution["subject"];
 	awsLiveStateRelevant: boolean;
 	awsLiveStateAuthorized: boolean;
 	signal?: AbortSignal;
@@ -112,6 +115,89 @@ function resultPaths(value: unknown, field: "contracts" | "examples"): string[] 
 	});
 }
 
+function boundedEvidenceFiles(value: unknown, field: "contracts" | "examples", contentLimit: number): unknown[] {
+	const entries = toolPayload(value)?.[field];
+	if (!Array.isArray(entries)) return [];
+	return entries.slice(0, 5).flatMap((entry) => {
+		if (typeof entry === "string") return [{ path: entry.slice(0, 500) }];
+		const item = record(entry);
+		if (!item || typeof item.path !== "string") return [];
+		return [
+			{
+				path: item.path.slice(0, 500),
+				...(typeof item.kind === "string" && { kind: item.kind.slice(0, 100) }),
+				...(typeof item.content === "string" && contentLimit > 0 && { content: item.content.slice(0, contentLimit) }),
+				...(typeof item.truncated === "boolean" && { truncated: item.truncated }),
+			},
+		];
+	});
+}
+
+function boundedOpenChanges(value: unknown): unknown[] {
+	const entries = toolPayload(value)?.openChanges;
+	if (!Array.isArray(entries)) return [];
+	return entries.slice(0, 5).flatMap((entry) => {
+		const item = record(entry);
+		if (!item || typeof item.iid !== "number") return [];
+		return [
+			{
+				iid: item.iid,
+				...(typeof item.title === "string" && { title: item.title.slice(0, 300) }),
+				...(typeof item.state === "string" && { state: item.state.slice(0, 50) }),
+				...(typeof item.updatedAt === "string" && { updatedAt: item.updatedAt }),
+				...(typeof item.webUrl === "string" && { webUrl: item.webUrl.slice(0, 500) }),
+				...(Array.isArray(item.paths) && {
+					paths: item.paths
+						.filter((path): path is string => typeof path === "string")
+						.slice(0, 5)
+						.map((path) => path.slice(0, 500)),
+				}),
+			},
+		];
+	});
+}
+
+function repositoryEvidenceSummary(value: unknown): string {
+	const payload = toolPayload(value) ?? {};
+	const repository = record(payload.repository);
+	const project = record(payload.project);
+	const provenance = record(payload.provenance);
+	const summary = {
+		...(repository && { repository }),
+		...(project && { project }),
+		contracts: boundedEvidenceFiles(value, "contracts", 600),
+		examples: boundedEvidenceFiles(value, "examples", 800),
+		openChanges: boundedOpenChanges(value),
+		...(Array.isArray(payload.warnings) && { warnings: payload.warnings.slice(0, 10) }),
+		...(provenance && { provenance }),
+	};
+	const serialized = JSON.stringify(summary);
+	if (serialized.length <= 8_000) return serialized;
+	const compact = JSON.stringify({
+		...(repository && { repository }),
+		...(project && { project }),
+		contracts: boundedEvidenceFiles(value, "contracts", 160),
+		examples: boundedEvidenceFiles(value, "examples", 240),
+		openChanges: boundedOpenChanges(value),
+		warnings: ["Repository evidence details were compacted to preserve a valid bounded summary."],
+		...(provenance && { provenance }),
+	});
+	if (compact.length <= 8_000) return compact;
+	return JSON.stringify({
+		contracts: boundedEvidenceFiles(value, "contracts", 120).slice(0, 2),
+		examples: boundedEvidenceFiles(value, "examples", 120).slice(0, 3),
+		openChanges: boundedOpenChanges(value).map((entry) => {
+			const item = record(entry) ?? {};
+			return {
+				iid: item.iid,
+				...(typeof item.title === "string" && { title: item.title.slice(0, 100) }),
+				...(typeof item.state === "string" && { state: item.state.slice(0, 50) }),
+			};
+		}),
+		warnings: ["Repository evidence metadata was compacted to preserve a valid bounded summary."],
+	});
+}
+
 function canonicalSurfacePath(repository: string, path: string): string | undefined {
 	const normalized = path.replaceAll("<application>", "*").replaceAll("<app>", "*").replaceAll("<env>", "*");
 	if (repository === "aws-lz-account-creator" && /^accounts\/[^/]+\.ya?ml$/i.test(normalized)) {
@@ -187,7 +273,13 @@ export async function collectGitLabEvidence(
 				context.signal,
 			);
 			const claim = surfaceClaim(repository, resultPaths(result, "examples"));
-			return evidence("gitlab", `gitlab:${repository}`, JSON.stringify(result), { repository, path: "." }, claim);
+			return evidence(
+				"gitlab",
+				`gitlab:${repository}`,
+				repositoryEvidenceSummary(result),
+				{ repository, path: "." },
+				claim,
+			);
 		}),
 	);
 	const items = results.flatMap((result, index) => {
@@ -206,13 +298,15 @@ export async function collectKnowledgeGraphEvidence(
 	context: EvidenceCollectionContext,
 	tools: EvidenceTool[] = getToolsForDataSource("knowledge-graph"),
 ): Promise<EvidenceItem[]> {
+	const accountIds = context.accountIds.filter((accountId) => context.authorizedAccountIds.includes(accountId));
+	if (accountIds.length === 0) return [];
 	const tool = tools.find((candidate) => candidate.name === "kg_run_cypher");
 	if (!tool) throw new Error("knowledge graph query tool is not connected");
 	const result = await tool.invoke(
 		{
 			cypher:
-				"MATCH (n) WHERE n:Vpc OR n:Subnet OR n:DnsRecord OR n:ConfigChange RETURN labels(n) AS labels, coalesce(n.id, n.name, n.accountId, '') AS identifier LIMIT 25",
-			params: {},
+				"MATCH (f:TopologyFact) WHERE f.validTo = '' AND f.accountId IN $accountIds RETURN f.id AS id, f.accountId AS accountId, f.payload AS payload ORDER BY f.id LIMIT 25",
+			params: { accountIds },
 		},
 		{ signal: context.signal },
 	);
@@ -291,7 +385,10 @@ export function evidenceContext(
 		messages: BaseMessage[];
 		intent: LandingZoneIntent;
 		repositoryScope: string[];
+		accountScope: string[];
+		authorizedAccountScope: string[];
 		selectedKnowledge: string[];
+		requestResolution?: { subject: LandingZoneRequestResolution["subject"] } | null;
 	},
 	awsLiveStateAuthorized = false,
 ): EvidenceCollectionContext {
@@ -300,7 +397,10 @@ export function evidenceContext(
 		intent: state.intent,
 		query,
 		repositories: state.repositoryScope,
+		accountIds: state.accountScope,
+		authorizedAccountIds: state.authorizedAccountScope,
 		selectedKnowledge: state.selectedKnowledge,
+		subject: state.requestResolution?.subject ?? "general",
 		awsLiveStateRelevant: /\b(live|deployed|actual|drift|aws api|resource state)\b/i.test(query),
 		awsLiveStateAuthorized,
 	};
@@ -312,8 +412,28 @@ export async function collectEvidenceSource(
 	collectors: LandingZoneEvidenceCollectors = DEFAULT_LANDING_ZONE_COLLECTORS,
 	timeoutMs = COLLECTOR_TIMEOUT_MS,
 ): Promise<EvidenceCollectionOutcome> {
-	if (source === "aws-api" && (!context.awsLiveStateRelevant || !context.awsLiveStateAuthorized)) {
-		return { source, status: "skipped", evidence: [], reason: "AWS live state was not both relevant and authorised." };
+	if ((source === "terraform-docs" || source === "aws-docs") && context.subject !== "standards-comparison") {
+		return { source, status: "skipped", evidence: [], reason: `${source} was not required for this request.` };
+	}
+	if (source === "knowledge-graph" && context.subject !== "topology") {
+		return { source, status: "skipped", evidence: [], reason: "Topology history was not required for this request." };
+	}
+	if (
+		source === "knowledge-graph" &&
+		!context.accountIds.some((accountId) => context.authorizedAccountIds.includes(accountId))
+	) {
+		return {
+			source,
+			status: "skipped",
+			evidence: [],
+			reason: "Account-specific topology history requires independent Landing Zone authorization.",
+		};
+	}
+	if (source === "aws-api" && !context.awsLiveStateRelevant) {
+		return { source, status: "skipped", evidence: [], reason: "AWS live state was not relevant to this request." };
+	}
+	if (source === "aws-api" && !context.awsLiveStateAuthorized) {
+		return { source, status: "skipped", evidence: [], reason: "AWS live state was not authorized for this turn." };
 	}
 	try {
 		return {

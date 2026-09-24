@@ -1,7 +1,6 @@
 // apps/web/src/lib/server/agent.ts
 import {
 	type AgentStateType,
-	accountIdForEstate,
 	appliedSkillsForNames,
 	buildEvidenceToc,
 	buildGraph,
@@ -44,6 +43,7 @@ import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
 import { DEFAULT_AGENT_ID, describeAgent, graphFor } from "./graph-registry.ts";
 import { getKnowledgeGraphMcpUrl, mountKnowledgeGraphServer } from "./knowledge-graph-server.ts";
+import { landingZoneTopologyAccounts } from "./landing-zone-config.ts";
 import { refreshSchedules, startSchedules } from "./schedules.ts";
 import { pipelineNodeNames } from "./topology.ts";
 
@@ -282,7 +282,10 @@ export async function getLandingZoneGraph() {
 	await ensureMcpConnected();
 
 	if (!landingZoneGraphPromise) {
-		landingZoneGraphPromise = buildLandingZoneGraph({ checkpointerType: resolveCheckpointerType() });
+		landingZoneGraphPromise = buildLandingZoneGraph({
+			checkpointerType: resolveCheckpointerType(),
+			authorizedTopologyAccounts: landingZoneTopologyAccounts(),
+		});
 	}
 	return landingZoneGraphPromise;
 }
@@ -400,15 +403,8 @@ export async function invokeAgent(
 	if (agentName === "landing-zone-terraform") {
 		const landingZoneGraph = await getLandingZoneGraph();
 		const landingZoneTimeoutMs = getGraphTimeoutMs(agentName);
-		const authorizedAccountScope = [
-			...new Set(
-				(options.uiAwsEstates ?? [])
-					.map((estate) => accountIdForEstate(estate))
-					.filter((accountId): accountId is string => accountId !== undefined),
-			),
-		];
 		return landingZoneGraph.streamEvents(
-			{ messages: langchainMessages, requestId, authorizedAccountScope },
+			{ messages: langchainMessages, requestId },
 			{
 				configurable: {
 					thread_id: options.threadId,

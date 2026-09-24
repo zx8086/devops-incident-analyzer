@@ -426,6 +426,30 @@ describe("POST /api/agent/stream — SSE stream", () => {
 		expect(options?.metadata).toMatchObject({ agent_id: "landing-zone-terraform", graph_used: true });
 	});
 
+	test("drops context owned by other applications from Landing Zone requests", async () => {
+		await POST(
+			makeRequest({
+				agentName: "landing-zone-terraform",
+				messages: [{ role: "user", content: "Map the Landing Zone network" }],
+				threadId: "thread-landing-zone-isolation",
+				dataSources: ["aws", "elastic"],
+				targetDeployments: ["elastic-production"],
+				uiAwsEstates: ["incident-estate"],
+				isFollowUp: true,
+				dataSourceContext: { type: "EXPLICIT", dataSources: ["aws"], scope: "subset" },
+			}),
+		);
+
+		const options = (invokeAgentMock.mock.calls.at(-1) as unknown[] | undefined)?.[1] as
+			| Record<string, unknown>
+			| undefined;
+		expect(options?.dataSources).toBeUndefined();
+		expect(options?.targetDeployments).toBeUndefined();
+		expect(options?.uiAwsEstates).toBeUndefined();
+		expect(options?.isFollowUp).toBeUndefined();
+		expect(options?.dataSourceContext).toBeUndefined();
+	});
+
 	test("completes a successful Landing Zone turn when completion telemetry is unavailable", async () => {
 		getLandingZoneTurnTelemetryMock.mockImplementationOnce(async () => undefined);
 		const response = await POST(

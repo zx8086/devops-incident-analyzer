@@ -364,7 +364,11 @@ describe("buildLandingZoneGraph", () => {
 			"answered",
 			["dhco-gitlab-terraform", "gitlab-k8s-runners-lzv2"],
 		],
-		["Compare the current PVH Terraform pattern with official AWS and Terraform best practices.", "answered", []],
+		[
+			"Compare the current PVH Terraform pattern with official AWS and Terraform best practices.",
+			"answered",
+			["aws-lz-account-creator", "aws-lz-network-core", "aws-lz-network-workloads"],
+		],
 	] as const)("runs the exact shipped starter prompt: %s", async (prompt, expected, repositories) => {
 		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
 		const threadId = `starter-${crypto.randomUUID()}`;
@@ -408,7 +412,7 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.repositoryScope).toEqual(["aws-lz-network-core", "aws-lz-network-workloads"]);
 	});
 
-	test("pauses before evidence collection for an ambiguous account map and resumes with an authorized account", async () => {
+	test("pauses before evidence collection and resumes with a Landing Zone account", async () => {
 		const calls: EvidenceSource[] = [];
 		const graph = await buildLandingZoneGraph({
 			checkpointerType: "memory",
@@ -420,7 +424,6 @@ describe("buildLandingZoneGraph", () => {
 				messages: [
 					new HumanMessage("Map the VPCs, subnets, routes, and central-network attachments for an existing account."),
 				],
-				authorizedAccountScope: ["111122223333", "444455556666"],
 			},
 			config,
 		);
@@ -429,10 +432,8 @@ describe("buildLandingZoneGraph", () => {
 		expect(calls).toEqual([]);
 		expect(paused.tasks[0]?.interrupts[0]?.value).toEqual({
 			type: "landing_zone_clarify",
-			question:
-				"Which Landing Zone account should I map? Provide the 12-digit account ID or select an authorized account.",
-			message:
-				"Which Landing Zone account should I map? Provide the 12-digit account ID or select an authorized account.",
+			question: "Which Landing Zone account should I map? Provide the 12-digit account ID.",
+			message: "Which Landing Zone account should I map? Provide the 12-digit account ID.",
 		});
 
 		await graph.invoke(new Command({ resume: { answer: "111122223333" } }), config);
@@ -453,7 +454,8 @@ describe("buildLandingZoneGraph", () => {
 			{ configurable: { thread_id: "thread-fanout" } },
 		);
 
-		expect(calls).toContainAllValues(["pvh-okf", "gitlab", "terraform-docs", "aws-docs", "memory", "knowledge-graph"]);
+		expect(calls).toContainAllValues(["pvh-okf", "gitlab", "memory"]);
+		expect(calls).not.toContainAnyValues(["terraform-docs", "aws-docs", "knowledge-graph"]);
 		expect(calls).not.toContain("aws-api");
 		expect(result.evidenceResults.map((item) => item.source)).toContain("gitlab");
 	});
@@ -490,6 +492,7 @@ describe("buildLandingZoneGraph", () => {
 		const graph = await buildLandingZoneGraph({
 			checkpointerType: "memory",
 			collectors: successfulCollectors(calls),
+			authorizedTopologyAccounts: ["111122223333"],
 			topologyTools: [
 				{
 					name: "kg_run_cypher",
@@ -502,12 +505,39 @@ describe("buildLandingZoneGraph", () => {
 		const result = await graph.invoke(
 			{
 				messages: [new HumanMessage("Show the network topology for account 111122223333")],
-				authorizedAccountScope: ["111122223333"],
 			},
 			{ configurable: { thread_id: "thread-topology" } },
 		);
 		expect(result.accountScope).toEqual(["111122223333"]);
 		expect(result.landingZoneTopology?.topology.nodes.map((node) => node.id)).toEqual(["vpc-1"]);
+	});
+
+	test("does not accept topology authorization from request state", async () => {
+		let topologyCalls = 0;
+		const graph = await buildLandingZoneGraph({
+			checkpointerType: "memory",
+			collectors: successfulCollectors([]),
+			topologyTools: [
+				{
+					name: "kg_run_cypher",
+					invoke: async () => {
+						topologyCalls += 1;
+						return {};
+					},
+				},
+			],
+		});
+		const result = await graph.invoke(
+			{
+				messages: [new HumanMessage("Show the network topology for account 999900001111")],
+				authorizedAccountScope: ["999900001111"],
+			},
+			{ configurable: { thread_id: "thread-untrusted-topology-authorization" } },
+		);
+
+		expect(result.authorizedAccountScope).toEqual([]);
+		expect(result.landingZoneTopology).toBeNull();
+		expect(topologyCalls).toBe(0);
 	});
 
 	test("persists the user-facing answer as the final assistant message", async () => {

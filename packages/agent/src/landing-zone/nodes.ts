@@ -75,6 +75,7 @@ export async function bootstrapLandingZone(state: LandingZoneStateType): Promise
 		outcome: "pending",
 		requestResolution: null,
 		clarificationCount: 0,
+		authorizedAccountScope: [],
 		gitlabEvidence: null,
 		okfEvidence: null,
 		terraformDocsEvidence: null,
@@ -162,19 +163,8 @@ export function gateLandingZoneScope(state: LandingZoneStateType): Partial<Landi
 		const hostname = `${latestText(state.messages)} ${answer}`.match(/\b[a-z0-9](?:[a-z0-9-]*\.)+[a-z]{2,}\b/i)?.[0];
 		if (resolvedAccountIds.length !== 1 || (hostnameRequired && !hostname)) {
 			const blockedReason = hostnameRequired
-				? "Provide one hostname and exactly one authorized 12-digit Landing Zone account ID to continue the trace."
-				: "Provide exactly one authorized 12-digit Landing Zone account ID to continue the map.";
-			return {
-				messages: [new HumanMessage(answer), new AIMessage(blockedReason)],
-				blockedReason,
-				response: blockedReason,
-				outcome: "blocked",
-				clarificationCount: state.clarificationCount + 1,
-			};
-		}
-		const [accountId] = resolvedAccountIds;
-		if (!state.authorizedAccountScope.includes(accountId ?? "")) {
-			const blockedReason = "That Landing Zone account is outside the authorized account scope for this session.";
+				? "Provide one hostname and exactly one 12-digit Landing Zone account ID to continue the trace."
+				: "Provide exactly one 12-digit Landing Zone account ID to continue the map.";
 			return {
 				messages: [new HumanMessage(answer), new AIMessage(blockedReason)],
 				blockedReason,

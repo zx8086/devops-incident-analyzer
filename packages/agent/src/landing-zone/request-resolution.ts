@@ -40,13 +40,12 @@ export interface LandingZoneRequestResolverOptions {
 }
 
 const REPOSITORY_SET = new Set<string>(LANDING_ZONE_REPOSITORIES);
-const ACCOUNT_CLARIFICATION =
-	"Which Landing Zone account should I map? Provide the 12-digit account ID or select an authorized account.";
+const ACCOUNT_CLARIFICATION = "Which Landing Zone account should I map? Provide the 12-digit account ID.";
 const DNS_CLARIFICATION =
-	"Which hostname and Landing Zone account should I trace? Provide the hostname and authorized 12-digit account ID.";
+	"Which hostname and Landing Zone account should I trace? Provide the hostname and 12-digit account ID.";
 const DNS_HOSTNAME_CLARIFICATION = "Which hostname should I trace for the established Landing Zone account?";
 const DNS_ACCOUNT_CLARIFICATION =
-	"Which authorized Landing Zone account should I use for this hostname? Provide the 12-digit account ID.";
+	"Which Landing Zone account should I use for this hostname? Provide the 12-digit account ID.";
 
 function text(message: BaseMessage | undefined): string {
 	const content = message?.content;
@@ -107,6 +106,11 @@ function deterministicScope(query: string): {
 	if (runners) addRepository(repositories, "gitlab-k8s-runners-lzv2");
 
 	const standards = /\b(?:compare|comparison)\b[\s\S]*\b(?:standard|best practice|guidance|pattern)\b/i.test(query);
+	if (standards && repositories.size === 0) {
+		addRepository(repositories, "aws-lz-account-creator");
+		addRepository(repositories, "aws-lz-network-core");
+		addRepository(repositories, "aws-lz-network-workloads");
+	}
 	const repositoryExplanation =
 		/\b(?:explain|how|repository|set up|works?|turns?)\b/i.test(query) && repositories.size > 0;
 	const subject = topology
@@ -205,10 +209,6 @@ export async function resolveLandingZoneRequest(
 		accountIds = [
 			...new Set((state.accountScope ?? []).filter((value) => AwsAccountIdSchema.safeParse(value).success)),
 		];
-		accountResolution = accountIds.length > 0 ? "session" : "unresolved";
-	}
-	if (accountIds.length === 0 && subject === "topology" && (state.authorizedAccountScope ?? []).length === 1) {
-		accountIds = (state.authorizedAccountScope ?? []).filter((value) => AwsAccountIdSchema.safeParse(value).success);
 		accountResolution = accountIds.length > 0 ? "session" : "unresolved";
 	}
 	if (subject === "topology" && accountIds.length === 0 && topologyView === "network") {

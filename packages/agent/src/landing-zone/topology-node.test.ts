@@ -97,7 +97,37 @@ describe("projectLandingZoneTopologyNode", () => {
 		});
 	});
 
-	test("refuses an account from prompt-derived scope unless the caller authorized it", async () => {
+	test("preserves the boundary between attachment text and the topology prompt", async () => {
+		let calls = 0;
+		const result = await projectLandingZoneTopologyNode(
+			{
+				...state("ignored"),
+				messages: [
+					new HumanMessage({
+						content: [
+							{ type: "text", text: "attached document ending in x" },
+							{ type: "text", text: "topology for account 111122223333" },
+						],
+					}),
+				],
+			},
+			{
+				tools: [
+					{
+						name: "kg_run_cypher",
+						invoke: async () => {
+							calls += 1;
+							return { content: [] };
+						},
+					},
+				],
+			},
+		);
+		expect(calls).toBe(1);
+		expect(result.landingZoneTopology).toBeNull();
+	});
+
+	test("does not query Landing Zone topology when only a different account is independently authorized", async () => {
 		let calls = 0;
 		const tool: LandingZoneTopologyTool = {
 			name: "kg_run_cypher",
@@ -117,7 +147,7 @@ describe("projectLandingZoneTopologyNode", () => {
 		expect(calls).toBe(0);
 	});
 
-	test("fails closed when the caller has no authorized account scope", async () => {
+	test("does not query topology until a Landing Zone account is established", async () => {
 		let calls = 0;
 		const result = await projectLandingZoneTopologyNode(
 			state("Show the network topology", { accountScope: [], authorizedAccountScope: [] }),

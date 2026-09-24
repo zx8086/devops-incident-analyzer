@@ -127,6 +127,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							"agent.request",
 							async () => {
 								const startTime = Date.now();
+								const isLandingZone = body.agentName === "landing-zone-terraform";
 
 								// SIO-1835: the run_id the client files feedback against is no longer sent
 								// here. This one is minted locally and is NOT the trace root -- feedback
@@ -146,20 +147,20 @@ export const POST: RequestHandler = async ({ request }) => {
 									threadId,
 									runId,
 									agentName: body.agentName,
-									dataSources: body.dataSources,
-									targetDeployments: body.targetDeployments,
-									uiAwsEstates: body.uiAwsEstates,
-									isFollowUp: body.isFollowUp,
+									...(!isLandingZone && { dataSources: body.dataSources }),
+									...(!isLandingZone && { targetDeployments: body.targetDeployments }),
+									...(!isLandingZone && { uiAwsEstates: body.uiAwsEstates }),
+									...(!isLandingZone && { isFollowUp: body.isFollowUp }),
 									clientTimeZone: body.clientTimeZone,
-									dataSourceContext: body.dataSourceContext,
+									...(!isLandingZone && { dataSourceContext: body.dataSourceContext }),
 									attachmentContentBlocks: processedAttachments?.contentBlocks,
 									attachmentMeta: processedAttachments?.metadata,
 									runName: "agent.request",
 									tags: buildLangSmithTags({
 										threadId,
 										agentName: body.agentName,
-										dataSources: body.dataSources,
-										isFollowUp: body.isFollowUp,
+										dataSources: isLandingZone ? undefined : body.dataSources,
+										isFollowUp: isLandingZone ? undefined : body.isFollowUp,
 									}),
 									metadata: {
 										request_id: requestId,
@@ -272,9 +273,9 @@ export const POST: RequestHandler = async ({ request }) => {
 								}
 
 								// Build dataSourceContext from the datasources that were actually queried
-								const queriedDataSources = body.dataSources ?? [];
+								const queriedDataSources = isLandingZone ? [] : (body.dataSources ?? []);
 								const dataSourceContext =
-									body.dataSourceContext ??
+									(isLandingZone ? undefined : body.dataSourceContext) ??
 									(queriedDataSources.length > 0
 										? {
 												type: "EXPLICIT" as const,

@@ -47,7 +47,7 @@ function state(overrides: Partial<LandingZoneStateType> = {}): LandingZoneStateT
 		okfEvidence: null,
 		terraformDocsEvidence: { source: "terraform-docs", status: "unavailable", evidence: [], reason: "not configured" },
 		awsDocsEvidence: { source: "aws-docs", status: "unavailable", evidence: [], reason: "not configured" },
-		awsApiEvidence: { source: "aws-api", status: "skipped", evidence: [], reason: "not authorized" },
+		awsApiEvidence: { source: "aws-api", status: "skipped", evidence: [], reason: "not relevant" },
 		memoryEvidence: null,
 		knowledgeGraphEvidence: null,
 		evidenceResults: [gitlabEvidence],
@@ -99,6 +99,9 @@ describe("Landing Zone answer synthesis", () => {
 		expect(answer.answerMarkdown).toContain("accounts/alpha.yml");
 		expect(answer.answerMarkdown).toContain("accounts/bravo.yml");
 		expect(answer.answerMarkdown).toContain("accounts/charlie.yml");
+		expect(answer.answerMarkdown).toContain("Illustrative account template");
+		expect(answer.answerMarkdown).toContain("cost_center: <APPROVED_COST_CENTER>");
+		expect(answer.answerMarkdown).toContain("What the components mean");
 		expect(answer.citations).toEqual([
 			{
 				id: "citation-gitlab-aws-lz-account-creator",
@@ -107,7 +110,54 @@ describe("Landing Zone answer synthesis", () => {
 			},
 		]);
 		expect(answer.limitations.join(" ")).toContain("Terraform documentation was unavailable");
+		expect(answer.limitations.join(" ")).not.toContain("AWS live-state evidence was not authorized");
 		expect(answer.answerMarkdown).not.toContain("Terraform and AWS evidence is aligned");
+	});
+
+	test("explains the Landing Zone GitLab project and runner components in fallback output", () => {
+		const answer = deterministicLandingZoneAnswer(
+			state({
+				requestResolution: {
+					intent: "learn",
+					subject: "repository-explanation",
+					repositories: ["dhco-gitlab-terraform", "gitlab-k8s-runners-lzv2"],
+					accountIds: [],
+					application: null,
+					environment: null,
+					topologyView: null,
+					clarification: null,
+					repositoryResolution: "deterministic",
+					accountResolution: "unresolved",
+				},
+				repositoryScope: ["dhco-gitlab-terraform", "gitlab-k8s-runners-lzv2"],
+			}),
+		);
+
+		expect(answer.answerMarkdown).toContain("runners/<environment>/<team>.yaml");
+		expect(answer.answerMarkdown).toContain("Kubernetes namespace");
+		expect(answer.answerMarkdown).toContain("Helm release");
+	});
+
+	test("answers the standards comparison even when its bounded scope includes account creator", () => {
+		const answer = deterministicLandingZoneAnswer(
+			state({
+				requestResolution: {
+					intent: "learn",
+					subject: "standards-comparison",
+					repositories: ["aws-lz-account-creator", "aws-lz-network-core", "aws-lz-network-workloads"],
+					accountIds: [],
+					application: null,
+					environment: null,
+					topologyView: null,
+					clarification: null,
+					repositoryResolution: "deterministic",
+					accountResolution: "unresolved",
+				},
+			}),
+		);
+
+		expect(answer.answerMarkdown).toContain("PVH and external standards");
+		expect(answer.answerMarkdown).not.toContain("PVH account creation process");
 	});
 
 	test("falls back deterministically when synthesis fails without echoing repository instructions", async () => {
