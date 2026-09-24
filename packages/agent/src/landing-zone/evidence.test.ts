@@ -175,12 +175,13 @@ describe("parallel Landing Zone evidence collection", () => {
 		}));
 		const raw = result[0]?.summary ?? "";
 		const summary = JSON.parse(raw) as {
-			examples: Array<{ path: string }>;
+			examples: Array<{ path: string; content?: string }>;
 			openChanges: Array<{ iid: number; paths: string[] }>;
 		};
 
 		expect(raw.length).toBeLessThanOrEqual(8_192);
 		expect(summary.examples.map((entry) => entry.path)).toContain("accounts/example-0.yml");
+		expect(summary.examples[0]?.content?.length).toBeGreaterThan(0);
 		expect(summary.openChanges).toEqual([expect.objectContaining({ iid: 42, paths: ["accounts/example-0.yml"] })]);
 	});
 
@@ -194,10 +195,13 @@ describe("parallel Landing Zone evidence collection", () => {
 			openChanges: [{ iid: 7, title: "Current change", paths: ["accounts/alpha.yml"] }],
 		}));
 		const raw = result[0]?.summary ?? "";
-		const summary = JSON.parse(raw) as { examples: Array<{ path: string }>; openChanges: Array<{ iid: number }> };
+		const summary = JSON.parse(raw) as {
+			examples: Array<{ path: string; content?: string }>;
+			openChanges: Array<{ iid: number }>;
+		};
 
 		expect(raw.length).toBeLessThanOrEqual(8_192);
-		expect(summary.examples).toEqual([{ path: "accounts/alpha.yml" }]);
+		expect(summary.examples).toEqual([{ path: "accounts/alpha.yml", content: "x".repeat(120) }]);
 		expect(summary.openChanges).toEqual([expect.objectContaining({ iid: 7 })]);
 	});
 

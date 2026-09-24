@@ -125,7 +125,7 @@ function boundedEvidenceFiles(value: unknown, field: "contracts" | "examples", c
 		return [
 			{
 				path: item.path.slice(0, 500),
-				...(typeof item.kind === "string" && { kind: item.kind }),
+				...(typeof item.kind === "string" && { kind: item.kind.slice(0, 100) }),
 				...(typeof item.content === "string" && contentLimit > 0 && { content: item.content.slice(0, contentLimit) }),
 				...(typeof item.truncated === "boolean" && { truncated: item.truncated }),
 			},
@@ -176,26 +176,22 @@ function repositoryEvidenceSummary(value: unknown): string {
 	const compact = JSON.stringify({
 		...(repository && { repository }),
 		...(project && { project }),
-		contracts: boundedEvidenceFiles(value, "contracts", 0),
-		examples: boundedEvidenceFiles(value, "examples", 0),
+		contracts: boundedEvidenceFiles(value, "contracts", 160),
+		examples: boundedEvidenceFiles(value, "examples", 240),
 		openChanges: boundedOpenChanges(value),
 		warnings: ["Repository evidence details were compacted to preserve a valid bounded summary."],
 		...(provenance && { provenance }),
 	});
 	if (compact.length <= 8_000) return compact;
 	return JSON.stringify({
-		contracts: resultPaths(value, "contracts")
-			.slice(0, 5)
-			.map((path) => ({ path: path.slice(0, 300) })),
-		examples: resultPaths(value, "examples")
-			.slice(0, 5)
-			.map((path) => ({ path: path.slice(0, 300) })),
+		contracts: boundedEvidenceFiles(value, "contracts", 120).slice(0, 2),
+		examples: boundedEvidenceFiles(value, "examples", 120).slice(0, 2),
 		openChanges: boundedOpenChanges(value).map((entry) => {
 			const item = record(entry) ?? {};
 			return {
 				iid: item.iid,
 				...(typeof item.title === "string" && { title: item.title.slice(0, 100) }),
-				...(typeof item.state === "string" && { state: item.state }),
+				...(typeof item.state === "string" && { state: item.state.slice(0, 50) }),
 			};
 		}),
 		warnings: ["Repository evidence metadata was compacted to preserve a valid bounded summary."],
