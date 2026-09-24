@@ -6,7 +6,7 @@ import { HumanMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 import type { LandingZoneEvidenceCollectors } from "./evidence.ts";
 import { buildLandingZoneGraph } from "./graph.ts";
-import { answerLandingZoneQuestion, assessLandingZoneRisk } from "./nodes.ts";
+import { answerLandingZoneQuestion, assessLandingZoneRisk, bootstrapLandingZone } from "./nodes.ts";
 import type { LandingZoneStateType } from "./state.ts";
 import { LandingZoneIntentSchema, LandingZoneStateInputSchema } from "./types.ts";
 
@@ -15,6 +15,7 @@ const EXPECTED_NODES = [
 	"classifyRequest",
 	"resolveScope",
 	"scopeGate",
+	"authorizeTopologyScope",
 	"recallMemory",
 	"selectPvhKnowledge",
 	"collectGitLabEvidence",
@@ -48,7 +49,8 @@ const EXPECTED_EDGES = [
 	["bootstrap", "classifyRequest"],
 	["classifyRequest", "resolveScope"],
 	["resolveScope", "scopeGate"],
-	["scopeGate", "recallMemory"],
+	["scopeGate", "authorizeTopologyScope"],
+	["authorizeTopologyScope", "recallMemory"],
 	["recallMemory", "selectPvhKnowledge"],
 	["joinEvidence", "reconcileEvidence"],
 	["reconcileEvidence", "assessRisk"],
@@ -163,6 +165,18 @@ function proposedChangeState(evidenceResults: EvidenceItem[]): LandingZoneStateT
 		answerRetryCount: 0,
 	};
 }
+
+test("bootstrap clears a catalog rejection before the next Landing Zone turn", async () => {
+	const result = await bootstrapLandingZone({
+		...proposedChangeState([]),
+		messages: [new HumanMessage("Show the network topology for account 860977521447")],
+		blockedReason: "That account was not found in the Landing Zone account catalog.",
+		response: "That account was not found in the Landing Zone account catalog.",
+	});
+
+	expect(result.blockedReason).toBeNull();
+	expect(result.response).toBeNull();
+});
 
 function successfulCollectors(calls: EvidenceSource[]): LandingZoneEvidenceCollectors {
 	const sources: EvidenceSource[] = [
@@ -417,6 +431,7 @@ describe("buildLandingZoneGraph", () => {
 		const graph = await buildLandingZoneGraph({
 			checkpointerType: "memory",
 			collectors: successfulCollectors(calls),
+			authorizeTopologyAccounts: async (accountIds) => accountIds,
 		});
 		const config = { configurable: { thread_id: "thread-account-map-clarification" } };
 		await graph.invoke(
@@ -492,7 +507,7 @@ describe("buildLandingZoneGraph", () => {
 		const graph = await buildLandingZoneGraph({
 			checkpointerType: "memory",
 			collectors: successfulCollectors(calls),
-			authorizedTopologyAccounts: ["111122223333"],
+			authorizeTopologyAccounts: async (accountIds) => accountIds,
 			topologyTools: [
 				{
 					name: "kg_run_cypher",
@@ -512,11 +527,68 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.landingZoneTopology?.topology.nodes.map((node) => node.id)).toEqual(["vpc-1"]);
 	});
 
+	test("blocks topology projection when the account is absent from the Landing Zone catalog", async () => {
+		let topologyCalls = 0;
+		const graph = await buildLandingZoneGraph({
+			checkpointerType: "memory",
+			collectors: successfulCollectors([]),
+			authorizeTopologyAccounts: async () => [],
+			topologyTools: [
+				{
+					name: "kg_run_cypher",
+					invoke: async () => {
+						topologyCalls += 1;
+						return {};
+					},
+				},
+			],
+		});
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage("Show the network topology for account 999900001111")] },
+			{ configurable: { thread_id: "thread-account-absent-from-catalog" } },
+		);
+
+		expect(result.response).toBe("That account was not found in the Landing Zone account catalog.");
+		expect(result.authorizedAccountScope).toEqual([]);
+		expect(topologyCalls).toBe(0);
+	});
+
+	test("reports catalog unavailability without treating it as an authorization rejection", async () => {
+		let topologyCalls = 0;
+		const graph = await buildLandingZoneGraph({
+			checkpointerType: "memory",
+			collectors: successfulCollectors([]),
+			authorizeTopologyAccounts: async () => {
+				throw new Error("catalog offline");
+			},
+			topologyTools: [
+				{
+					name: "kg_run_cypher",
+					invoke: async () => {
+						topologyCalls += 1;
+						return {};
+					},
+				},
+			],
+		});
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage("Show the network topology for account 999900001111")] },
+			{ configurable: { thread_id: "thread-account-catalog-unavailable" } },
+		);
+
+		expect(result.response).toBe(
+			"The Landing Zone account catalog is unavailable, so I cannot safely map that account right now.",
+		);
+		expect(result.authorizedAccountScope).toEqual([]);
+		expect(topologyCalls).toBe(0);
+	});
+
 	test("does not accept topology authorization from request state", async () => {
 		let topologyCalls = 0;
 		const graph = await buildLandingZoneGraph({
 			checkpointerType: "memory",
 			collectors: successfulCollectors([]),
+			authorizeTopologyAccounts: async () => [],
 			topologyTools: [
 				{
 					name: "kg_run_cypher",

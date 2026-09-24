@@ -23,7 +23,7 @@ request
 
 The graph is defined in `packages/agent/src/landing-zone/graph.ts`. The UI selects it through `apps/web/src/lib/agent-ids.ts` and `apps/web/src/lib/server/graph-registry.ts`. Initial turns, scope clarifications, and resumed review turns use the same checkpoint and completion telemetry.
 
-Request resolution combines deterministic repository vocabulary, established Landing Zone conversation scope, and a bounded structured-model fallback. The fixed repository catalog remains authoritative: model output is intersected with it and cannot broaden access. Terse follow-ups inherit established Landing Zone repository and account scope; an explicit repository topic shift pauses once to ask whether the user wants to retain or replace that scope. Network maps require one explicit account, while DNS traces also require a hostname. Account-specific knowledge-graph projection additionally requires an independently supplied Landing Zone authorization set; selectors from other applications never satisfy that boundary.
+Request resolution combines deterministic repository vocabulary, established Landing Zone conversation scope, and a bounded structured-model fallback. The fixed repository catalog remains authoritative: model output is intersected with it and cannot broaden access. Terse follow-ups inherit established Landing Zone repository and account scope; an explicit repository topic shift pauses once to ask whether the user wants to retain or replace that scope. Network maps require one explicit account, while DNS traces also require a hostname. Account-specific knowledge-graph projection additionally requires an exact match in the Landing Zone account catalog; selectors from other applications never satisfy that boundary.
 
 Read-only answers are structured as answer Markdown, evidence citations, and limitations. A Landing Zone-specific validator rejects status-only text, unknown citations, invented account IDs, unavailable sources described as aligned, unsafe operations, and account-vending answers that do not lead with `accounts/<application>.yml` and the generator workflow. One repair attempt is allowed. A second failure produces a deterministic evidence-bounded answer with exact source limitations.
 
@@ -50,11 +50,11 @@ The Landing Zone MCP exposes bounded read tools by default. Its catalog rejects 
 Topology cards are generated only when all of these are true:
 
 1. The request asks for a topology, DNS, hostname, or route-path view.
-2. The requested account is in the UI-authorized AWS estate scope.
+2. The requested account exactly matches an entry in the Landing Zone account catalog.
 3. The knowledge graph contains current `TopologyFact` records for that account.
 4. The projection returns at least one node.
 
-When required topology scope is missing, the graph emits `landing_zone_clarify` before collecting evidence. The web client resumes the same checkpoint with the user's answer; it does not start a second turn. The supplied account scopes repository-defined answers but cannot authorize account-specific knowledge-graph reads.
+When required topology scope is missing, the graph emits `landing_zone_clarify` before collecting evidence. The web client resumes the same checkpoint with the user's answer; it does not start a second turn. The supplied account identifies the requested scope but cannot authorize account-specific knowledge-graph reads; an exact catalog match is still required.
 
 Node and edge identifiers come from reconciled graph facts. The model does not invent diagram identifiers. No card is emitted when authorization, graph data, or projection evidence is absent.
 
@@ -110,7 +110,7 @@ Residual risks are private repository content reaching the model provider under 
 | Capability | Control | Safe default |
 |---|---|---|
 | Landing Zone MCP connection | `LANDING_ZONE_IAC_MCP_URL` | Unset means no Landing Zone tools are registered. |
-| Account-specific topology | `LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS` | Unset means repository-defined answers remain available but account-specific knowledge-graph reads and cards are disabled. This allowlist belongs only to the Landing Zone application. |
+| Account-specific topology | Landing Zone account catalog | The web runtime assumes the existing `lz-kb-dynamodb-readonly` role and scans only `flow-prd-ae1-ddb-accounts`. The result is cached for the process lifetime. Only exact 12-digit account matches may reach account-scoped knowledge-graph reads and cards. Catalog failures fail closed. |
 | GitLab reads | `GITLAB_PERSONAL_ACCESS_TOKEN` on the Landing Zone MCP | Use a read-only project/group token with the narrowest repository scope. |
 | Knowledge graph and topology cards | `KNOWLEDGE_GRAPH_ENABLED` plus a healthy in-process graph | Disable with `false`; cards then remain absent. |
 | Agent Memory | `LIVE_MEMORY_ENABLED`, `LIVE_MEMORY_BACKEND=agent-memory`, `AGENT_MEMORY_ENABLED` | File/off behavior remains the baseline. |

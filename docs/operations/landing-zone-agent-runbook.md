@@ -14,13 +14,20 @@ Local connection example:
 
 ```bash
 LANDING_ZONE_IAC_MCP_URL=http://localhost:9088
-LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS=111122223333,444455556666
 LANDING_ZONE_IAC_MCP_PORT=9088
 GITLAB_BASE_URL=https://gitlab.com
 LANDING_ZONE_WRITE_ENABLED=false
 ```
 
 Keep tokens in the deployment secret store, never in `.env.example`, committed manifests, logs, LangSmith metadata, Agent Memory, or the knowledge graph.
+
+### Landing Zone account catalog access
+
+Account topology scope comes from the Landing Zone account catalog, not an environment allowlist or another application. The web runtime assumes `arn:aws:iam::307424506679:role/lz-kb-dynamodb-readonly` and scans only `flow-prd-ae1-ddb-accounts` in `eu-central-1`. No LZKB HTTP endpoint is used.
+
+The AgentCore execution policy must allow `sts:AssumeRole` on that exact role. Apply the reviewed policy in `scripts/agentcore/policies/devops-agent-core-assume-policy.json`. The catalog role trust must also name `arn:aws:iam::399987695868:role/DevOpsAgentCoreRole` alongside the existing LZKB principal. Merge that principal into the existing trust document; do not replace the LZKB principal or broaden trust to an account root.
+
+The catalog role permissions remain limited to its existing read policy. This application uses only `dynamodb:Scan` against the account table. A failed role assumption, denied scan, incomplete catalog pagination, or malformed account record fails closed before topology evidence is collected.
 
 ## Capability checks
 
@@ -32,8 +39,9 @@ Keep tokens in the deployment secret store, never in `.env.example`, committed m
 | AWS live-state question | `skipped` or `unavailable` in the current production graph; no deployed-state claim is presented as verified. |
 | Memory enabled | Recall is advisory and appears only after live claim revalidation. |
 | Knowledge graph disabled | Knowledge-graph evidence is unavailable and topology cards are absent; the text answer still completes when its required evidence exists. |
-| Account without independent Landing Zone topology authorization | Repository-defined answer only; no topology card and no account data in completion telemetry. |
-| Account listed in `LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS` with current graph facts | Account-scoped graph evidence and the matching topology card are available. Incident Analyzer estates and selections have no effect. |
+| Account absent from the Landing Zone account catalog | The turn reports that no catalog entry exists; no topology query runs and no account data enters completion telemetry. |
+| Account present in the Landing Zone account catalog with current graph facts | Account-scoped graph evidence and the matching topology card are available. Incident Analyzer estates and selections have no effect. |
+| Landing Zone account catalog role unavailable, scan denied, or response malformed | The turn reports catalog unavailability and fails closed without querying shared topology evidence. |
 | Network map without one established account | The turn pauses with one account-selection question before evidence collection. |
 | DNS trace without a hostname | The turn pauses for the hostname and explicit Landing Zone account, then resumes from the same checkpoint. |
 | Synthesis or validation failure | One repair is attempted; repeated failure returns a substantive deterministic answer with explicit limitations. |
@@ -107,9 +115,9 @@ If the final text is only an evidence-status sentence, inspect the `synthesizeAn
 
 ### Topology card is missing
 
-Confirm `KNOWLEDGE_GRAPH_ENABLED`, graph health, an independently supplied Landing Zone authorization whose account ID matches the request, current `TopologyFact` rows, and a request containing topology/DNS/path intent. Incident Analyzer and Elastic IaC selectors are never Landing Zone authorization. Missing data is a valid empty result. Do not create synthetic nodes to force a diagram.
+Confirm `KNOWLEDGE_GRAPH_ENABLED`, graph health, an exact account match in the Landing Zone account catalog, current `TopologyFact` rows, and a request containing topology/DNS/path intent. Incident Analyzer and Elastic IaC selectors are never Landing Zone authorization. Missing data is a valid empty result. Do not create synthetic nodes to force a diagram.
 
-If the UI shows a scope question, answer it through the displayed form. Network maps require exactly one explicit 12-digit account. DNS traces also require a hostname. That answer scopes repository evidence but does not grant knowledge-graph access. Do not add the account to telemetry or populate `authorizedTopologyAccounts` from request data, another application's selectors, or persisted foreign state.
+If the UI shows a scope question, answer it through the displayed form. Network maps require exactly one explicit 12-digit account. DNS traces also require a hostname. That answer identifies the requested account but does not grant knowledge-graph access; the graph independently verifies an exact catalog match. Do not add the account to telemetry or derive catalog membership from request data, another application's selectors, or persisted foreign state.
 
 ### Proposal stops before review
 

@@ -76,6 +76,8 @@ export async function bootstrapLandingZone(state: LandingZoneStateType): Promise
 		requestResolution: null,
 		clarificationCount: 0,
 		authorizedAccountScope: [],
+		blockedReason: null,
+		response: null,
 		gitlabEvidence: null,
 		okfEvidence: null,
 		terraformDocsEvidence: null,

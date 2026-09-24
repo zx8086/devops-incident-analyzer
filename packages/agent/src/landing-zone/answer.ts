@@ -191,7 +191,7 @@ The repository-defined desired network is split across ${repositories.map((repos
 - \`aws-lz-network-core\`: shared IPAM, central attachments, Cloud WAN or transit routing, and shared network services.
 - \`aws-lz-post-vending\`: account-specific associations and post-vending dependencies, including the DNS handoff where applicable.
 
-The desired path is workload account → VPC → subnets and route tables → central attachment → core segment → shared services. Repository evidence describes intended state. An account-specific diagram is emitted only when independent Landing Zone authorization and current topology facts are available; missing live AWS evidence leaves deployed state unverified but does not invalidate the repository-defined map.`;
+The desired path is workload account → VPC → subnets and route tables → central attachment → core segment → shared services. Repository evidence describes intended state. An account-specific diagram is emitted only when the account exists in the Landing Zone account catalog and current topology facts are available; missing live AWS evidence leaves deployed state unverified but does not invalidate the repository-defined map.`;
 	} else if (repositories.includes("dhco-gitlab-terraform") || repositories.includes("gitlab-k8s-runners-lzv2")) {
 		answerMarkdown = `## Landing Zone GitLab project and runners
 
