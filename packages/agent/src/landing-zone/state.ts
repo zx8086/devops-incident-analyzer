@@ -11,6 +11,8 @@ import type {
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 import type { EvidenceCollectionOutcome } from "./evidence.ts";
 import type {
+	LandingZoneAnswer,
+	LandingZoneAnswerValidation,
 	LandingZoneCandidate,
 	LandingZoneCandidateValidation,
 	LandingZoneIntent,
@@ -18,6 +20,7 @@ import type {
 	LandingZoneOutcome,
 	LandingZonePipelineObservation,
 	LandingZonePriorMemory,
+	LandingZoneRequestResolution,
 	LandingZoneReviewDecision,
 	ProposedChangeReview,
 } from "./types.ts";
@@ -31,6 +34,10 @@ export const LandingZoneState = Annotation.Root({
 	...MessagesAnnotation.spec,
 	requestId: Annotation<string>(replace("")),
 	intent: Annotation<LandingZoneIntent>(replace<LandingZoneIntent>("understand")),
+	requestResolution: Annotation<LandingZoneRequestResolution | null>(
+		replace<LandingZoneRequestResolution | null>(null),
+	),
+	clarificationCount: Annotation<number>(replace(0)),
 	repositoryScope: Annotation<string[]>(replace<string[]>([])),
 	accountScope: Annotation<string[]>(replace<string[]>([])),
 	authorizedAccountScope: Annotation<string[]>(replace<string[]>([])),
@@ -46,6 +53,9 @@ export const LandingZoneState = Annotation.Root({
 	priorMemory: Annotation<LandingZonePriorMemory[]>(replace<LandingZonePriorMemory[]>([])),
 	reconciliation: Annotation<EvidenceReconciliation | null>(replace<EvidenceReconciliation | null>(null)),
 	risk: Annotation<LandingZoneRiskAssessment | null>(replace<LandingZoneRiskAssessment | null>(null)),
+	answerResult: Annotation<LandingZoneAnswer | null>(replace<LandingZoneAnswer | null>(null)),
+	answerValidation: Annotation<LandingZoneAnswerValidation | null>(replace<LandingZoneAnswerValidation | null>(null)),
+	answerRetryCount: Annotation<number>(replace(0)),
 	response: Annotation<string | null>(replace<string | null>(null)),
 	responseCitations: Annotation<ResponseCitation[]>(replace<ResponseCitation[]>([])),
 	topologyStates: Annotation<TopologyEvidenceState[]>(replace<TopologyEvidenceState[]>([])),

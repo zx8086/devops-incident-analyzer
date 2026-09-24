@@ -38,6 +38,8 @@ function state(
 		messages: [new HumanMessage(prompt)],
 		requestId: "request-1",
 		intent: "understand",
+		requestResolution: null,
+		clarificationCount: 0,
 		repositoryScope: [],
 		accountScope: options.accountScope ?? ["111122223333"],
 		authorizedAccountScope: options.authorizedAccountScope ?? ["111122223333"],
@@ -68,6 +70,9 @@ function state(
 		proposalIteration: 0,
 		mergeRequest: null,
 		pipelineObservation: null,
+		answerResult: null,
+		answerValidation: null,
+		answerRetryCount: 0,
 	};
 }
 

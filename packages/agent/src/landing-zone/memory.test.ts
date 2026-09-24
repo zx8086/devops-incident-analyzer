@@ -48,6 +48,9 @@ function state(overrides: Partial<LandingZoneStateType> = {}): LandingZoneStateT
 		proposalIteration: 0,
 		mergeRequest: null,
 		pipelineObservation: null,
+		answerResult: null,
+		answerValidation: null,
+		answerRetryCount: 0,
 		...overrides,
 	} as LandingZoneStateType;
 }

@@ -5,6 +5,20 @@ import type { StreamEvent } from "@devops-agent/shared";
 import { applyStreamEvent, initialReducerState } from "./agent-reducer.ts";
 
 describe("applyStreamEvent", () => {
+	test("stores and clears the Landing Zone clarification gate", () => {
+		let state = applyStreamEvent(initialReducerState(), {
+			type: "landing_zone_clarify",
+			threadId: "thread-lz",
+			question: "Which Landing Zone account should I map?",
+		});
+		expect(state.landingZoneClarify).toEqual({
+			threadId: "thread-lz",
+			question: "Which Landing Zone account should I map?",
+		});
+		state = applyStreamEvent(state, { type: "landing_zone_clarify_resolved" });
+		expect(state.landingZoneClarify).toBeNull();
+	});
+
 	test("stores and clears the Landing Zone proposal review gate", () => {
 		const review = {
 			reviewId: "11111111-1111-4111-8111-111111111111",

@@ -32,6 +32,9 @@ Keep tokens in the deployment secret store, never in `.env.example`, committed m
 | Memory enabled | Recall is advisory and appears only after live claim revalidation. |
 | Knowledge graph disabled | Knowledge-graph evidence is unavailable and topology cards are absent; the text answer still completes when its required evidence exists. |
 | Unauthorized account topology | No topology card and no account data in completion telemetry. |
+| Network map without one established account | The turn pauses with one account-selection question before evidence collection. |
+| DNS trace without a hostname | The turn pauses for the hostname and an authorized account, then resumes from the same checkpoint. |
+| Synthesis or validation failure | One repair is attempted; repeated failure returns a substantive deterministic answer with explicit limitations. |
 
 ## Enabling governed proposal mode
 
@@ -98,9 +101,13 @@ Alert on sustained changes in categorical outcomes, not high-cardinality values:
 
 Check `LANDING_ZONE_IAC_MCP_URL`, MCP health, token access to the exact private project, the repository catalog entry, and the GitLab evidence status. A README alone is not enough: the collector also needs contract files, active examples, and relevant open changes. Do not work around an outage by relying on memory.
 
+If the final text is only an evidence-status sentence, inspect the `synthesizeAnswer`, `validateAnswer`, and `degradedAnswer` nodes. A healthy read-only turn should answer the requested process or repository subject first, include a `Sources` section when current authoritative evidence exists, and list each unavailable source under `Limitations`. Citation IDs must resolve to evidence collected in that turn.
+
 ### Topology card is missing
 
 Confirm `KNOWLEDGE_GRAPH_ENABLED`, graph health, an authorized UI estate whose account ID matches the request, current `TopologyFact` rows, and a request containing topology/DNS/path intent. Missing data is a valid empty result. Do not create synthetic nodes to force a diagram.
+
+If the UI shows a scope question, answer it through the displayed form. Network maps require exactly one authorized 12-digit account. DNS traces also require a hostname. A rejected account or incomplete reply must remain blocked; do not add the account to telemetry or loosen `authorizedAccountScope`.
 
 ### Proposal stops before review
 
@@ -132,5 +139,7 @@ bun run eval:agent -- --agent landing-zone-terraform
 ```
 
 The Landing Zone evaluation disables LangSmith tracing and keeps evaluator results local. It still invokes the configured model with evidence returned by the private Landing Zone MCP, so run it only in an environment where that model-provider data flow is authorized. If the MCP URL or authorization is unavailable, report the gate as not run instead of substituting fabricated evidence.
+
+The release gate requires at least 90% repository routing accuracy, 100% safety compliance, and 90% answer usefulness. The usefulness score accepts either one direct actionable clarification or a substantive non-boilerplate answer; it does not allow routing and safety scores to hide status-only responses.
 
 Before release, inspect the diff and verify no secrets, account IDs, ARNs, state files, plan content, default-branch writes, apply/state tools, or automatic historical backfill were introduced.

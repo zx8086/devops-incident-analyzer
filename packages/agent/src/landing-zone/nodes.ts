@@ -1,7 +1,15 @@
 // packages/agent/src/landing-zone/nodes.ts
 
 import type { EvidenceSource } from "@devops-agent/shared";
-import { AIMessage, type BaseMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messages";
+import { interrupt } from "@langchain/langgraph";
+import {
+	deterministicLandingZoneAnswer,
+	type LandingZoneAnswerGenerator,
+	renderLandingZoneAnswer,
+	synthesizeLandingZoneAnswer,
+} from "./answer.ts";
+import { validateLandingZoneAnswer } from "./answer-validation.ts";
 import {
 	collectEvidenceSource,
 	DEFAULT_LANDING_ZONE_COLLECTORS,
@@ -11,9 +19,10 @@ import {
 import { selectLandingZoneKnowledge } from "./knowledge-selector.ts";
 import { memoryEnrichLandingZone, recordLandingZoneTurn, renderLandingZonePriorMemory } from "./memory.ts";
 import { reconcileEvidence } from "./reconciliation.ts";
+import { resolveLandingZoneRequest } from "./request-resolution.ts";
 import { assessRisk } from "./risk.ts";
 import type { LandingZoneStateType } from "./state.ts";
-import type { LandingZoneIntent } from "./types.ts";
+import { type LandingZoneIntent, LandingZoneRepositorySchema } from "./types.ts";
 
 function latestText(messages: BaseMessage[]): string {
 	const content = messages.at(-1)?.content;
@@ -64,6 +73,8 @@ export async function bootstrapLandingZone(state: LandingZoneStateType): Promise
 	return {
 		requestId: state.requestId || crypto.randomUUID(),
 		outcome: "pending",
+		requestResolution: null,
+		clarificationCount: 0,
 		gitlabEvidence: null,
 		okfEvidence: null,
 		terraformDocsEvidence: null,
@@ -72,6 +83,9 @@ export async function bootstrapLandingZone(state: LandingZoneStateType): Promise
 		memoryEvidence: null,
 		knowledgeGraphEvidence: null,
 		landingZoneTopology: null,
+		answerResult: null,
+		answerValidation: null,
+		answerRetryCount: 0,
 		priorMemory: [],
 		changeCandidate: null,
 		candidateValidations: [],
@@ -99,32 +113,97 @@ export async function classifyLandingZoneRequest(state: LandingZoneStateType): P
 }
 
 export async function resolveLandingZoneScope(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
-	const text = latestText(state.messages);
-	const repositoryScope = new Set<string>();
-	const accountScope = [...new Set(text.match(/\b\d{12}\b/g) ?? [])];
-	if (
-		/\baws-lz-account-creator\b|\b(account vending|vending account|new (?:aws )?account)\b|\b(?:creat(?:e|ing)|request|provision)(?:\s+[\w-]+){0,4}\s+(?:aws\s+)?account\b/.test(
-			text,
-		)
-	) {
-		repositoryScope.add("aws-lz-account-creator");
+	const resolution = await resolveLandingZoneRequest(state);
+	if (resolution.clarification?.startsWith("This changes scope from ")) return { requestResolution: resolution };
+	return {
+		requestResolution: resolution,
+		repositoryScope: resolution.repositories,
+		accountScope: resolution.accountIds,
+	};
+}
+
+export function gateLandingZoneScope(state: LandingZoneStateType): Partial<LandingZoneStateType> {
+	const resolution = state.requestResolution;
+	if (!resolution?.clarification) return {};
+	const prompt = resolution.clarification;
+	const resumed = interrupt({ type: "landing_zone_clarify", question: prompt, message: prompt }) as { answer?: string };
+	const answer = resumed.answer?.trim() ?? "";
+	const accountIds = [...new Set(answer.match(/\b\d{12}\b/g) ?? [])];
+	if (prompt.startsWith("This changes scope from ")) {
+		const normalized = answer.toLowerCase();
+		const replaceScope = /\b(replace|new|switch|fresh)\b/.test(normalized);
+		const retainScope = /\b(retain|keep|both|add|continue)\b/.test(normalized);
+		if (!replaceScope && !retainScope) {
+			const blockedReason = "Choose whether to retain the previous repository scope or replace it.";
+			return {
+				messages: [new HumanMessage(answer), new AIMessage(blockedReason)],
+				blockedReason,
+				response: blockedReason,
+				outcome: "blocked",
+				clarificationCount: state.clarificationCount + 1,
+			};
+		}
+		const previousRepositories = state.repositoryScope.filter(
+			(repository) => LandingZoneRepositorySchema.safeParse(repository).success,
+		) as typeof resolution.repositories;
+		const repositoryScope = replaceScope
+			? resolution.repositories
+			: [...new Set([...previousRepositories, ...resolution.repositories])].sort();
+		return {
+			messages: [new HumanMessage(answer)],
+			repositoryScope,
+			requestResolution: { ...resolution, repositories: repositoryScope, clarification: null },
+			clarificationCount: state.clarificationCount + 1,
+		};
 	}
-	if (/\baws-lz-network-workloads\b|\b(vpc|subnet|workload network)\b/.test(text)) {
-		repositoryScope.add("aws-lz-network-workloads");
+	if (resolution.subject === "topology") {
+		const resolvedAccountIds = resolution.accountIds.length > 0 ? resolution.accountIds : accountIds;
+		const hostnameRequired = resolution.topologyView === "dns";
+		const hostname = `${latestText(state.messages)} ${answer}`.match(/\b[a-z0-9](?:[a-z0-9-]*\.)+[a-z]{2,}\b/i)?.[0];
+		if (resolvedAccountIds.length !== 1 || (hostnameRequired && !hostname)) {
+			const blockedReason = hostnameRequired
+				? "Provide one hostname and exactly one authorized 12-digit Landing Zone account ID to continue the trace."
+				: "Provide exactly one authorized 12-digit Landing Zone account ID to continue the map.";
+			return {
+				messages: [new HumanMessage(answer), new AIMessage(blockedReason)],
+				blockedReason,
+				response: blockedReason,
+				outcome: "blocked",
+				clarificationCount: state.clarificationCount + 1,
+			};
+		}
+		const [accountId] = resolvedAccountIds;
+		if (!state.authorizedAccountScope.includes(accountId ?? "")) {
+			const blockedReason = "That Landing Zone account is outside the authorized account scope for this session.";
+			return {
+				messages: [new HumanMessage(answer), new AIMessage(blockedReason)],
+				blockedReason,
+				response: blockedReason,
+				outcome: "blocked",
+				clarificationCount: state.clarificationCount + 1,
+			};
+		}
+		return {
+			messages: [new HumanMessage(answer)],
+			repositoryScope: resolution.repositories,
+			accountScope: resolvedAccountIds,
+			requestResolution: {
+				...resolution,
+				accountIds: resolvedAccountIds,
+				accountResolution: resolution.accountIds.length > 0 ? resolution.accountResolution : "explicit",
+				clarification: null,
+			},
+			clarificationCount: state.clarificationCount + 1,
+		};
 	}
-	if (/\baws-lz-network-core\b|\b(core network|cloud wan|ipam|transit gateway|direct connect)\b/.test(text)) {
-		repositoryScope.add("aws-lz-network-core");
-	}
-	if (/\baws-lz-post-vending\b|\b(dns|post-vending|post vending)\b/.test(text)) {
-		repositoryScope.add("aws-lz-post-vending");
-	}
-	if (/\bdhco-gitlab-terraform\b|\b(gitlab project|gitlab repository)\b/.test(text)) {
-		repositoryScope.add("dhco-gitlab-terraform");
-	}
-	if (/\bgitlab-k8s-runners-lzv2\b|\b(runner|runners)\b/.test(text)) {
-		repositoryScope.add("gitlab-k8s-runners-lzv2");
-	}
-	return { repositoryScope: [...repositoryScope], accountScope };
+	const blockedReason = "The requested Landing Zone scope is still unresolved after clarification.";
+	return {
+		messages: [new HumanMessage(answer), new AIMessage(blockedReason)],
+		blockedReason,
+		response: blockedReason,
+		outcome: "blocked",
+		clarificationCount: state.clarificationCount + 1,
+	};
 }
 
 export async function selectPvhKnowledge(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
@@ -212,7 +291,7 @@ export async function reconcileLandingZoneEvidence(
 		}
 		if (status === "pending")
 			return "Available evidence supports an explanation, but the full contract is not yet corroborated.";
-		return "Current PVH, repository, Terraform, and AWS evidence is aligned for the evaluated claims.";
+		return "The claims compared from currently collected evidence are aligned. Source availability is reported separately.";
 	})();
 	return {
 		reconciliation: {
@@ -271,6 +350,73 @@ export async function answerLandingZoneQuestion(state: LandingZoneStateType): Pr
 	return {
 		messages: [new AIMessage(response)],
 		response,
+		outcome: "answered",
+	};
+}
+
+export function createSynthesizeLandingZoneAnswerNode(generate?: LandingZoneAnswerGenerator) {
+	return async (state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> => ({
+		answerResult: await synthesizeLandingZoneAnswer(state, generate),
+		answerValidation: null,
+		answerRetryCount: state.answerRetryCount + 1,
+	});
+}
+
+export async function validateLandingZoneAnswerNode(
+	state: LandingZoneStateType,
+): Promise<Partial<LandingZoneStateType>> {
+	if (!state.answerResult || !state.requestResolution) {
+		return {
+			answerValidation: {
+				valid: false,
+				issues: ["Answer synthesis did not produce a resolvable Landing Zone answer."],
+			},
+		};
+	}
+	return {
+		answerValidation: validateLandingZoneAnswer({
+			answer: state.answerResult,
+			resolution: state.requestResolution,
+			evidence: state.evidenceResults,
+			unavailableSources: state.reconciliation?.unavailableSources ?? [],
+			requestText: latestText(state.messages),
+		}),
+	};
+}
+
+export async function degradeLandingZoneAnswer(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
+	const fallback = deterministicLandingZoneAnswer(state);
+	const issues = state.answerValidation?.issues ?? ["The synthesized answer did not pass validation."];
+	return {
+		answerResult: {
+			...fallback,
+			limitations: [
+				...fallback.limitations,
+				`The generated answer did not pass grounded-answer validation: ${issues.join(" ")}`,
+			],
+		},
+	};
+}
+
+export async function publishLandingZoneAnswer(state: LandingZoneStateType): Promise<Partial<LandingZoneStateType>> {
+	if (!state.answerResult) {
+		const blockedReason = "No validated Landing Zone answer is available.";
+		return {
+			messages: [new AIMessage(blockedReason)],
+			blockedReason,
+			response: blockedReason,
+			outcome: "blocked",
+		};
+	}
+	const response = renderLandingZoneAnswer(state.answerResult);
+	const priorMemory =
+		state.reconciliation?.status === "aligned"
+			? renderLandingZonePriorMemory(state.priorMemory, state.evidenceResults)
+			: "";
+	return {
+		messages: [new AIMessage(`${response}${priorMemory}`)],
+		response: `${response}${priorMemory}`,
+		responseCitations: state.answerResult.citations,
 		outcome: "answered",
 	};
 }

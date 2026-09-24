@@ -702,7 +702,17 @@ export function emitTopicShiftPrompt(send: SendFn, threadId: string, interruptVa
 
 export function emitLandingZoneInterrupt(send: SendFn, threadId: string, interruptValue: unknown): boolean {
 	if (typeof interruptValue !== "object" || interruptValue === null) return false;
-	const obj = interruptValue as { type?: unknown; review?: unknown; message?: unknown };
+	const obj = interruptValue as { type?: unknown; review?: unknown; message?: unknown; question?: unknown };
+	if (obj.type === "landing_zone_clarify") {
+		const event = StreamEventSchema.safeParse({
+			type: "landing_zone_clarify",
+			threadId,
+			question: obj.question,
+		});
+		if (!event.success) return false;
+		send(event.data);
+		return true;
+	}
 	if (obj.type !== "landing_zone_plan_review") return false;
 	const event = StreamEventSchema.safeParse({
 		type: "landing_zone_plan_review",

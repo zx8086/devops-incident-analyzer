@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import type { EvidenceItem, EvidenceSource } from "@devops-agent/shared";
 import { HumanMessage } from "@langchain/core/messages";
+import { Command } from "@langchain/langgraph";
 import type { LandingZoneEvidenceCollectors } from "./evidence.ts";
 import { buildLandingZoneGraph } from "./graph.ts";
 import { answerLandingZoneQuestion, assessLandingZoneRisk } from "./nodes.ts";
@@ -13,6 +14,7 @@ const EXPECTED_NODES = [
 	"bootstrap",
 	"classifyRequest",
 	"resolveScope",
+	"scopeGate",
 	"recallMemory",
 	"selectPvhKnowledge",
 	"collectGitLabEvidence",
@@ -26,6 +28,10 @@ const EXPECTED_NODES = [
 	"reconcileEvidence",
 	"assessRisk",
 	"answerQuestion",
+	"synthesizeAnswer",
+	"validateAnswer",
+	"degradedAnswer",
+	"publishAnswer",
 	"draftChange",
 	"validateCandidate",
 	"prepareReview",
@@ -41,12 +47,16 @@ const EXPECTED_EDGES = [
 	["__start__", "bootstrap"],
 	["bootstrap", "classifyRequest"],
 	["classifyRequest", "resolveScope"],
-	["resolveScope", "recallMemory"],
+	["resolveScope", "scopeGate"],
+	["scopeGate", "recallMemory"],
 	["recallMemory", "selectPvhKnowledge"],
 	["joinEvidence", "reconcileEvidence"],
 	["reconcileEvidence", "assessRisk"],
 	["assessRisk", "answerQuestion"],
 	["answerQuestion", "projectTopology"],
+	["synthesizeAnswer", "validateAnswer"],
+	["degradedAnswer", "publishAnswer"],
+	["publishAnswer", "projectTopology"],
 	["watchPipeline", "recordOutcome"],
 	["recordOutcome", "teardown"],
 	["projectTopology", "teardown"],
@@ -57,6 +67,8 @@ const BASE_STATE_INPUT = {
 	messages: [new HumanMessage("Explain account vending")],
 	requestId: "request-1",
 	intent: "learn",
+	requestResolution: null,
+	clarificationCount: 0,
 	repositoryScope: ["aws-lz-account-creator"],
 	accountScope: [],
 	authorizedAccountScope: [],
@@ -86,6 +98,9 @@ const BASE_STATE_INPUT = {
 	proposalIteration: 0,
 	mergeRequest: null,
 	pipelineObservation: null,
+	answerResult: null,
+	answerValidation: null,
+	answerRetryCount: 0,
 } as const;
 
 const observedEvidence = {
@@ -105,6 +120,8 @@ function proposedChangeState(evidenceResults: EvidenceItem[]): LandingZoneStateT
 		messages: [],
 		requestId: "risk-request",
 		intent: "propose-change",
+		requestResolution: null,
+		clarificationCount: 0,
 		repositoryScope: ["aws-lz-account-creator"],
 		accountScope: [],
 		authorizedAccountScope: [],
@@ -141,6 +158,9 @@ function proposedChangeState(evidenceResults: EvidenceItem[]): LandingZoneStateT
 		proposalIteration: 0,
 		mergeRequest: null,
 		pipelineObservation: null,
+		answerResult: null,
+		answerValidation: null,
+		answerRetryCount: 0,
 	};
 }
 
@@ -312,6 +332,116 @@ describe("buildLandingZoneGraph", () => {
 		expect(result.outcome).toBe("answered");
 	});
 
+	test("routes the shipped account-process prompt without a repository name", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const result = await graph.invoke(
+			{
+				messages: [new HumanMessage("Show me the PVH process for creating a new AWS Landing Zone account.")],
+				requestId: "request-account-process",
+			},
+			{ configurable: { thread_id: "thread-account-process" } },
+		);
+
+		expect(result.repositoryScope).toEqual(["aws-lz-account-creator"]);
+		expect(result.requestResolution?.repositoryResolution).toBe("deterministic");
+	});
+
+	test.each([
+		["Show me the PVH process for creating a new AWS Landing Zone account.", "answered", ["aws-lz-account-creator"]],
+		["Explain how aws-lz-account-creator turns account YAML into Terraform.", "answered", ["aws-lz-account-creator"]],
+		[
+			"Map the VPCs, subnets, routes, and central-network attachments for an existing account.",
+			"clarify",
+			["aws-lz-network-core", "aws-lz-network-workloads"],
+		],
+		[
+			"Trace the DNS resolution path for a Landing Zone workload account.",
+			"clarify",
+			["aws-lz-network-workloads", "aws-lz-post-vending"],
+		],
+		[
+			"Explain how a Landing Zone GitLab project and its runners are set up.",
+			"answered",
+			["dhco-gitlab-terraform", "gitlab-k8s-runners-lzv2"],
+		],
+		["Compare the current PVH Terraform pattern with official AWS and Terraform best practices.", "answered", []],
+	] as const)("runs the exact shipped starter prompt: %s", async (prompt, expected, repositories) => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const threadId = `starter-${crypto.randomUUID()}`;
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage(prompt)] },
+			{ configurable: { thread_id: threadId } },
+		);
+		expect(result.requestResolution?.repositories).toEqual([...repositories]);
+		if (expected === "clarify") {
+			const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+			expect(snapshot.tasks[0]?.interrupts[0]?.value).toMatchObject({ type: "landing_zone_clarify" });
+		} else {
+			expect(result.outcome).toBe("answered");
+			expect(result.response?.length).toBeGreaterThan(100);
+		}
+	});
+
+	test("inherits established repository scope for a terse follow-up turn", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const config = { configurable: { thread_id: "thread-session-scope" } };
+		await graph.invoke({ messages: [new HumanMessage("Explain aws-lz-account-creator account YAML")] }, config);
+		const result = await graph.invoke({ messages: [new HumanMessage("Show the YAML.")] }, config);
+
+		expect(result.requestResolution?.repositoryResolution).toBe("session");
+		expect(result.repositoryScope).toEqual(["aws-lz-account-creator"]);
+		expect(result.response).toContain("accounts/<application>.yml");
+	});
+
+	test("pauses on an explicit topic shift and replaces prior scope when asked", async () => {
+		const graph = await buildLandingZoneGraph({ checkpointerType: "memory" });
+		const config = { configurable: { thread_id: "thread-topic-shift" } };
+		await graph.invoke({ messages: [new HumanMessage("Explain account vending")] }, config);
+		await graph.invoke({ messages: [new HumanMessage("Now explain the central network and workload VPCs.")] }, config);
+		const paused = await graph.getState(config);
+		expect(paused.tasks[0]?.interrupts[0]?.value).toMatchObject({
+			type: "landing_zone_clarify",
+			question: expect.stringContaining("retain the previous scope or replace it"),
+		});
+
+		const result = await graph.invoke(new Command({ resume: { answer: "Replace it." } }), config);
+		expect(result.repositoryScope).toEqual(["aws-lz-network-core", "aws-lz-network-workloads"]);
+	});
+
+	test("pauses before evidence collection for an ambiguous account map and resumes with an authorized account", async () => {
+		const calls: EvidenceSource[] = [];
+		const graph = await buildLandingZoneGraph({
+			checkpointerType: "memory",
+			collectors: successfulCollectors(calls),
+		});
+		const config = { configurable: { thread_id: "thread-account-map-clarification" } };
+		await graph.invoke(
+			{
+				messages: [
+					new HumanMessage("Map the VPCs, subnets, routes, and central-network attachments for an existing account."),
+				],
+				authorizedAccountScope: ["111122223333", "444455556666"],
+			},
+			config,
+		);
+
+		const paused = await graph.getState(config);
+		expect(calls).toEqual([]);
+		expect(paused.tasks[0]?.interrupts[0]?.value).toEqual({
+			type: "landing_zone_clarify",
+			question:
+				"Which Landing Zone account should I map? Provide the 12-digit account ID or select an authorized account.",
+			message:
+				"Which Landing Zone account should I map? Provide the 12-digit account ID or select an authorized account.",
+		});
+
+		await graph.invoke(new Command({ resume: { answer: "111122223333" } }), config);
+		const completed = await graph.getState(config);
+		expect((completed.values as LandingZoneStateType).accountScope).toEqual(["111122223333"]);
+		expect((completed.values as LandingZoneStateType).requestResolution?.accountResolution).toBe("explicit");
+		expect(calls).not.toEqual([]);
+	});
+
 	test("fans injected collectors into the join and leaves unauthorised AWS live state uncalled", async () => {
 		const calls: EvidenceSource[] = [];
 		const graph = await buildLandingZoneGraph({
@@ -388,12 +518,60 @@ describe("buildLandingZoneGraph", () => {
 		);
 
 		expect(result.messages.at(-1)?.getType()).toBe("ai");
-		expect(result.response).toContain(
-			"Available evidence supports an explanation, but the full contract is not yet corroborated.",
-		);
-		expect(result.response).toContain("general guidance only");
+		expect(result.response).toContain("accounts/<application>.yml");
+		expect(result.response).toContain("repository generator");
+		expect(result.response).toContain("## Sources");
 		if (!result.response) throw new Error("expected a user-facing response");
 		expect(result.messages.at(-1)?.content).toBe(result.response);
+	});
+
+	test("retries one invalid synthesis and publishes the repaired grounded answer", async () => {
+		const calls: EvidenceSource[] = [];
+		let attempts = 0;
+		const graph = await buildLandingZoneGraph({
+			checkpointerType: "memory",
+			collectors: successfulCollectors(calls),
+			answerGenerator: async () => {
+				attempts += 1;
+				if (attempts === 1) return { answerMarkdown: "Evidence is aligned.", citations: [], limitations: [] };
+				return {
+					answerMarkdown:
+						"Use `accounts/<application>.yml` in `aws-lz-account-creator` as the supported authoring surface. The repository generator validates the YAML before it produces reviewed Terraform configuration. [citation-account]",
+					citations: [{ id: "citation-account", claim: "Current account workflow", evidenceIds: ["gitlab:graph"] }],
+					limitations: [],
+				};
+			},
+		});
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage("Explain account vending")] },
+			{ configurable: { thread_id: "thread-answer-retry" } },
+		);
+
+		expect(attempts).toBe(2);
+		expect(result.answerRetryCount).toBe(2);
+		expect(result.answerValidation?.valid).toBeTrue();
+		expect(result.response).toContain("accounts/<application>.yml");
+	});
+
+	test("uses the substantive deterministic fallback after the retry is exhausted", async () => {
+		const calls: EvidenceSource[] = [];
+		let attempts = 0;
+		const graph = await buildLandingZoneGraph({
+			checkpointerType: "memory",
+			collectors: successfulCollectors(calls),
+			answerGenerator: async () => {
+				attempts += 1;
+				return { answerMarkdown: "Evidence is aligned.", citations: [], limitations: [] };
+			},
+		});
+		const result = await graph.invoke(
+			{ messages: [new HumanMessage("Explain account vending")] },
+			{ configurable: { thread_id: "thread-answer-degraded" } },
+		);
+
+		expect(attempts).toBe(2);
+		expect(result.response).toContain("accounts/<application>.yml");
+		expect(result.response).toContain("did not pass grounded-answer validation");
 	});
 
 	test("still blocks an imperative account-creation request without live evidence", async () => {

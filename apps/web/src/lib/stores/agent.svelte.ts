@@ -36,6 +36,7 @@ import {
 	type IacPlanReviewPrompt,
 	type IacReconcileChoice,
 	type IacReconcileResultRow,
+	type LandingZoneClarifyPrompt,
 	type LandingZonePlanReviewPrompt,
 	type ReconcileDirection,
 	type ReducerState,
@@ -179,6 +180,7 @@ function createAgentStore() {
 	// elastic-iac HITL banners.
 	let iacClarify = $state<IacClarifyPrompt | null>(null);
 	let iacPlanReview = $state<IacPlanReviewPrompt | null>(null);
+	let landingZoneClarify = $state<LandingZoneClarifyPrompt | null>(null);
 	let landingZonePlanReview = $state<LandingZonePlanReviewPrompt | null>(null);
 	let iacPipelineProgress = $state<string[]>([]);
 	// SIO-982: snapshot of the pipeline ticker captured on `done`, so a GitOps MR turn keeps a
@@ -244,6 +246,7 @@ function createAgentStore() {
 		return (
 			iacPlanReview !== null ||
 			landingZonePlanReview !== null ||
+			landingZoneClarify !== null ||
 			iacClarify !== null ||
 			iacReconcileChoice !== null ||
 			syntheticsPushChoice !== null ||
@@ -286,6 +289,7 @@ function createAgentStore() {
 		lastOutcome = "completed";
 		iacPipelineProgress = [];
 		landingZonePlanReview = null;
+		landingZoneClarify = null;
 		// SIO-882: a new message starts a fresh drift pass (the prompt/report persist
 		// across interrupt pauses, so they're cleared here, not in the stream's finally).
 		iacDriftReport = null;
@@ -413,6 +417,7 @@ function createAgentStore() {
 			iacClarify,
 			iacPlanReview,
 			landingZonePlanReview,
+			landingZoneClarify,
 			iacPipelineProgress,
 			iacPipelineLog,
 			iacDriftReport,
@@ -460,6 +465,7 @@ function createAgentStore() {
 		iacClarify = next.iacClarify;
 		iacPlanReview = next.iacPlanReview;
 		landingZonePlanReview = next.landingZonePlanReview;
+		landingZoneClarify = next.landingZoneClarify;
 		iacPipelineProgress = next.iacPipelineProgress;
 		iacPipelineLog = next.iacPipelineLog;
 		iacDriftReport = next.iacDriftReport;
@@ -701,6 +707,7 @@ function createAgentStore() {
 		iacClarify = null;
 		iacPlanReview = null;
 		landingZonePlanReview = null;
+		landingZoneClarify = null;
 		iacPipelineProgress = [];
 		iacDriftReport = null;
 		iacReconcileChoice = null;
@@ -829,6 +836,36 @@ function createAgentStore() {
 			for await (const event of parseSseChunks(response.body)) handleEvent(event);
 		} catch (error) {
 			landingZonePlanReview = landingZonePlanReview ?? pendingReview;
+			currentContent += `\n\n[Error resuming Landing Zone agent: ${error instanceof Error ? error.message : String(error)}]`;
+			lastOutcome = "error";
+		} finally {
+			if (currentContent) {
+				messages = [...messages, buildAssistantMessage(currentContent)];
+				currentContent = "";
+			}
+			isStreaming = false;
+			activeNodes = new Map();
+			if (!isPausedOnIacInterrupt()) completedNodes = new Map();
+		}
+	}
+
+	async function submitLandingZoneClarify(answer: string) {
+		if (!landingZoneClarify || isStreaming || !answer.trim()) return;
+		const pendingClarification = landingZoneClarify;
+		landingZoneClarify = null;
+		isStreaming = true;
+		currentContent = "";
+		activeNodes = new Map();
+		try {
+			const response = await fetch("/api/agent/landing-zone/resume", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ threadId: pendingClarification.threadId, answer: answer.trim() }),
+			});
+			if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+			for await (const event of parseSseChunks(response.body)) handleEvent(event);
+		} catch (error) {
+			landingZoneClarify = landingZoneClarify ?? pendingClarification;
 			currentContent += `\n\n[Error resuming Landing Zone agent: ${error instanceof Error ? error.message : String(error)}]`;
 			lastOutcome = "error";
 		} finally {
@@ -1126,6 +1163,9 @@ function createAgentStore() {
 		get landingZonePlanReview() {
 			return landingZonePlanReview;
 		},
+		get landingZoneClarify() {
+			return landingZoneClarify;
+		},
 		get iacPipelineProgress() {
 			return iacPipelineProgress;
 		},
@@ -1179,6 +1219,7 @@ function createAgentStore() {
 		switchAgent,
 		resolveIacPlanReview,
 		resolveLandingZonePlanReview,
+		submitLandingZoneClarify,
 		submitIacClarify,
 		resolveReconcileChoice,
 		approveSyntheticsPush,

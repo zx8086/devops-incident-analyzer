@@ -78,6 +78,7 @@ const graphPaused = $derived(
 			agentStore.hilLearningReview ||
 			agentStore.iacClarify ||
 			agentStore.iacPlanReview ||
+			agentStore.landingZoneClarify ||
 			agentStore.landingZonePlanReview ||
 			agentStore.iacReconcileChoice ||
 			agentStore.syntheticsPushChoice ||
@@ -247,7 +248,8 @@ function submitClarify() {
 	const answer = clarifyAnswer.trim();
 	if (!answer) return;
 	clarifyAnswer = "";
-	agentStore.submitIacClarify(answer);
+	if (agentStore.landingZoneClarify) agentStore.submitLandingZoneClarify(answer);
+	else agentStore.submitIacClarify(answer);
 }
 
 onMount(() => {
@@ -738,12 +740,12 @@ function handleSuggestionClick(suggestion: string) {
     />
   {/if}
 
-  {#if agentStore.iacClarify}
-    <!-- elastic-iac clarify gate: the planner needs one direct answer to proceed. -->
+  {#if agentStore.iacClarify || agentStore.landingZoneClarify}
+	<!-- Clarification gate: the active graph needs one direct answer to proceed. -->
     <div class="border-t border-gray-200 bg-gray-50 px-4 py-3" role="dialog" aria-labelledby="iac-clarify-heading">
       <div class="max-w-4xl mx-auto">
         <h3 id="iac-clarify-heading" class="text-sm font-semibold text-tommy-navy">One quick question</h3>
-        <p class="text-sm text-tommy-navy/80 mt-1">{agentStore.iacClarify.question}</p>
+		<p class="text-sm text-tommy-navy/80 mt-1">{agentStore.iacClarify?.question ?? agentStore.landingZoneClarify?.question}</p>
         <form class="mt-2 flex gap-2" onsubmit={(e) => { e.preventDefault(); submitClarify(); }}>
           <input
             type="text"
