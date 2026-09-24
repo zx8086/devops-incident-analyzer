@@ -429,7 +429,7 @@ describe("invokeAgent", () => {
 		const call = mockStreamEvents.mock.calls[0] as unknown as [Record<string, unknown>, Record<string, unknown>];
 		expect(call[0].requestId).toBe("request-landing-zone");
 		expect(call[0].messages).toBeDefined();
-		expect(call[0].authorizedAccountScope).toEqual(["111122223333", "444455556666"]);
+		expect(call[0].authorizedAccountScope).toBeUndefined();
 		expect(call[0].targetDataSources).toBeUndefined();
 	});
 });

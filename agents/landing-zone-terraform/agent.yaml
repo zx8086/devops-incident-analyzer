@@ -4,6 +4,10 @@ version: 0.1.0
 description: >
   Evidence-first PVH AWS Landing Zone Terraform learning, review, and governed GitOps proposal assistant.
 
+model:
+  preferred: claude-haiku-4-5
+  fallback: claude-sonnet-4-6
+
 repository:
   url: https://gitlab.com/pvhcorp/dhco/aws/aws-landing-zone
   default_branch: main

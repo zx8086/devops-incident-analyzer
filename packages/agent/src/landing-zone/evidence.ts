@@ -5,7 +5,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { getToolsForDataSource } from "../mcp-bridge.ts";
 import { searchAgentMemory } from "../memory-backend.ts";
 import { getAgentByName } from "../prompt-context.ts";
-import type { LandingZoneIntent } from "./types.ts";
+import type { LandingZoneIntent, LandingZoneRequestResolution } from "./types.ts";
 
 export type EvidenceCollectionStatus = "collected" | "unavailable" | "skipped";
 
@@ -20,7 +20,9 @@ export interface EvidenceCollectionContext {
 	intent: LandingZoneIntent;
 	query: string;
 	repositories: string[];
+	accountIds: string[];
 	selectedKnowledge: string[];
+	subject: LandingZoneRequestResolution["subject"];
 	awsLiveStateRelevant: boolean;
 	awsLiveStateAuthorized: boolean;
 	signal?: AbortSignal;
@@ -112,6 +114,36 @@ function resultPaths(value: unknown, field: "contracts" | "examples"): string[] 
 	});
 }
 
+function boundedEvidenceFiles(value: unknown, field: "contracts" | "examples", contentLimit: number): unknown[] {
+	const entries = toolPayload(value)?.[field];
+	if (!Array.isArray(entries)) return [];
+	return entries.slice(0, 5).flatMap((entry) => {
+		if (typeof entry === "string") return [{ path: entry }];
+		const item = record(entry);
+		if (!item || typeof item.path !== "string") return [];
+		return [
+			{
+				path: item.path,
+				...(typeof item.kind === "string" && { kind: item.kind }),
+				...(typeof item.content === "string" && { content: item.content.slice(0, contentLimit) }),
+				...(typeof item.truncated === "boolean" && { truncated: item.truncated }),
+			},
+		];
+	});
+}
+
+function repositoryEvidenceSummary(value: unknown): Record<string, unknown> {
+	const payload = toolPayload(value) ?? {};
+	return {
+		...(record(payload.repository) && { repository: payload.repository }),
+		...(record(payload.project) && { project: payload.project }),
+		contracts: boundedEvidenceFiles(value, "contracts", 1_000),
+		examples: boundedEvidenceFiles(value, "examples", 1_500),
+		...(Array.isArray(payload.warnings) && { warnings: payload.warnings.slice(0, 10) }),
+		...(record(payload.provenance) && { provenance: payload.provenance }),
+	};
+}
+
 function canonicalSurfacePath(repository: string, path: string): string | undefined {
 	const normalized = path.replaceAll("<application>", "*").replaceAll("<app>", "*").replaceAll("<env>", "*");
 	if (repository === "aws-lz-account-creator" && /^accounts\/[^/]+\.ya?ml$/i.test(normalized)) {
@@ -187,7 +219,13 @@ export async function collectGitLabEvidence(
 				context.signal,
 			);
 			const claim = surfaceClaim(repository, resultPaths(result, "examples"));
-			return evidence("gitlab", `gitlab:${repository}`, JSON.stringify(result), { repository, path: "." }, claim);
+			return evidence(
+				"gitlab",
+				`gitlab:${repository}`,
+				JSON.stringify(repositoryEvidenceSummary(result)),
+				{ repository, path: "." },
+				claim,
+			);
 		}),
 	);
 	const items = results.flatMap((result, index) => {
@@ -211,8 +249,8 @@ export async function collectKnowledgeGraphEvidence(
 	const result = await tool.invoke(
 		{
 			cypher:
-				"MATCH (n) WHERE n:Vpc OR n:Subnet OR n:DnsRecord OR n:ConfigChange RETURN labels(n) AS labels, coalesce(n.id, n.name, n.accountId, '') AS identifier LIMIT 25",
-			params: {},
+				"MATCH (f:TopologyFact) WHERE f.validTo = '' AND f.accountId IN $accountIds RETURN f.id AS id, f.accountId AS accountId, f.payload AS payload ORDER BY f.id LIMIT 25",
+			params: { accountIds: context.accountIds },
 		},
 		{ signal: context.signal },
 	);
@@ -291,7 +329,9 @@ export function evidenceContext(
 		messages: BaseMessage[];
 		intent: LandingZoneIntent;
 		repositoryScope: string[];
+		accountScope: string[];
 		selectedKnowledge: string[];
+		requestResolution?: { subject: LandingZoneRequestResolution["subject"] } | null;
 	},
 	awsLiveStateAuthorized = false,
 ): EvidenceCollectionContext {
@@ -300,7 +340,9 @@ export function evidenceContext(
 		intent: state.intent,
 		query,
 		repositories: state.repositoryScope,
+		accountIds: state.accountScope,
 		selectedKnowledge: state.selectedKnowledge,
+		subject: state.requestResolution?.subject ?? "general",
 		awsLiveStateRelevant: /\b(live|deployed|actual|drift|aws api|resource state)\b/i.test(query),
 		awsLiveStateAuthorized,
 	};
@@ -312,8 +354,17 @@ export async function collectEvidenceSource(
 	collectors: LandingZoneEvidenceCollectors = DEFAULT_LANDING_ZONE_COLLECTORS,
 	timeoutMs = COLLECTOR_TIMEOUT_MS,
 ): Promise<EvidenceCollectionOutcome> {
-	if (source === "aws-api" && (!context.awsLiveStateRelevant || !context.awsLiveStateAuthorized)) {
-		return { source, status: "skipped", evidence: [], reason: "AWS live state was not both relevant and authorised." };
+	if ((source === "terraform-docs" || source === "aws-docs") && context.subject !== "standards-comparison") {
+		return { source, status: "skipped", evidence: [], reason: `${source} was not required for this request.` };
+	}
+	if (source === "knowledge-graph" && context.subject !== "topology") {
+		return { source, status: "skipped", evidence: [], reason: "Topology history was not required for this request." };
+	}
+	if (source === "aws-api" && !context.awsLiveStateRelevant) {
+		return { source, status: "skipped", evidence: [], reason: "AWS live state was not relevant to this request." };
+	}
+	if (source === "aws-api" && !context.awsLiveStateAuthorized) {
+		return { source, status: "skipped", evidence: [], reason: "AWS live state was not authorized for this turn." };
 	}
 	try {
 		return {

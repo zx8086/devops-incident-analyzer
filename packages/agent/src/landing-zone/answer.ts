@@ -1,5 +1,6 @@
 // packages/agent/src/landing-zone/answer.ts
 
+import { getLogger } from "@devops-agent/observability";
 import type { EvidenceItem, EvidenceSource, ResponseCitation } from "@devops-agent/shared";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { createStructuredLlm } from "../llm.ts";
@@ -8,6 +9,7 @@ import type { LandingZoneStateType } from "./state.ts";
 import { type LandingZoneAnswer, LandingZoneAnswerSchema } from "./types.ts";
 
 const SYNTHESIS_TIMEOUT_MS = 30_000;
+const logger = getLogger("agent:landing-zone:answer");
 const AUTHORITATIVE_SOURCES = new Set<EvidenceSource>(["gitlab", "pvh-okf", "terraform-docs", "aws-docs", "aws-api"]);
 
 export interface LandingZoneSynthesisInput {
@@ -97,7 +99,7 @@ function limitations(state: LandingZoneStateType): string[] {
 	const unavailable = state.reconciliation?.unavailableSources ?? [];
 	return [
 		...unavailable.map((source) => `${sourceLabel(source)} was unavailable and was not used to verify this answer.`),
-		...(state.awsApiEvidence?.status === "skipped"
+		...(state.awsApiEvidence?.status === "skipped" && /not authorized/i.test(state.awsApiEvidence.reason ?? "")
 			? ["AWS live-state evidence was not authorized for this turn; deployed state remains unverified."]
 			: []),
 	];
@@ -132,19 +134,75 @@ The safe workflow is:
 4. Review current examples and open work, then use the normal GitLab review and CI plan gates before any deployment.
 
 Representative files returned by current repository evidence:
-${exampleLines}`;
+${exampleLines}
+
+### Illustrative account template
+
+This is a non-deployable field map. Values in angle brackets must be replaced with currently approved values from the schema, owner, and representative account files.
+
+\`\`\`yaml
+application_name: <APPLICATION>
+common:
+  cost_center: <APPROVED_COST_CENTER>
+  owner: <APPROVED_OWNER>
+  managed_by: <APPROVED_MANAGING_TEAM>
+  approver: <APPROVED_APPROVER>
+  blueprint_id: <APPROVED_BLUEPRINT>
+  business_unit: <APPROVED_BUSINESS_UNIT>
+  gitlab_runner_config: <VERIFY_CURRENT_SCHEMA>
+environments:
+  <ENVIRONMENT>:
+    region: <APPROVED_REGION>
+    ou_id: <APPROVED_ORGANIZATIONS_OU>
+    budget_limit: <APPROVED_BUDGET>
+    data_classification: <EXISTING_APPROVED_VALUE>
+    business_criticality: <EXISTING_APPROVED_VALUE>
+    account_email: <UNIQUE_ROOT_EMAIL>
+    backup_mode: <APPROVED_BACKUP_MODE>
+    elevated_access: <VERIFY_CURRENT_SCHEMA>
+    sso_config: <VERIFY_CURRENT_SCHEMA>
+    vpc_netmask: <OPTIONAL_APPROVED_NETWORK_VALUE>
+    subnet_count: <OPTIONAL_APPROVED_COUNT>
+    subnets: <OPTIONAL_APPROVED_SUBNET_CONFIGURATION>
+application_metadata: <OPTIONAL_METADATA>
+\`\`\`
+
+### What the components mean
+
+- \`application_name\`: application-level identity used by the account contract.
+- \`common\`: ownership, approval, cost allocation, blueprint, business-unit, and runner settings shared across environments.
+- \`environments.<environment>\`: the environment-specific account request and its region, Organizations placement, budget, governance classification, root email, backup, access, and SSO configuration.
+- Network fields: optional input to the downstream workload-network handoff; they do not by themselves prove that a VPC was deployed.
+- \`application_metadata\`: optional application metadata accepted by the current contract.
+
+The current schema and generator remain authoritative. A sibling file is precedent, not approval, for OU, SSO, budget, classification, criticality, contact, or network values.`;
 	} else if (subject === "topology") {
 		answerMarkdown = `## Landing Zone topology
 
-The repository-defined desired network is split across ${repositories.map((repository) => `\`${repository}\``).join(" and ") || "the selected Landing Zone repositories"}.${marker} VPC and subnet declarations belong to the workload-network surface, while central attachments and shared routing belong to the core-network surface. A live diagram is emitted only for an authorized account with current graph facts; otherwise the deployed map remains unverified.`;
+The repository-defined desired network is split across ${repositories.map((repository) => `\`${repository}\``).join(" and ") || "the selected Landing Zone repositories"}.${marker}
+
+- \`aws-lz-network-workloads\`: workload-account VPCs, subnets, route tables, and network handoff inputs.
+- \`aws-lz-network-core\`: shared IPAM, central attachments, Cloud WAN or transit routing, and shared network services.
+- \`aws-lz-post-vending\`: account-specific associations and post-vending dependencies, including the DNS handoff where applicable.
+
+The desired path is workload account → VPC → subnets and route tables → central attachment → core segment → shared services. Repository evidence describes intended state. A diagram is emitted when current Landing Zone topology facts are available; missing live AWS evidence leaves deployed state unverified but does not invalidate the repository-defined map.`;
 	} else if (repositories.includes("dhco-gitlab-terraform") || repositories.includes("gitlab-k8s-runners-lzv2")) {
 		answerMarkdown = `## Landing Zone GitLab project and runners
 
-Use \`dhco-gitlab-terraform\` for the project definition and \`gitlab-k8s-runners-lzv2\` for the runner configuration.${marker} Keep project provisioning and runner onboarding as separate reviewed repository contracts, and validate current examples before proposing either change.`;
+Use \`dhco-gitlab-terraform\` for the project definition and \`gitlab-k8s-runners-lzv2\` for the runner configuration.${marker}
+
+1. The GitLab control-plane repository creates the group/project, protections, approvals, variables, and any explicitly seeded repository files.
+2. The resulting verified project or group identity becomes an input to runner onboarding.
+3. The runner repository uses \`runners/<environment>/<team>.yaml\`, merged over \`runners/_defaults.yaml\`, to configure team ownership, GitLab scope, permitted AWS accounts, runner profiles, IAM, Kubernetes namespace, registration, and Helm release.
+4. The consuming \`aws-lz-*\` repository then runs on that registered runner.
+
+Keep project provisioning and runner onboarding as separate reviewed contracts. Verify the current module tag, runner schema, defaults, and active examples before proposing either change; a defaults change can affect every runner.`;
 	} else if (subject === "standards-comparison") {
 		answerMarkdown = `## PVH and external standards
 
-PVH repository and accepted curated evidence remain authoritative for the deployed contract.${marker} Terraform and AWS recommendations are advisory layers and can be compared only when their collectors return current evidence; unavailable guidance is reported below rather than described as aligned.`;
+The comparison is bounded to ${repositories.map((repository) => `\`${repository}\``).join(", ") || "the resolved PVH Landing Zone repositories"}.${marker} Compare their current authoring surfaces, provider and module constraints, state and locking design, tagging and naming, account boundaries, validation, review gates, and destructive-change protections.
+
+PVH repository and accepted curated evidence remain authoritative for the implemented contract. Terraform and AWS recommendations are advisory layers and are compared only when their collectors return current evidence; unavailable guidance is reported below rather than described as aligned.`;
 	} else {
 		answerMarkdown = `## Landing Zone answer
 
@@ -220,7 +278,14 @@ export async function synthesizeLandingZoneAnswer(
 		const result = await Promise.race([generate(synthesisInput(state)), timeout]);
 		if (timer) clearTimeout(timer);
 		return LandingZoneAnswerSchema.parse(result);
-	} catch {
+	} catch (error) {
+		logger.warn(
+			{
+				errorName: error instanceof Error ? error.name : "UnknownError",
+				error: error instanceof Error ? error.message : "Landing Zone answer synthesis failed",
+			},
+			"Landing Zone answer synthesis failed; using deterministic fallback",
+		);
 		const fallback = deterministicLandingZoneAnswer(state);
 		return {
 			...fallback,

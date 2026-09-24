@@ -45,11 +45,7 @@ function firstMatch(text: string, pattern: RegExp): string | undefined {
 	return text.match(pattern)?.[0];
 }
 
-function authorizedTargets(state: LandingZoneStateType): string[] {
-	const authorized = new Set(state.authorizedAccountScope);
-	if (authorized.size === 0) return [];
-	if (state.accountScope.length === 0) return [...authorized].sort();
-	if (state.accountScope.some((accountId) => !authorized.has(accountId))) return [];
+function requestedTargets(state: LandingZoneStateType): string[] {
 	return [...new Set(state.accountScope)].sort();
 }
 
@@ -59,7 +55,7 @@ export async function projectLandingZoneTopologyNode(
 ): Promise<Partial<LandingZoneStateType>> {
 	const text = messageText(state.messages);
 	if (!TOPOLOGY_REQUEST_PATTERN.test(text)) return { landingZoneTopology: null };
-	const accountIds = authorizedTargets(state);
+	const accountIds = requestedTargets(state);
 	if (accountIds.length === 0) return { landingZoneTopology: null };
 	const vpcId = firstMatch(text, /\bvpc-[a-z0-9-]+\b/i);
 	const hostname = /\b(dns|hostname|resolution)\b/i.test(text)

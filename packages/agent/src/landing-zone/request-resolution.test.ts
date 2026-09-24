@@ -38,9 +38,9 @@ describe("resolveLandingZoneRequest", () => {
 		],
 		[
 			"Compare the current PVH Terraform pattern with official AWS and Terraform best practices.",
-			[],
+			["aws-lz-account-creator", "aws-lz-network-core", "aws-lz-network-workloads"],
 			"standards-comparison",
-			"unresolved",
+			"deterministic",
 		],
 	] as const)("routes shipped and typed prompt: %s", async (prompt, repositories, subject, resolutionSource) => {
 		const result = await resolveLandingZoneRequest({
@@ -124,9 +124,7 @@ describe("resolveLandingZoneRequest", () => {
 			authorizedAccountScope: ["111122223333", "444455556666"],
 		});
 
-		expect(result.clarification).toBe(
-			"Which Landing Zone account should I map? Provide the 12-digit account ID or select an authorized account.",
-		);
+		expect(result.clarification).toBe("Which Landing Zone account should I map? Provide the 12-digit account ID.");
 	});
 
 	test("asks for a hostname before tracing DNS", async () => {

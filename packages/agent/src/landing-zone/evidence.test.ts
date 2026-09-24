@@ -46,7 +46,9 @@ describe("parallel Landing Zone evidence collection", () => {
 		intent: "review",
 		query: "review account vending",
 		repositories: ["aws-lz-account-creator"],
+		accountIds: [],
 		selectedKnowledge: ["repos/aws-lz-account-creator.md"],
+		subject: "account-vending",
 		awsLiveStateRelevant: false,
 		awsLiveStateAuthorized: false,
 	};
@@ -55,9 +57,10 @@ describe("parallel Landing Zone evidence collection", () => {
 		const calls: EvidenceSource[] = [];
 		const results = await collectEvidenceInParallel(context, collectors(calls));
 
-		expect(calls).toContainAllValues(["pvh-okf", "gitlab", "terraform-docs", "aws-docs", "memory", "knowledge-graph"]);
+		expect(calls).toContainAllValues(["pvh-okf", "gitlab", "memory"]);
+		expect(calls).not.toContainAnyValues(["terraform-docs", "aws-docs", "knowledge-graph"]);
 		expect(calls).not.toContain("aws-api");
-		expect(results.find((result) => result.source === "terraform-docs")?.status).toBe("unavailable");
+		expect(results.find((result) => result.source === "terraform-docs")?.status).toBe("skipped");
 		expect(results.find((result) => result.source === "gitlab")?.evidence).toHaveLength(1);
 	});
 
@@ -68,7 +71,9 @@ describe("parallel Landing Zone evidence collection", () => {
 				intent: "review",
 				query: "compare deployed resource state",
 				repositories: [],
+				accountIds: [],
 				selectedKnowledge: [],
+				subject: "general",
 				awsLiveStateRelevant: true,
 				awsLiveStateAuthorized: true,
 			},
@@ -114,6 +119,35 @@ describe("parallel Landing Zone evidence collection", () => {
 		expect(result[0]?.claimKey).toBe("repository:aws-lz-account-creator:authoring-surface");
 		expect(result[0]?.claimValue).toBe("accounts/*.yml");
 		expect(inputs[0]?.path).toBe("accounts");
+	});
+
+	test("decodes representative examples from the MCP text envelope", async () => {
+		const result = await collectGitLabEvidence(context, async () => ({
+			content: [
+				{
+					type: "text",
+					text: JSON.stringify({
+						contracts: [{ path: "scripts/generate_tf.py", content: "generator" }],
+						examples: [
+							{ path: "accounts/alpha.yml", content: "application_name: alpha" },
+							{ path: "accounts/bravo.yml", content: "application_name: bravo" },
+							{ path: "accounts/charlie.yml", content: "application_name: charlie" },
+						],
+					}),
+				},
+			],
+		}));
+		const summary = JSON.parse(result[0]?.summary ?? "{}") as {
+			contracts?: Array<{ path: string }>;
+			examples?: Array<{ path: string }>;
+		};
+
+		expect(summary.contracts?.map((entry) => entry.path)).toEqual(["scripts/generate_tf.py"]);
+		expect(summary.examples?.map((entry) => entry.path)).toEqual([
+			"accounts/alpha.yml",
+			"accounts/bravo.yml",
+			"accounts/charlie.yml",
+		]);
 	});
 
 	test("emits the same structured authoring-surface claim from PVH repository knowledge", async () => {
@@ -172,7 +206,8 @@ describe("parallel Landing Zone evidence collection", () => {
 			},
 		]);
 		expect(calls).toHaveLength(1);
-		expect(calls[0]?.cypher).toContain("MATCH (n)");
+		expect(calls[0]?.cypher).toContain("MATCH (f:TopologyFact)");
+		expect(calls[0]?.params).toEqual({ accountIds: [] });
 		expect(configs[0]?.signal).toBe(controller.signal);
 		expect(result[0]?.status).toBe("observed");
 	});

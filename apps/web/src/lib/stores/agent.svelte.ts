@@ -23,6 +23,7 @@ import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
 import { isPiActionTool } from "@devops-agent/shared/src/pi-coms-types.ts";
 import { type CreatedTicket, TicketProviderInfoSchema } from "@devops-agent/shared/src/ticket-types.ts";
 import { z } from "zod";
+import { contextualRequestFields } from "$lib/application-request-context";
 import {
 	applyStreamEvent,
 	type DataSourceFindings,
@@ -320,6 +321,13 @@ function createAgentStore() {
 			// the LLM router, matching Elastic's "empty = let backend decide" semantics.
 			const knownEstateIds = new Set(availableAwsEstates.map((e) => e.id));
 			const includeAwsEstates = selectedDataSources.includes("aws") && availableAwsEstates.length > 0;
+			const applicationContext = contextualRequestFields(currentAgent, {
+				dataSources: selectedDataSources,
+				...(includeDeployments && { targetDeployments: selectedElasticDeployments }),
+				...(includeAwsEstates && { uiAwsEstates: selectedAwsEstates.filter((id) => knownEstateIds.has(id)) }),
+				...(followUpContext?.isFollowUp && { isFollowUp: true }),
+				...(followUpContext?.dataSourceContext && { dataSourceContext: followUpContext.dataSourceContext }),
+			});
 			const response = await fetch("/api/agent/stream", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -327,15 +335,11 @@ function createAgentStore() {
 					messages: messages.map((m) => ({ role: m.role, content: m.content })),
 					threadId: threadId || undefined,
 					agentName: currentAgent,
-					dataSources: selectedDataSources,
-					...(includeDeployments && { targetDeployments: selectedElasticDeployments }),
-					...(includeAwsEstates && { uiAwsEstates: selectedAwsEstates.filter((id) => knownEstateIds.has(id)) }),
+					...applicationContext,
 					...(attachmentsToSend && { attachments: attachmentsToSend }),
-					...(followUpContext?.isFollowUp && { isFollowUp: true }),
 					// SIO-1815: a pasted Kibana timestamp is in THIS zone. Without it the agent
 					// read 21:10 CEST as 21:10Z and reported the incident two hours late.
 					clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-					...(followUpContext?.dataSourceContext && { dataSourceContext: followUpContext.dataSourceContext }),
 				}),
 				signal: abortController.signal,
 			});

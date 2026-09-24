@@ -172,17 +172,6 @@ export function gateLandingZoneScope(state: LandingZoneStateType): Partial<Landi
 				clarificationCount: state.clarificationCount + 1,
 			};
 		}
-		const [accountId] = resolvedAccountIds;
-		if (!state.authorizedAccountScope.includes(accountId ?? "")) {
-			const blockedReason = "That Landing Zone account is outside the authorized account scope for this session.";
-			return {
-				messages: [new HumanMessage(answer), new AIMessage(blockedReason)],
-				blockedReason,
-				response: blockedReason,
-				outcome: "blocked",
-				clarificationCount: state.clarificationCount + 1,
-			};
-		}
 		return {
 			messages: [new HumanMessage(answer)],
 			repositoryScope: resolution.repositories,
