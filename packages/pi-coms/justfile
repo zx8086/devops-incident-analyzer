@@ -101,7 +101,7 @@ coms first *rest:
     fi
     rm -f "$SSM_ERR"
     if [ -n "$RAW" ] && [ -z "$TOKEN" ]; then
-      echo "/pi-coms/auth/$CNAME exists but has no \"token\" field" >&2
+      echo "/pi-coms/auth/$CNAME is not JSON with a non-empty \"token\"; re-mint it: just token-create $CNAME \"$CNAME,ops\" operator $PROFILE" >&2
       exit 1
     fi
     if [ -z "$TOKEN" ]; then
