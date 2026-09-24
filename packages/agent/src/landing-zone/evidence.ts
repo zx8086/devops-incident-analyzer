@@ -179,7 +179,7 @@ function repositoryEvidenceSummary(value: unknown): string {
 		contracts: boundedEvidenceFiles(value, "contracts", 0),
 		examples: boundedEvidenceFiles(value, "examples", 0),
 		openChanges: boundedOpenChanges(value),
-		warnings: ["Repository evidence content was compacted to preserve a valid bounded summary."],
+		warnings: ["Repository evidence details were compacted to preserve a valid bounded summary."],
 		...(provenance && { provenance }),
 	});
 	if (compact.length <= 8_000) return compact;
