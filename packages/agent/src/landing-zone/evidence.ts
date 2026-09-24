@@ -185,7 +185,7 @@ function repositoryEvidenceSummary(value: unknown): string {
 	if (compact.length <= 8_000) return compact;
 	return JSON.stringify({
 		contracts: boundedEvidenceFiles(value, "contracts", 120).slice(0, 2),
-		examples: boundedEvidenceFiles(value, "examples", 120).slice(0, 2),
+		examples: boundedEvidenceFiles(value, "examples", 120).slice(0, 3),
 		openChanges: boundedOpenChanges(value).map((entry) => {
 			const item = record(entry) ?? {};
 			return {

@@ -190,7 +190,10 @@ describe("parallel Landing Zone evidence collection", () => {
 			repository: { name: "z".repeat(20_000) },
 			project: { path: "p".repeat(20_000) },
 			provenance: { ref: "r".repeat(20_000) },
-			examples: [{ path: "accounts/alpha.yml", content: "x".repeat(20_000) }],
+			examples: ["alpha", "bravo", "charlie"].map((name) => ({
+				path: `accounts/${name}.yml`,
+				content: name.repeat(20_000),
+			})),
 			contracts: [{ path: "schema.json", content: "y".repeat(20_000) }],
 			openChanges: [{ iid: 7, title: "Current change", paths: ["accounts/alpha.yml"] }],
 		}));
@@ -201,7 +204,8 @@ describe("parallel Landing Zone evidence collection", () => {
 		};
 
 		expect(raw.length).toBeLessThanOrEqual(8_192);
-		expect(summary.examples).toEqual([{ path: "accounts/alpha.yml", content: "x".repeat(120) }]);
+		expect(summary.examples).toHaveLength(3);
+		expect(summary.examples[0]).toEqual({ path: "accounts/alpha.yml", content: "alpha".repeat(24) });
 		expect(summary.openChanges).toEqual([expect.objectContaining({ iid: 7 })]);
 	});
 
