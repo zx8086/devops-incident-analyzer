@@ -127,10 +127,11 @@ The Elastic IaC MCP server (`packages/mcp-server-elastic-iac`, port 9086) backs 
 
 The Landing Zone MCP (`packages/mcp-server-landing-zone-iac`, port 9088) supplies bounded private-GitLab evidence to the `landing-zone-terraform` graph. Its ten read tools are the default surface. Three branch/commit/MR tools are registered only after the write policy validates. It has no merge, pipeline-trigger, Terraform apply, or Terraform state tools.
 
+Account-specific topology authorization is not configured through an environment variable. The server-side Landing Zone graph verifies exact membership against the existing account catalog through its dedicated read-only AWS role. See [Landing Zone Agent Runbook](../operations/landing-zone-agent-runbook.md#landing-zone-account-catalog-access).
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `LANDING_ZONE_IAC_MCP_URL` | Yes (for Landing Zone repository evidence) | `http://localhost:9088` | URL the web runtime connects to. Unset means no Landing Zone MCP tools are registered. |
-| `LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS` | No | -- | Comma-separated 12-digit account IDs independently authorized for Landing Zone topology evidence and cards. It does not inherit Incident Analyzer estates or UI selections. Invalid values fail closed during graph construction. |
 | `LANDING_ZONE_IAC_MCP_TRANSPORT` | No | `http` | Transport mode: `http` or `stdio`. |
 | `LANDING_ZONE_IAC_MCP_PORT` | No | `9088` | HTTP listener port. |
 | `LANDING_ZONE_IAC_MCP_HOST` | No | `0.0.0.0` | Bind host. Restrict at the deployment network boundary. |
@@ -553,7 +554,6 @@ URLs the agent uses to connect to each MCP server via `MultiServerMCPClient`. Th
 | `ATLASSIAN_MCP_URL` | Yes | `http://localhost:9085` | URL the agent uses to reach the local Atlassian MCP server (the upstream Rovo endpoint the proxy forwards to is `ATLASSIAN_UPSTREAM_MCP_URL`) |
 | `AWS_MCP_URL` | Yes (for AWS datasource) | `http://localhost:3001` | URL the agent uses to reach the AWS MCP server. Locally points at the SigV4 proxy; in production points at the deployed AgentCore endpoint. See [AWS MCP — Multi-Estate](#aws-mcp--multi-estate) for the full AgentCore configuration. |
 | `LANDING_ZONE_IAC_MCP_URL` | Yes (for Landing Zone repository evidence) | `http://localhost:9088` | URL for the PVH Landing Zone read and optional governed proposal server. |
-| `LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS` | No | -- | Comma-separated 12-digit account IDs independently authorized for Landing Zone topology evidence and cards. It is not populated from another application. |
 
 In Docker Compose, these resolve to service names (e.g., `http://elastic-mcp:9080`). In bare-metal development, they resolve to `localhost` with each server's configured port.
 

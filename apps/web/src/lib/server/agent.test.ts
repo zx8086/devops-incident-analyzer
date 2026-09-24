@@ -376,19 +376,12 @@ test("refreshes schedule readiness after a health reconnect transition", async (
 	expect(mockRegisterSchedules.mock.calls.length).toBeGreaterThan(registrationsBeforeReconnect);
 });
 
-test("builds the production Landing Zone graph with its independent topology allowlist", async () => {
-	const previous = process.env.LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS;
-	process.env.LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS = "444455556666,111122223333";
-	try {
-		await getLandingZoneGraph();
-		expect(mockBuildLandingZoneGraph).toHaveBeenCalledWith({
-			checkpointerType: "memory",
-			authorizedTopologyAccounts: ["111122223333", "444455556666"],
-		});
-	} finally {
-		if (previous === undefined) delete process.env.LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS;
-		else process.env.LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS = previous;
-	}
+test("builds the production Landing Zone graph with its own account catalog authorizer", async () => {
+	await getLandingZoneGraph();
+	expect(mockBuildLandingZoneGraph).toHaveBeenCalledWith({
+		checkpointerType: "memory",
+		authorizeTopologyAccounts: expect.any(Function),
+	});
 });
 
 describe("invokeAgent", () => {

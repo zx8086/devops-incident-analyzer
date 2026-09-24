@@ -426,7 +426,7 @@ export async function collectEvidenceSource(
 			source,
 			status: "skipped",
 			evidence: [],
-			reason: "Account-specific topology history requires independent Landing Zone authorization.",
+			reason: "Account-specific topology history requires a matching Landing Zone account catalog entry.",
 		};
 	}
 	if (source === "aws-api" && !context.awsLiveStateRelevant) {

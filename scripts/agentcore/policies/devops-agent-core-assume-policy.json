@@ -20,6 +20,12 @@
 			"Resource": "arn:aws:iam::*:role/DevOpsAgentReadOnly"
 		},
 		{
+			"Sid": "AssumeLandingZoneAccountCatalogReadRole",
+			"Effect": "Allow",
+			"Action": "sts:AssumeRole",
+			"Resource": "arn:aws:iam::307424506679:role/lz-kb-dynamodb-readonly"
+		},
+		{
 			"Sid": "ExplicitAccountAssumeRoles",
 			"Effect": "Allow",
 			"Action": "sts:AssumeRole",

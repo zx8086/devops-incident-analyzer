@@ -74,12 +74,13 @@ aws iam update-assume-role-policy \
 
 > **Managed vs inline.** This policy is deployed as a **customer-managed** policy (`arn:aws:iam::399987695868:policy/DevOpsAgentCoreAssumePolicy`), not as an inline role policy. Update it with `create-policy-version --set-as-default` so the managed policy stays the single source of truth. Do **not** add a same-named inline policy alongside it — that leaves two policies of the same name attached and is ambiguous. (If you must use the inline path, detach the managed policy afterwards — see the alternative below.)
 
-Covers four things the runtime needs:
+Covers five things the runtime needs:
 
 1. **CloudWatch Logs** — emit runtime logs to `/aws/bedrock-agentcore/*` in account 399987695868.
 2. **ECR Pull** — pull the runtime container image from the AgentCore account's ECR.
 3. **Wildcard AssumeRole on `DevOpsAgentReadOnly`** — convenience grant for any account that follows the naming convention. Onboarding a new monitored account doesn't require updating this policy.
-4. **Explicit per-account AssumeRole list** — defense-in-depth and audit clarity. Lists **7 ARNs**: the 6 external estates plus the host self-loop `399987695868`.
+4. **Landing Zone account catalog role** — assumes only `lz-kb-dynamodb-readonly` in the catalog account; the Landing Zone graph uses that session only for the account-catalog scan.
+5. **Explicit per-account AssumeRole list** — defense-in-depth and audit clarity. Lists **7 ARNs**: the 6 external estates plus the host self-loop `399987695868`.
 
 ```json
 {
@@ -110,6 +111,12 @@ Covers four things the runtime needs:
       "Effect": "Allow",
       "Action": "sts:AssumeRole",
       "Resource": "arn:aws:iam::*:role/DevOpsAgentReadOnly"
+    },
+    {
+      "Sid": "AssumeLandingZoneAccountCatalogReadRole",
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "arn:aws:iam::307424506679:role/lz-kb-dynamodb-readonly"
     },
     {
       "Sid": "ExplicitAccountAssumeRoles",

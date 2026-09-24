@@ -88,7 +88,8 @@ function deterministicScope(query: string): {
 		/\b(?:central[- ]network|core network|cloud wan|ipam|transit gateway|direct connect|network attachments?)\b/i.test(
 			query,
 		);
-	const workloadNetwork = /\b(?:workload network|vpcs?|subnets?|route(?:s| tables?)?|endpoints?)\b/i.test(query);
+	const workloadNetwork =
+		/\b(?:workload network|network (?:map|topology)|vpcs?|subnets?|route(?:s| tables?)?|endpoints?)\b/i.test(query);
 	const gitlabProject = /\b(?:gitlab projects?|gitlab repositor(?:y|ies))\b/i.test(query);
 	const runners = /\b(?:runner|runners)\b/i.test(query);
 	const topology =

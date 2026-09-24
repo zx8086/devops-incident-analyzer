@@ -43,7 +43,7 @@ import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
 import { DEFAULT_AGENT_ID, describeAgent, graphFor } from "./graph-registry.ts";
 import { getKnowledgeGraphMcpUrl, mountKnowledgeGraphServer } from "./knowledge-graph-server.ts";
-import { landingZoneTopologyAccounts } from "./landing-zone-config.ts";
+import { authorizeLandingZoneTopologyAccounts } from "./landing-zone-config.ts";
 import { refreshSchedules, startSchedules } from "./schedules.ts";
 import { pipelineNodeNames } from "./topology.ts";
 
@@ -284,7 +284,7 @@ export async function getLandingZoneGraph() {
 	if (!landingZoneGraphPromise) {
 		landingZoneGraphPromise = buildLandingZoneGraph({
 			checkpointerType: resolveCheckpointerType(),
-			authorizedTopologyAccounts: landingZoneTopologyAccounts(),
+			authorizeTopologyAccounts: authorizeLandingZoneTopologyAccounts,
 		});
 	}
 	return landingZoneGraphPromise;

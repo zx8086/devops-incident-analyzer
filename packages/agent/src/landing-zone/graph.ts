@@ -33,7 +33,34 @@ export interface BuildLandingZoneGraphOptions {
 	topologyTools?: LandingZoneTopologyTool[];
 	changeTools?: LandingZoneChangeTools;
 	answerGenerator?: LandingZoneAnswerGenerator;
-	authorizedTopologyAccounts?: string[];
+	authorizeTopologyAccounts?: (accountIds: string[]) => Promise<string[]>;
+}
+
+const ACCOUNT_NOT_FOUND = "That account was not found in the Landing Zone account catalog.";
+const ACCOUNT_CATALOG_UNAVAILABLE =
+	"The Landing Zone account catalog is unavailable, so I cannot safely map that account right now.";
+
+function createAuthorizeTopologyScopeNode(authorize?: (accountIds: string[]) => Promise<string[]>) {
+	return async (state: typeof LandingZoneState.State): Promise<Partial<typeof LandingZoneState.State>> => {
+		if (state.requestResolution?.subject !== "topology" || state.accountScope.length === 0) {
+			return { authorizedAccountScope: [] };
+		}
+		if (!authorize) {
+			return { authorizedAccountScope: [], blockedReason: ACCOUNT_CATALOG_UNAVAILABLE };
+		}
+		try {
+			const requested = new Set(state.accountScope);
+			const authorizedAccountScope = [...new Set(await authorize(state.accountScope))]
+				.filter((accountId) => requested.has(accountId))
+				.sort();
+			if (authorizedAccountScope.length === 0) {
+				return { authorizedAccountScope, blockedReason: ACCOUNT_NOT_FOUND };
+			}
+			return { authorizedAccountScope };
+		} catch {
+			return { authorizedAccountScope: [], blockedReason: ACCOUNT_CATALOG_UNAVAILABLE };
+		}
+	};
 }
 
 export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOptions = {}) {
@@ -52,13 +79,11 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 	] as const;
 	const changeNodes = createLandingZoneChangeNodes(options.changeTools);
 	const graph = new StateGraph(LandingZoneState)
-		.addNode("bootstrap", async (state) => ({
-			...(await bootstrapLandingZone(state)),
-			authorizedAccountScope: [...new Set(options.authorizedTopologyAccounts ?? [])].sort(),
-		}))
+		.addNode("bootstrap", bootstrapLandingZone)
 		.addNode("classifyRequest", classifyLandingZoneRequest)
 		.addNode("resolveScope", resolveLandingZoneScope)
 		.addNode("scopeGate", gateLandingZoneScope)
+		.addNode("authorizeTopologyScope", createAuthorizeTopologyScopeNode(options.authorizeTopologyAccounts))
 		.addNode("recallMemory", recallLandingZoneMemory)
 		.addNode("selectPvhKnowledge", selectPvhKnowledge)
 		.addNode("collectGitLabEvidence", createLandingZoneEvidenceNode("gitlab", evidenceOptions))
@@ -89,10 +114,15 @@ export async function buildLandingZoneGraph(options: BuildLandingZoneGraphOption
 		.addEdge("bootstrap", "classifyRequest")
 		.addEdge("classifyRequest", "resolveScope")
 		.addEdge("resolveScope", "scopeGate")
-		.addConditionalEdges("scopeGate", (state) => (state.blockedReason ? "answerQuestion" : "recallMemory"), [
+		.addConditionalEdges("scopeGate", (state) => (state.blockedReason ? "answerQuestion" : "authorizeTopologyScope"), [
 			"answerQuestion",
-			"recallMemory",
+			"authorizeTopologyScope",
 		])
+		.addConditionalEdges(
+			"authorizeTopologyScope",
+			(state) => (state.blockedReason ? "answerQuestion" : "recallMemory"),
+			["answerQuestion", "recallMemory"],
+		)
 		.addEdge("recallMemory", "selectPvhKnowledge")
 		.addEdge("joinEvidence", "reconcileEvidence")
 		.addEdge("reconcileEvidence", "assessRisk")

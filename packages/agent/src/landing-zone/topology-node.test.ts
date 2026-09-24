@@ -127,7 +127,7 @@ describe("projectLandingZoneTopologyNode", () => {
 		expect(result.landingZoneTopology).toBeNull();
 	});
 
-	test("does not query Landing Zone topology when only a different account is independently authorized", async () => {
+	test("does not query Landing Zone topology when the catalog matched only a different account", async () => {
 		let calls = 0;
 		const tool: LandingZoneTopologyTool = {
 			name: "kg_run_cypher",
