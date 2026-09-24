@@ -110,10 +110,11 @@ Residual risks are private repository content reaching the model provider under 
 | Capability | Control | Safe default |
 |---|---|---|
 | Landing Zone MCP connection | `LANDING_ZONE_IAC_MCP_URL` | Unset means no Landing Zone tools are registered. |
+| Account-specific topology | `LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS` | Unset means repository-defined answers remain available but account-specific knowledge-graph reads and cards are disabled. This allowlist belongs only to the Landing Zone application. |
 | GitLab reads | `GITLAB_PERSONAL_ACCESS_TOKEN` on the Landing Zone MCP | Use a read-only project/group token with the narrowest repository scope. |
 | Knowledge graph and topology cards | `KNOWLEDGE_GRAPH_ENABLED` plus a healthy in-process graph | Disable with `false`; cards then remain absent. |
 | Agent Memory | `LIVE_MEMORY_ENABLED`, `LIVE_MEMORY_BACKEND=agent-memory`, `AGENT_MEMORY_ENABLED` | File/off behavior remains the baseline. |
-| AWS live reads | Graph construction option plus explicit UI account authorization | Disabled in the production graph today. `AWS_MCP_URL` alone does not enable Landing Zone AWS evidence. |
+| AWS live reads | Separate graph authorization | Disabled in the production graph today. `AWS_MCP_URL` alone does not enable Landing Zone AWS evidence. The topology allowlist does not authorize direct AWS API reads. |
 | Historical import | Manual `agents/landing-zone-terraform/workflows/gitlab-import-sweep.yaml` trigger with checkpoint | Manual and no-op unless prerequisites exist. |
 | Governed GitLab writes | `LANDING_ZONE_WRITE_ENABLED` and all required write-policy settings | Disabled; write tools are absent from `tools/list`. |
 

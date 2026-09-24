@@ -14,6 +14,7 @@ Local connection example:
 
 ```bash
 LANDING_ZONE_IAC_MCP_URL=http://localhost:9088
+LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS=111122223333,444455556666
 LANDING_ZONE_IAC_MCP_PORT=9088
 GITLAB_BASE_URL=https://gitlab.com
 LANDING_ZONE_WRITE_ENABLED=false
@@ -32,6 +33,7 @@ Keep tokens in the deployment secret store, never in `.env.example`, committed m
 | Memory enabled | Recall is advisory and appears only after live claim revalidation. |
 | Knowledge graph disabled | Knowledge-graph evidence is unavailable and topology cards are absent; the text answer still completes when its required evidence exists. |
 | Account without independent Landing Zone topology authorization | Repository-defined answer only; no topology card and no account data in completion telemetry. |
+| Account listed in `LANDING_ZONE_TOPOLOGY_ACCOUNT_IDS` with current graph facts | Account-scoped graph evidence and the matching topology card are available. Incident Analyzer estates and selections have no effect. |
 | Network map without one established account | The turn pauses with one account-selection question before evidence collection. |
 | DNS trace without a hostname | The turn pauses for the hostname and explicit Landing Zone account, then resumes from the same checkpoint. |
 | Synthesis or validation failure | One repair is attempted; repeated failure returns a substantive deterministic answer with explicit limitations. |

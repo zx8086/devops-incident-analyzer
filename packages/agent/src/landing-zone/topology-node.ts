@@ -3,7 +3,7 @@
 import type { LandingZoneTopologyEvent, TopologyDiagramView } from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
 import { getToolsForDataSource } from "../mcp-bridge.ts";
-import { extractTextFromContent } from "../message-utils.ts";
+import { extractTextSegmentsFromContent } from "../message-utils.ts";
 import type { LandingZoneStateType } from "./state.ts";
 import { parseReconciledTopologyToolPage, projectLandingZoneTopology } from "./topology-projection.ts";
 import type { ReconciledTopology } from "./topology-reconcile.ts";
@@ -26,7 +26,7 @@ const DEFAULT_MAX_PAGES = 20;
 function messageText(messages: BaseMessage[]): string {
 	return messages
 		.filter((message) => message._getType() === "human")
-		.map((message) => extractTextFromContent(message.content))
+		.flatMap((message) => extractTextSegmentsFromContent(message.content))
 		.join("\n");
 }
 

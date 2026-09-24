@@ -59,6 +59,14 @@ export function extractTextFromContent(content: unknown): string {
 	return isTextBlock(content) ? content.text : "";
 }
 
+export function extractTextSegmentsFromContent(content: unknown): string[] {
+	if (typeof content === "string") return [content];
+	const blocks = Array.isArray(content) ? content : [content];
+	const texts = blocks.filter(isTextBlock).map((block) => block.text);
+	logIfAllBlocksDropped(blocks, texts.length, "extractTextSegmentsFromContent");
+	return texts;
+}
+
 // SIO-1233: the block TYPES present on a response, for diagnosing an empty text extraction.
 // Sonnet 5 emits reasoning blocks stochastically (MODEL_REGISTRY emitsReasoningContent, whose
 // own doc warns that `false` means "not seen in that run", never "cannot happen"), so a turn

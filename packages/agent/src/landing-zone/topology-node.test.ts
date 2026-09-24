@@ -97,6 +97,36 @@ describe("projectLandingZoneTopologyNode", () => {
 		});
 	});
 
+	test("preserves the boundary between attachment text and the topology prompt", async () => {
+		let calls = 0;
+		const result = await projectLandingZoneTopologyNode(
+			{
+				...state("ignored"),
+				messages: [
+					new HumanMessage({
+						content: [
+							{ type: "text", text: "attached document ending in x" },
+							{ type: "text", text: "topology for account 111122223333" },
+						],
+					}),
+				],
+			},
+			{
+				tools: [
+					{
+						name: "kg_run_cypher",
+						invoke: async () => {
+							calls += 1;
+							return { content: [] };
+						},
+					},
+				],
+			},
+		);
+		expect(calls).toBe(1);
+		expect(result.landingZoneTopology).toBeNull();
+	});
+
 	test("does not query Landing Zone topology when only a different account is independently authorized", async () => {
 		let calls = 0;
 		const tool: LandingZoneTopologyTool = {
