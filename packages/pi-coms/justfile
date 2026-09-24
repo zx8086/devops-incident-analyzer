@@ -85,10 +85,25 @@ coms first *rest:
     fi
     # Operator token from SSM, never echoed. The console registers under this
     # principal, so its name must be in the principal's allowed names.
-    TOKEN="$(aws ssm get-parameter --profile "$PROFILE" --region "$REGION" \
+    # SIO-1882: keep aws stderr (it never carries the value) so an expired SSO
+    # login or AccessDenied is reported as itself, not as a missing principal.
+    SSM_ERR="$(mktemp)"
+    RAW="$(aws ssm get-parameter --profile "$PROFILE" --region "$REGION" \
       --name "/pi-coms/auth/$CNAME" --with-decryption \
-      --query Parameter.Value --output text 2>/dev/null \
+      --query Parameter.Value --output text 2>"$SSM_ERR" || true)"
+    TOKEN="$(printf '%s' "$RAW" \
       | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])' 2>/dev/null || true)"
+    if [ -z "$RAW" ] && ! grep -q ParameterNotFound "$SSM_ERR"; then
+      echo "cannot read /pi-coms/auth/$CNAME with profile $PROFILE:" >&2
+      cat "$SSM_ERR" >&2
+      if grep -qi sso "$SSM_ERR"; then echo "log in first: aws sso login --profile $PROFILE" >&2; fi
+      rm -f "$SSM_ERR"; exit 1
+    fi
+    rm -f "$SSM_ERR"
+    if [ -n "$RAW" ] && [ -z "$TOKEN" ]; then
+      echo "/pi-coms/auth/$CNAME is not JSON with a non-empty \"token\"; re-mint it: just token-create $CNAME \"$CNAME,ops\" operator $PROFILE" >&2
+      exit 1
+    fi
     if [ -z "$TOKEN" ]; then
       echo "no principal \"$CNAME\" on the $ENV_KEY hub; mint one: just token-create $CNAME \"$CNAME,ops\" operator $PROFILE" >&2
       exit 1
