@@ -1,7 +1,8 @@
 // tests/monitor-actionability-judge.test.ts
-// SIO-1838. The ask function is injected; every response body below is the shape
-// a real jev-1.13.0 call returned on 2026-09-20 (`{type:"noul", noul}` plus
-// usage), captured before this file was written rather than taken from the docs.
+// SIO-1838, SIO-1883. The ask function is injected; every response body below is
+// the shape a real jev-1.13.0 call returned: `{type:"noul", noul}` (2026-09-20)
+// and `{type:"choice", choice, confidence, probabilities}` with EVERY option
+// present, zeros included (2026-09-26), captured before the code was written.
 import { describe, expect, test } from "bun:test";
 import {
 	isActionabilityEnforcing,
@@ -26,8 +27,17 @@ function finding(key: string): Finding {
 	};
 }
 
-function reply(routine: number, duplicate?: number): SystemOneResponse {
-	const answers: SystemOneResponse["answers"] = { routine: { type: "noul", noul: routine } };
+function reply(routine: number, duplicate?: number, critical = 0, later = 0): SystemOneResponse {
+	const probabilities = {
+		critical,
+		investigate_now: Math.max(0, 1 - routine - critical - later),
+		investigate_later: later,
+		routine,
+	};
+	const choice = Object.entries(probabilities).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "routine";
+	const answers: SystemOneResponse["answers"] = {
+		triage: { type: "choice", choice, confidence: 0.5, probabilities },
+	};
 	if (duplicate !== undefined) answers.duplicate = { type: "noul", noul: duplicate };
 	return { model: "jev-1.13.0", answers, usage: { input_tokens: 396, output_tokens: 36 } };
 }
@@ -76,7 +86,40 @@ describe("judgeActionability", () => {
 		);
 	});
 
-	test("a reply missing the routine answer yields NO verdict, not a zero", async () => {
+	test("uses only the routine probability of the triage choice (SIO-1883)", async () => {
+		const ask = (async () => reply(0.05, 0.1, 0.8, 0.02)) as Ask;
+		const out = await judgeActionability([finding("a")], ["prior"], { apiKey: "k", ask });
+		expect(out.get("a")).toEqual({ routine: 0.05, duplicate: 0.1 });
+	});
+
+	test("a triage answer of the wrong type yields NO verdict", async () => {
+		// A noul where the choice should be is a malformed reply, not "0 everywhere".
+		const ask = (async () =>
+			({ model: "jev-1.13.0", answers: { triage: { type: "noul", noul: 0.99 } } }) as SystemOneResponse) as Ask;
+		const out = await judgeActionability([finding("a")], [], { apiKey: "k", ask });
+		expect(out.size).toBe(0);
+	});
+
+	test("the triage question is a four-option choice", async () => {
+		let q: Parameters<Ask>[0]["questions"] = {};
+		const ask = (async (o: Parameters<Ask>[0]) => {
+			q = o.questions;
+			return reply(0.1);
+		}) as Ask;
+		await judgeActionability([finding("a")], [], { apiKey: "k", ask });
+		const triage = q.triage;
+		expect(triage?.type).toBe("choice");
+		if (triage?.type === "choice") {
+			expect(Object.keys(triage.criteria).sort()).toEqual([
+				"critical",
+				"investigate_later",
+				"investigate_now",
+				"routine",
+			]);
+		}
+	});
+
+	test("a reply missing the triage answer yields NO verdict, not a zero", async () => {
 		// Defaulting it would mean "definitely not routine", which is a judgement
 		// the model did not make.
 		const ask = (async () => ({ model: "jev-1.13.0", answers: {} }) as SystemOneResponse) as Ask;
@@ -92,10 +135,10 @@ describe("judgeActionability", () => {
 			return reply(0.3);
 		}) as Ask;
 		await judgeActionability([finding("a")], [], { apiKey: "k", ask });
-		expect(asked).toEqual(["routine"]);
+		expect(asked).toEqual(["triage"]);
 
 		await judgeActionability([finding("a")], ["a prior diagnosis"], { apiKey: "k", ask });
-		expect(asked).toEqual(["routine", "duplicate"]);
+		expect(asked).toEqual(["triage", "duplicate"]);
 	});
 
 	test("a missing duplicate answer is 0, which sends", async () => {

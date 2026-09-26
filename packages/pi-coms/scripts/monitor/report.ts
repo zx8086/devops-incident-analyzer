@@ -484,7 +484,12 @@ export type DigestInput = {
 	// Operator pause (SIO-1673): the digest still ships as the dead-man signal,
 	// but it must say that the check cycles behind it were skipped.
 	paused?: { reason: string; since: string } | null;
+	// SIO-1883: turns spent and what the Jev gate held back, so the reduction is
+	// readable from the mailbox rather than the journal.
+	triage?: TriageCounts;
 };
+
+export type TriageCounts = { turns: number; heldBack: number };
 
 export function formatDigest(d: DigestInput): string {
 	const total = Object.values(d.findingCounts).reduce((a, b) => a + b, 0);
@@ -543,6 +548,10 @@ export function formatDigest(d: DigestInput): string {
 			.map(([k, v]) => `${k}=${v}`)
 			.join(" ");
 		lines.push(`- findings: ${total} (${parts})`);
+	}
+	// Omitted on a quiet day, like the attention line: zeros are noise there.
+	if (d.triage && d.triage.turns + d.triage.heldBack > 0) {
+		lines.push(`- investigation: ${d.triage.turns} turn(s), ${d.triage.heldBack} finding(s) held back by the jev gate`);
 	}
 	const scaling = d.scalingTriggersInAlarm ?? 0;
 	const scalingNote = scaling > 0 ? ` (${scaling} autoscaling trigger(s) in ALARM not listed)` : "";

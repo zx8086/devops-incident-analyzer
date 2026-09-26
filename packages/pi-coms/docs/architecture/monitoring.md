@@ -156,6 +156,15 @@ The agent module provisions one alarm itself -- `<name_prefix>-agent-status-chec
 
 Findings of severity warn or critical go to the account's Pi agent (`aws-<account_id>`) as **one batched coms prompt per run**, carrying a `response_schema` for structured diagnoses (probable cause, affected resources, suggested action) and prior-incident context from the journal. Timeout 5 minutes, one attempt; on timeout or an unparseable reply the report ships with an "uninvestigated" marker. Detection never depends on the model.
 
+#### Triage before a turn is spent (SIO-1838, SIO-1883)
+
+A finding passes these gates, in order, before it can cost a model turn: the suppression ledger, `severity != info` and `family != spoke-health`, **report-only families**, reuse (below), the **Jev gate**, then the budget (below). Every held-back finding still ships in the incident report with its reason; only the model turn is saved.
+
+- **Report-only families.** A warn finding whose family is listed in `PI_MONITOR_REPORT_ONLY_FAMILIES` is reported with `uninvestigated: report-only family (<family>)` and never investigated, nor sent to Jev. A critical finding in the same family still is. Empty by default; the fleet sets `compliance`, whose diagnoses in a measured week were all tagging fixes the finding already names.
+- **Jev gate.** With `TYPESAFE_API_KEY` set, each warn finding in the batch is sent to TypeSafe's `jev-1.13.0` classifier as its family, severity, and REDACTED resource and summary (ARNs, account ids, access keys and email addresses are replaced before anything leaves the host; evidence blobs are never sent). A four-option Choice (`critical`, `investigate_now`, `investigate_later`, `routine`) supplies the `routine` probability, and a yes/no question asks whether the finding repeats one of the eight newest diagnosed findings of the last 24 h. Either at p >= 0.85 holds the finding back (`uninvestigated: routine operational event (p=..)` / `same failure as a recently diagnosed finding`). A check-critical finding is never judged into a hold; a missing answer sends; if any request in the round fails, or the 10 s deadline passes, every finding is sent. `MONITOR_ACTIONABILITY_ENABLED=false` stops judging; `MONITOR_ACTIONABILITY_ENFORCING=false` judges and journals (`actionability_verdict` rows) without holding anything back.
+- **What the fleet data says (SIO-1883, 2026-09-26).** Over 7 days the 8 spokes spent 516 turns on 1,128 findings. Replayed against 537 findings labelled from their real diagnoses, the gate would have saved 22% of turns and compliance as report-only a further 16% (38% together), with no urgent finding held back except three repeats of an incident diagnosed in the same hour, which still appeared in the report. Only the Choice's `routine` probability is used: its `critical` and `investigate_later` probabilities did not separate urgent findings from the rest (urgent warns scored `critical` at most 0.04), so Jev is not used to promote or delay anything.
+- **Measuring it.** `status` shows the prompts used and the findings held back in the last 24 h; the daily digest adds `- investigation: N turn(s), H finding(s) held back by the jev gate` (omitted on a quiet day).
+
 #### Investigation budget and operator controls (SIO-1673)
 
 Every investigation prompt is a full model turn on the account agent, and one noisy source can otherwise buy an unbounded number of them: eu-oit-prd produced 72 warn/logs findings on a single application log group in a day, each with a fresh error signature, and its agent reached 98% context. Two rails bound the cost per account regardless of what the checks find:
@@ -219,6 +228,8 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_INVESTIGATE` | on (`false`/`0` off) | Boot default for the persisted `investigate` control |
 | `PI_MONITOR_INVESTIGATE_BUDGET_PER_DAY` | `24` | Investigation prompts per rolling 24 h |
 | `PI_MONITOR_INVESTIGATE_COOLDOWN_MINUTES` | `360` | A dedup_key diagnosed this recently reuses that diagnosis instead of a new prompt (SIO-1739); `0` turns the hold-back off, reuse then only fills in for budget-skipped findings |
+| `PI_MONITOR_REPORT_ONLY_FAMILIES` | (empty) | Comma list of families whose warn findings are reported but never investigated; critical findings in them still are (SIO-1883). Fleet value: `compliance` |
+| `TYPESAFE_API_KEY` | (unset) | Enables the Jev gate; unset skips it and every warn finding is investigated as before. Operator-set in `~/.coms-env.local` |
 | `PI_MONITOR_INVESTIGATE_PER_RESOURCE_PER_DAY` | `3` | Prompts naming the same resource per rolling 24 h |
 | `PI_MONITOR_LOGS_FILTER` | `?ERROR ?Exception` | CloudWatch filter pattern (WARN deliberately absent) |
 | `PI_MONITOR_LOGS_MAX_GROUPS` | `200` | Log-group scan cap (paginated, alphabetical) |

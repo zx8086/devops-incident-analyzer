@@ -5,7 +5,7 @@
 
 import type { ActionabilityVerdict } from "./actionability.ts";
 import type { Finding } from "./report.ts";
-import { askSystemOne, type NoulQuestion, resolveTypeSafeApiKey } from "./typesafe.ts";
+import { askSystemOne, type Question, resolveTypeSafeApiKey } from "./typesafe.ts";
 
 // One deadline for the whole batch. A monitor cycle runs every 15 minutes and the
 // findings are already collected; the gate must not become the reason a cycle
@@ -67,17 +67,36 @@ export function redactMonitorText(text: string): string {
 	return out;
 }
 
-const ROUTINE_Q = "routine";
+const TRIAGE_Q = "triage";
 const DUPLICATE_Q = "duplicate";
 
-function questionsFor(recentDiagnosed: string[]): Record<string, NoulQuestion> {
-	const questions: Record<string, NoulQuestion> = {
-		[ROUTINE_Q]: {
-			type: "noul",
-			instructions:
-				"Is `finding` a routine, expected operational event -- a normal deployment, an autoscaling action, or scheduled maintenance -- rather than a problem that needs an engineer to investigate?",
-		},
-	};
+// SIO-1883: one Choice replaces the SIO-1838 `routine` Noul, and only its
+// `routine` probability is used. Measured on 537 real fleet findings labelled
+// from their diagnoses (2026-09-26): at p >= 0.85 the Choice held back 32 of 171
+// no-action findings where the Noul held back 12, and no urgent finding scored
+// above 0.14 (Noul: 0.27). The other three options are there because a routine
+// verdict is sharper when it competes with concrete alternatives. Their own
+// probabilities are NOT used: "critical" never exceeded 0.04 on the 18 urgent
+// warns and "investigate_later" did not separate them either -- urgency lives in
+// what an investigation finds, not in a one-line finding summary.
+// `duplicate` stays its own Noul: a separate judgement against separate context.
+const TRIAGE_QUESTION: Question = {
+	type: "choice",
+	instructions:
+		"How should the on-call engineer treat `finding`, a monitoring finding from an AWS account? Judge the impact the finding itself describes, not how alarming its wording sounds.",
+	criteria: {
+		critical:
+			"An active outage, data loss, a security compromise, or failing customer-facing traffic that needs an engineer now.",
+		investigate_now: "A real problem that is getting worse or blocking work and should be diagnosed this cycle.",
+		investigate_later:
+			"A real but contained problem with no customer impact yet, which can safely wait an hour to be diagnosed.",
+		routine:
+			"An expected operational event -- a normal deployment, an autoscaling action, scheduled maintenance -- that needs no engineer. A deployment or scaling action that FAILED is not routine.",
+	},
+};
+
+function questionsFor(recentDiagnosed: string[]): Record<string, Question> {
+	const questions: Record<string, Question> = { [TRIAGE_Q]: TRIAGE_QUESTION };
 	// Only ask the duplicate question when there is something to compare against.
 	// Asking it against an empty list invites an answer with nothing behind it.
 	if (recentDiagnosed.length > 0) {
@@ -156,15 +175,16 @@ export async function judgeActionability(
 		if (result.status !== "fulfilled") continue;
 		const finding = findings[i];
 		if (!finding) continue;
-		const routine = result.value.answers[ROUTINE_Q]?.noul;
-		// No routine answer means the question we gate on was not answered; leave
+		const triage = result.value.answers[TRIAGE_Q];
+		// No triage answer means the question we gate on was not answered; leave
 		// this finding unjudged rather than defaulting it to 0. One malformed reply
 		// is not a degraded classifier, so unlike a failed REQUEST it does not void
 		// the round -- the caller sends anything missing from the map.
-		if (routine === undefined) continue;
+		if (triage?.type !== "choice") continue;
+		const dup = result.value.answers[DUPLICATE_Q];
 		verdicts.set(finding.dedup_key, {
-			routine,
-			duplicate: result.value.answers[DUPLICATE_Q]?.noul ?? 0,
+			routine: triage.probabilities.routine ?? 0,
+			duplicate: dup?.type === "noul" ? dup.noul : 0,
 		});
 	}
 	return verdicts;
