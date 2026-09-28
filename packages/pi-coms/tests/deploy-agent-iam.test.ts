@@ -1,12 +1,7 @@
 // tests/deploy-agent-iam.test.ts
-// SIO-1884 (Greptile PR #913): the Performance Insights boundary lives in HCL, which
-// no test evaluated. These assertions are text-level on purpose -- there is no
-// offline IAM evaluator -- and guard the three properties the live check on
-// eu-oit-dev proved (2026-09-28): literal SQL denied (asked for or implied by a
-// db.sql group-by), full statement details never granted, and kms:Decrypt still
-// denied for everything except Performance Insights' own data.
 import { describe, expect, test } from "bun:test";
 
+// SIO-1884: text-level on purpose (no offline IAM evaluator); guards what the eu-oit-dev live check proved.
 const tf = await Bun.file(new URL("../deploy/modules/agent/main.tf", import.meta.url)).text();
 
 // The HCL for one statement: from its Sid to the end of its `[{ ... }]` block.
