@@ -518,6 +518,38 @@ resource "aws_iam_policy" "pi_coms_extensions" {
         ]
         Resource = "*"
       }],
+      // Performance Insights top SQL (SIO-1884). A critical Aurora CPU spike on
+      // eu-b2becom-v2-prd was diagnosed as write-bound, but the spoke could not
+      // name the statement behind it (AccessDenied on pi:DescribeDimensionKeys).
+      // Scoped to RDS PI resources and to TOKENIZED SQL: db.sql_tokenized.statement
+      // has its literals replaced, while db.sql.statement carries them and is
+      // denied below, as is pi:GetDimensionKeyDetails (full statement text), which
+      // is simply not granted. Every PI-enabled instance in the fleet uses the
+      // AWS-managed aws/rds key, so no key-policy change is needed.
+      [{
+        Sid    = "PerformanceInsightsReads"
+        Effect = "Allow"
+        Action = [
+          "pi:GetResourceMetrics",
+          "pi:DescribeDimensionKeys",
+          "pi:ListAvailableResourceDimensions",
+          "pi:ListAvailableResourceMetrics",
+          "pi:GetResourceMetadata",
+        ]
+        Resource = "arn:aws:pi:*:*:metrics/rds/*"
+      }],
+      // ForAnyValue on a Deny: fires when ANY requested dimension is the literal
+      // one, and does nothing when the request names no dimensions at all (a
+      // plain db.load series). The AWS-documented pattern for this key.
+      [{
+        Sid      = "PerformanceInsightsLiteralSqlDeny"
+        Effect   = "Deny"
+        Action   = ["pi:GetResourceMetrics", "pi:DescribeDimensionKeys"]
+        Resource = "arn:aws:pi:*:*:metrics/rds/*"
+        Condition = {
+          "ForAnyValue:StringEquals" = { "pi:Dimensions" = ["db.sql.statement"] }
+        }
+      }],
       // Log-content reads for the monitor's ERROR-log check and the agent's
       // log-reading during diagnosis (SIO-1589). A deliberate widening of the
       // metadata-only posture -- log lines can contain app-printed secrets --
@@ -543,7 +575,6 @@ resource "aws_iam_policy" "pi_coms_extensions" {
         Effect = "Deny"
         Action = [
           "secretsmanager:GetSecretValue",
-          "kms:Decrypt",
           "ssm:GetParameter",
           "ssm:GetParameters",
           "ssm:GetParametersByPath",
@@ -556,6 +587,24 @@ resource "aws_iam_policy" "pi_coms_extensions" {
           "sqs:ReceiveMessage",
         ]
         Resource = "*"
+      }],
+      // kms:Decrypt is denied on its own statement so Performance Insights can
+      // work (SIO-1884). PI decrypts its data with the CALLER's identity (a
+      // forward access session: CloudTrail shows Decrypt invokedBy
+      // pi.amazonaws.com under the calling role, encryption context
+      // {"service":"pi", "aws:pi:service":"rds", "aws:rds:db-id":...}), so a
+      // blanket deny blocks every PI read. The exemption keys on that context,
+      // which must match what the data was encrypted with, so it opens PI's own
+      // data and nothing else; a secret, parameter or object decrypt carries no
+      // such context and StringNotEquals on an absent key still denies.
+      [{
+        Sid      = "DecryptDenyExceptPerformanceInsights"
+        Effect   = "Deny"
+        Action   = ["kms:Decrypt"]
+        Resource = "*"
+        Condition = {
+          StringNotEquals = { "kms:EncryptionContext:service" = "pi" }
+        }
       }],
       var.enable_bedrock ? [{
         Sid    = "BedrockInvokeAnthropic"
