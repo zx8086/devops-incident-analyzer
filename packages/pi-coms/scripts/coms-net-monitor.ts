@@ -92,6 +92,7 @@ import {
 	notablesFromJournal,
 	parseDiagnoses,
 	suppressionReviewFromJournal,
+	type TriageCounts,
 } from "./monitor/report.ts";
 import { publishReportToSns, snsTopicFromEnv } from "./monitor/report-email.ts";
 import { MonitorState } from "./monitor/state.ts";
@@ -155,6 +156,20 @@ const INVESTIGATE_BUDGET: BudgetLimits = {
 	perResourcePerDay: envCount(process.env.PI_MONITOR_INVESTIGATE_PER_RESOURCE_PER_DAY, 3),
 };
 const DAY_MS = 86_400_000;
+// SIO-1883: families whose WARN findings are reported but never cost a model turn,
+// because the diagnosis adds nothing the finding does not already say. Critical
+// findings in these families are still investigated. Empty by default; the fleet
+// sets `compliance` (164 of 1,128 investigated findings in a week, 111 of 516
+// turns, 0 urgent diagnoses among 162: each was a tagging fix the finding names).
+export function envFamilies(value: string | undefined): Set<string> {
+	return new Set(
+		(value ?? "")
+			.split(",")
+			.map((f) => f.trim())
+			.filter((f) => f !== ""),
+	);
+}
+const REPORT_ONLY_FAMILIES = envFamilies(process.env.PI_MONITOR_REPORT_ONLY_FAMILIES);
 // SIO-1739: a dedup_key diagnosed inside the cooldown reuses that diagnosis
 // instead of spending a turn; one the budget holds back reuses a diagnosis up
 // to a day old. Cooldown 0 turns the hold-back off (reuse then only fills in
@@ -278,7 +293,23 @@ export type InvestigationOutcome = {
 	failure: string | null;
 };
 
+// SIO-1883: turns spent and findings the Jev gate held back, for the digest and
+// `status`. heldBack counts ENFORCED verdicts only; a shadow verdict held nothing.
+export function triageCounts(state: MonitorState, sinceMs: number): TriageCounts {
+	let heldBack = 0;
+	for (const r of state.journalRows(sinceMs, "actionability_verdict")) {
+		try {
+			if ((JSON.parse(r.payload) as { enforced?: unknown }).enforced === true) heldBack++;
+		} catch {
+			// a malformed row counts as nothing
+		}
+	}
+	return { turns: investigationUsage(state.journalRows(sinceMs, "investigation")).used, heldBack };
+}
+
 export type CycleDeps = {
+	// SIO-1883: families whose warn findings are reported, never investigated.
+	reportOnlyFamilies?: Set<string>;
 	// T0: runs before everything; unhealthy skips the checks for this cycle
 	// (a broken identity turns every check into correlated noise).
 	gate?: { name: string; run: () => Promise<{ findings: Finding[]; healthy: boolean }> };
@@ -359,18 +390,37 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 		// calls are failing. Sending it would spend an investigation slot on a
 		// prompt that cannot be answered, and time out against the budget. The
 		// finding ships to the report on its own.
-		const toInvestigate = findings.filter((f) => f.severity !== "info" && f.family !== "spoke-health");
+		const skipped = new Map<string, string>();
+		// SIO-1883: report-only families. A warn there is reported, not investigated.
+		const reportOnly = deps.reportOnlyFamilies;
+		const reportOnlyKeys = new Set<string>();
+		const toInvestigate = findings.filter((f) => {
+			if (f.severity === "info" || f.family === "spoke-health") return false;
+			if (reportOnly?.has(f.family) && f.severity !== "critical") {
+				skipped.set(f.dedup_key, `report-only family (${f.family})`);
+				reportOnlyKeys.add(f.dedup_key);
+				return false;
+			}
+			return true;
+		});
 		let diagnoses: Map<string, Diagnosis> | null = null;
 		let investigationFailure: string | null = null;
 		// Reuse pass (SIO-1739): the same dedup_key diagnosed within the cooldown
 		// is the same incident still flapping; re-asking spent a turn per flap
 		// and burned the per-resource cap, after which the finding shipped
 		// "uninvestigated" while its diagnosis sat in the journal.
-		const skipped = new Map<string, string>();
 		const reused = new Map<string, { ts: string; diagnosis: Diagnosis }>();
 		let batch = toInvestigate;
 		if (deps.reuse) {
 			const { cooldownMs, windowMs } = deps.reuse;
+			// Greptile PR #912: a report-only warn still shows a diagnosis the agent
+			// already made for the same dedup_key, it just never asks for a new one.
+			for (const f of findings) {
+				if (!reportOnlyKeys.has(f.dedup_key)) continue;
+				const prior = deps.state.priorDiagnosis(f.dedup_key, Math.max(cooldownMs, windowMs));
+				const parsed = prior ? DiagnosisSchema.safeParse(prior.diagnosis) : null;
+				if (prior && parsed?.success) reused.set(f.dedup_key, { ts: prior.ts, diagnosis: parsed.data });
+			}
 			batch = [];
 			for (const f of toInvestigate) {
 				const prior = deps.state.priorDiagnosis(f.dedup_key, Math.max(cooldownMs, windowMs));
@@ -451,6 +501,9 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 				...f,
 				diagnosis: diagnoses?.get(f.dedup_key) ?? r?.diagnosis ?? null,
 				...(r ? { reused_from: r.ts } : {}),
+				// Greptile PR #912: lets the digest tell a deliberate report-only skip
+				// from a finding that still needs somebody to look at it.
+				...(reportOnlyKeys.has(f.dedup_key) ? { report_only: true } : {}),
 			});
 		}
 		const text = formatIncidentReport(
@@ -728,6 +781,7 @@ function main(): void {
 		budget: INVESTIGATE_BUDGET,
 		reuse: INVESTIGATE_REUSE,
 		actionability: buildActionability(state),
+		reportOnlyFamilies: REPORT_ONLY_FAMILIES,
 		report,
 		log,
 	};
@@ -764,6 +818,7 @@ function main(): void {
 		budget: INVESTIGATE_BUDGET,
 		reuse: INVESTIGATE_REUSE,
 		actionability: buildActionability(state),
+		reportOnlyFamilies: REPORT_ONLY_FAMILIES,
 		report,
 		log,
 	};
@@ -810,6 +865,7 @@ function main(): void {
 			suppressedCount: state.journalRows(day, "suppressed_finding").length,
 			notables: notablesFromJournal(findingRows),
 			paused: controls.paused ? { reason: controls.pausedReason, since: controls.pausedSince } : null,
+			triage: triageCounts(state, day),
 		});
 	};
 
@@ -857,6 +913,7 @@ function main(): void {
 			budget: INVESTIGATE_BUDGET,
 			reuse: INVESTIGATE_REUSE,
 			actionability: buildActionability(state),
+			reportOnlyFamilies: REPORT_ONLY_FAMILIES,
 			report,
 			log,
 		};
@@ -918,7 +975,7 @@ function main(): void {
 			const sup24 = state.journalRows(day, "suppressed_finding").length;
 			const err24 = state.journalRows(day, "check_error").length;
 			const usage = investigationUsage(state.journalRows(day, "investigation"));
-			return `monitor ${MONITOR_NAME} online. last run: ${lastRun ? `${lastRun.ts} ${lastRun.payload}` : "never"}. last 24h: ${day24} finding(s), ${sup24} suppressed, ${err24} check error(s), ${usage.used}/${INVESTIGATE_BUDGET.perDay} investigation prompt(s) used. unsent reports: ${state.unsent().length}. ${describeControls(controls)}`;
+			return `monitor ${MONITOR_NAME} online. last run: ${lastRun ? `${lastRun.ts} ${lastRun.payload}` : "never"}. last 24h: ${day24} finding(s), ${sup24} suppressed, ${err24} check error(s), ${usage.used}/${INVESTIGATE_BUDGET.perDay} investigation prompt(s) used, ${triageCounts(state, day).heldBack} held back by the jev gate. unsent reports: ${state.unsent().length}. ${describeControls(controls)}`;
 		}
 		if (cmd === "digest") return buildDigest();
 		if (cmd === "review") return buildSuppressionReview();

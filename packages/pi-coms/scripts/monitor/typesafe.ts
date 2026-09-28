@@ -23,9 +23,18 @@ const NoulAnswerSchema = z.object({
 	noul: z.number(),
 });
 
+// SIO-1883: captured from a live jev-1.13.0 Choice call on 2026-09-26. Every
+// option comes back in `probabilities`, including the ones at 0.
+const ChoiceAnswerSchema = z.object({
+	type: z.literal("choice"),
+	choice: z.string(),
+	confidence: z.number(),
+	probabilities: z.record(z.string(), z.number()),
+});
+
 const SystemOneResponseSchema = z.object({
 	model: z.string(),
-	answers: z.record(z.string(), NoulAnswerSchema),
+	answers: z.record(z.string(), z.discriminatedUnion("type", [NoulAnswerSchema, ChoiceAnswerSchema])),
 	usage: z.object({ input_tokens: z.number(), output_tokens: z.number() }).optional(),
 });
 
@@ -35,6 +44,16 @@ export interface NoulQuestion {
 	type: "noul";
 	instructions: string;
 }
+
+export interface ChoiceQuestion {
+	type: "choice";
+	instructions: string;
+	// Option id -> its meaning. Structured criteria carry exclusions better than a
+	// bare label list.
+	criteria: Record<string, string>;
+}
+
+export type Question = NoulQuestion | ChoiceQuestion;
 
 export function resolveTypeSafeApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
 	// NODE_ENV=test returns nothing so no unit test can reach the network or spend
@@ -51,7 +70,7 @@ export function resolveTypeSafeApiKey(env: NodeJS.ProcessEnv = process.env): str
  */
 export async function askSystemOne(options: {
 	state: unknown;
-	questions: Record<string, NoulQuestion>;
+	questions: Record<string, Question>;
 	apiKey: string;
 	signal?: AbortSignal;
 	model?: string;
