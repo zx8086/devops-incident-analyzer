@@ -355,7 +355,10 @@ export function notablesFromJournal(rows: { payload: string }[]): DigestNotable[
 		}
 		const parsed = FindingSchema.safeParse(payload);
 		if (!parsed.success || parsed.data.severity === "info") continue;
-		const uninvestigated = (payload as { diagnosis?: unknown }).diagnosis == null;
+		// A report-only row (SIO-1883) was never meant to be investigated, so it
+		// is not "uninvestigated" in the needs-attention sense.
+		const p = payload as { diagnosis?: unknown; report_only?: unknown };
+		const uninvestigated = p.diagnosis == null && p.report_only !== true;
 		const existing = byKey.get(parsed.data.dedup_key);
 		if (existing) {
 			existing.occurrences++;

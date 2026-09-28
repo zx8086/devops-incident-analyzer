@@ -3,7 +3,7 @@
 // injected; runCycle never reaches the network.
 import { describe, expect, test } from "bun:test";
 import { type CycleDeps, envFamilies, runCycle, triageCounts } from "../scripts/coms-net-monitor.ts";
-import { type Finding, formatDigest } from "../scripts/monitor/report.ts";
+import { type Finding, formatDigest, notablesFromJournal } from "../scripts/monitor/report.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
 
 const W = (key: string, over: Partial<Finding> = {}): Finding => ({
@@ -117,5 +117,39 @@ describe("triage counts (SIO-1883)", () => {
 		expect(formatDigest({ ...base, triage: { turns: 7, heldBack: 3 } })).toContain(
 			"- investigation: 7 turn(s), 3 finding(s) held back by the jev gate",
 		);
+	});
+});
+
+describe("report-only keeps what is already known (Greptile PR #912)", () => {
+	const diagnosis = {
+		probable_cause: "volume created by the autoscaler without the tag set",
+		affected_resources: [],
+		suggested_action: "tag the launch template",
+		evidence: [{ command: "aws ec2 describe-volumes", observation: "no Owner tag" }],
+		confidence: 0.9,
+	};
+
+	test("a report-only warn shows the diagnosis the agent already made, without a new turn", async () => {
+		const bill = W("bill", { family: "compliance", dedup_key: "compliance:bill" });
+		const d = harness([bill], {
+			reportOnlyFamilies: new Set(["compliance"]),
+			reuse: { cooldownMs: 3_600_000, windowMs: 86_400_000 },
+		});
+		d.state.journal("finding", { ...bill, diagnosis });
+		await runCycle(d);
+		expect(d.batches).toEqual([]);
+		expect(d.sent[0]).toContain("cause: volume created by the autoscaler");
+		const rows = d.state.journalRows(60_000, "finding").map((r) => JSON.parse(r.payload) as Record<string, unknown>);
+		const latest = rows.at(-1);
+		expect(latest?.report_only).toBe(true);
+		expect(latest?.reused_from).toBeDefined();
+	});
+
+	test("the digest does not count a report-only row as needing attention", () => {
+		const row = (over: Record<string, unknown>) => ({
+			payload: JSON.stringify({ ...W("x"), diagnosis: null, ...over }),
+		});
+		expect(notablesFromJournal([row({ report_only: true })])[0]?.uninvestigated).toBe(false);
+		expect(notablesFromJournal([row({})])[0]?.uninvestigated).toBe(true);
 	});
 });

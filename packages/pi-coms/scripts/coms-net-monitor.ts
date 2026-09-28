@@ -393,10 +393,12 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 		const skipped = new Map<string, string>();
 		// SIO-1883: report-only families. A warn there is reported, not investigated.
 		const reportOnly = deps.reportOnlyFamilies;
+		const reportOnlyKeys = new Set<string>();
 		const toInvestigate = findings.filter((f) => {
 			if (f.severity === "info" || f.family === "spoke-health") return false;
 			if (reportOnly?.has(f.family) && f.severity !== "critical") {
 				skipped.set(f.dedup_key, `report-only family (${f.family})`);
+				reportOnlyKeys.add(f.dedup_key);
 				return false;
 			}
 			return true;
@@ -411,6 +413,14 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 		let batch = toInvestigate;
 		if (deps.reuse) {
 			const { cooldownMs, windowMs } = deps.reuse;
+			// Greptile PR #912: a report-only warn still shows a diagnosis the agent
+			// already made for the same dedup_key, it just never asks for a new one.
+			for (const f of findings) {
+				if (!reportOnlyKeys.has(f.dedup_key)) continue;
+				const prior = deps.state.priorDiagnosis(f.dedup_key, Math.max(cooldownMs, windowMs));
+				const parsed = prior ? DiagnosisSchema.safeParse(prior.diagnosis) : null;
+				if (prior && parsed?.success) reused.set(f.dedup_key, { ts: prior.ts, diagnosis: parsed.data });
+			}
 			batch = [];
 			for (const f of toInvestigate) {
 				const prior = deps.state.priorDiagnosis(f.dedup_key, Math.max(cooldownMs, windowMs));
@@ -491,6 +501,9 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 				...f,
 				diagnosis: diagnoses?.get(f.dedup_key) ?? r?.diagnosis ?? null,
 				...(r ? { reused_from: r.ts } : {}),
+				// Greptile PR #912: lets the digest tell a deliberate report-only skip
+				// from a finding that still needs somebody to look at it.
+				...(reportOnlyKeys.has(f.dedup_key) ? { report_only: true } : {}),
 			});
 		}
 		const text = formatIncidentReport(
