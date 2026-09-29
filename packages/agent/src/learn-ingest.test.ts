@@ -3,7 +3,7 @@
 // SIO-1892: candidate drafts -> candidate facts, through the same gates as the
 // post-turn learner. Every dependency is injected; nothing touches a backend.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { CandidateDraftSchema, ingestCandidates } from "./learn-ingest.ts";
+import { CandidateDraftSchema, ingestCandidates, redactAwsIdentifiers } from "./learn-ingest.ts";
 import { parseIngestArgs } from "./learn-ingest-cli.ts";
 
 const NOW = "2026-09-29T12:00:00Z";
@@ -91,7 +91,7 @@ describe("ingestCandidates", () => {
 		expect(h.writes[0]?.text).toContain("Evidence:\n- aws rds describe-db-instances -> autoscaling off");
 	});
 
-	test("without a draft verdict the Jev estimate seeds task_success", async () => {
+	test("without a draft verdict the Jev estimate seeds task_success; with neither, the draft is unevaluated and skipped", async () => {
 		const h = harness();
 		await ingestCandidates([draft({ task_success: "", task_success_source: "" })], "incident-analyzer", {
 			...h.deps,
@@ -99,11 +99,60 @@ describe("ingestCandidates", () => {
 		});
 		expect(h.writes[0]?.annotations).toMatchObject({ task_success: "1", task_success_source: "jev" });
 		const skipped = harness();
-		await ingestCandidates([draft({ task_success: "", task_success_source: "" })], "incident-analyzer", {
+		const report = await ingestCandidates([draft({ task_success: "", task_success_source: "" })], "incident-analyzer", {
 			...skipped.deps,
 			gate: async () => ({ outcome: "skipped" as const, reason: "no-key" as const }),
 		});
-		expect(skipped.writes[0]?.annotations).toMatchObject({ task_success: "", task_success_source: "" });
+		expect(skipped.writes).toHaveLength(0);
+		expect(report.skipped).toEqual([{ name: "rds-storage-nearly-full", reason: "unevaluated:no-key" }]);
+		// reflect's negative case is filed as it is, evaluated or not
+		const rejected = harness();
+		await ingestCandidates(
+			[draft({ status: "rejected", task_success: "0", task_success_source: "fleet-verdict" })],
+			"incident-analyzer",
+			{ ...rejected.deps, gate: async () => ({ outcome: "skipped" as const, reason: "no-key" as const }) },
+		);
+		expect(rejected.writes[0]?.annotations).toMatchObject({ status: "rejected" });
+	});
+
+	// Greptile PR #920: only the review pane approves; a draft's claim is not a state.
+	test("a draft marked approved or superseded enters as a candidate", async () => {
+		const h = harness();
+		await ingestCandidates(
+			[draft({ status: "approved" }), draft({ skill_name: "second", status: "superseded" })],
+			"incident-analyzer",
+			{
+				...h.deps,
+				gate: applied(0.9),
+			},
+		);
+		expect(h.writes.map((w) => w.annotations.status)).toEqual(["candidate", "candidate"]);
+	});
+
+	// Greptile PR #920: a hand-written or reflect draft may carry AWS identifiers.
+	test("AWS identifiers are redacted before the gate sees the draft and before it is stored", async () => {
+		const h = harness();
+		let seen: string[] = [];
+		await ingestCandidates(
+			[
+				draft({
+					title: "Fix role arn:aws:iam::111122223333:role/x in 444455556666.",
+					evidence: [{ ref: "r", excerpt: "key AKIAABCDEFGHIJKLMNOP seen" }],
+				}),
+			],
+			"incident-analyzer",
+			{
+				...h.deps,
+				gate: async (input) => {
+					seen = input.events;
+					return applied(0.9)();
+				},
+			},
+		);
+		expect(seen.join("\n")).not.toMatch(/arn:aws|\b\d{12}\b|AKIA/);
+		expect(h.writes[0]?.text).not.toMatch(/arn:aws|\b\d{12}\b|AKIA/);
+		expect(h.writes[0]?.text).toContain("[ARN_REDACTED]");
+		expect(redactAwsIdentifiers("acct 111122223333")).toBe("acct [ACCOUNT_REDACTED]");
 	});
 
 	test("skips invalid drafts, rubric failures, Jev rejections, duplicates and refused writes with the reason", async () => {

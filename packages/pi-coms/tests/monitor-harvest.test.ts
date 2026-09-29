@@ -3,7 +3,7 @@
 // SIO-1892: journal diagnoses -> redacted candidate drafts. Built from a real
 // MonitorState journal, so the row shapes are the ones the monitor writes.
 import { describe, expect, test } from "bun:test";
-import { parseHarvestArgs } from "../scripts/fleet-harvest.ts";
+import { monitorName, parseHarvestArgs } from "../scripts/fleet-harvest.ts";
 import {
 	groupDiagnoses,
 	harvest,
@@ -46,8 +46,9 @@ function finding(dedupKey: string, extra: Record<string, unknown> = {}) {
 
 function journalFor(account: string, findings: Record<string, unknown>[], verdicts: Record<string, unknown>[] = []) {
 	const state = new MonitorState(":memory:");
-	for (const f of findings) state.journal("finding", f);
+	// The monitor's order: verdicts during triage, finding rows after investigation.
 	for (const v of verdicts) state.journal("actionability_verdict", v);
+	for (const f of findings) state.journal("finding", f);
 	const rows = state.journalRows(24 * 60 * 60 * 1000);
 	state.close();
 	return { rows, origin: { account, agent: "aws-spoke" } };
@@ -82,6 +83,64 @@ describe("harvestJournal", () => {
 			origin: originId(origin),
 		});
 		expect(out[0]?.evidence).toHaveLength(2);
+	});
+});
+
+describe("verdict join and origin (Greptile PR #920)", () => {
+	test("a verdict counts only for the finding of its own cycle", () => {
+		const origin = { account: ACCOUNT_A, agent: "aws-spoke" };
+		const verdict = (ts: string) => ({
+			ts,
+			kind: "actionability_verdict",
+			payload: JSON.stringify({
+				dedup_key: "k",
+				family: "rds",
+				severity: "warn",
+				resource: "r",
+				reason: "routine",
+				enforced: true,
+			}),
+		});
+		const findingRow = (ts: string) => ({ ts, kind: "finding", payload: JSON.stringify(finding("k")) });
+		// verdict at 10:00, finding investigated at 10:05: skipped
+		const same = harvestJournal([verdict("2026-09-28T10:00:00.000Z"), findingRow("2026-09-28T10:05:00.000Z")], origin);
+		expect(same[0]?.skippedReason).toBe("routine");
+		// verdict from a cycle three hours earlier: a fresh diagnosis is not tainted
+		const later = harvestJournal([verdict("2026-09-28T07:00:00.000Z"), findingRow("2026-09-28T10:05:00.000Z")], origin);
+		expect(later[0]?.skippedReason).toBeUndefined();
+		// verdict written after the finding belongs to a later cycle
+		const after = harvestJournal([findingRow("2026-09-28T10:05:00.000Z"), verdict("2026-09-28T10:10:00.000Z")], origin);
+		expect(after[0]?.skippedReason).toBeUndefined();
+	});
+
+	test("the monitor's fallback peer name never leaks the account id through the origin", () => {
+		const id = originId({ account: ACCOUNT_A, agent: `monitor-aws-${ACCOUNT_A}` });
+		expect(id).not.toContain(ACCOUNT_A);
+		expect(id).toMatch(/^[0-9a-f]{8}\/monitor-aws-\[ACCOUNT_REDACTED\]$/);
+	});
+
+	test("the checkpoint is read under the monitor that investigates the agent", () => {
+		expect(monitorName("aws-spoke")).toBe("monitor-aws-spoke");
+		expect(monitorName("monitor-aws-spoke")).toBe("monitor-aws-spoke");
+	});
+
+	test("the draft's advice and evidence come from the members that succeeded", () => {
+		const origin = { account: ACCOUNT_A, agent: "aws-spoke" };
+		const weak = finding("k1", {
+			diagnosis: { ...(finding("x").diagnosis as object), suggested_action: "Reboot it and hope", confidence: 0.3 },
+		});
+		const strong = finding("k2");
+		const { rows } = journalFor(ACCOUNT_A, [
+			weak,
+			strong,
+			finding("k3", { diagnosis: { ...(finding("x").diagnosis as object), confidence: 0.2 } }),
+		]);
+		const group = groupDiagnoses(harvestJournal(rows, origin))[0];
+		if (!group) throw new Error("no group");
+		const draft = toCandidateDraft(group);
+		expect(draft.task_success).toBe("1");
+		expect(draft.body.startsWith("Do: Enable storage autoscaling")).toBe(true);
+		expect(draft.body).not.toContain("Do: Reboot");
 	});
 });
 

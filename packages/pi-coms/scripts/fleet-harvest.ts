@@ -8,6 +8,8 @@
 // another's state. Every string in the output is redacted before it is written.
 //
 //   bun scripts/fleet-harvest.ts --bundle s3://bucket/fleet --spoke 111122223333/aws-spoke [--spoke ...] --out drafts.json
+//   (--spoke names the AGENT; the checkpoint is read under the monitor that
+//   investigates it, state/<account>/monitor-<agent>, as agent-bootstrap.sh writes it)
 //   bun scripts/fleet-harvest.ts --db tests/fixtures/state.db --origin 111122223333/aws-spoke --out drafts.json
 //
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -74,6 +76,12 @@ export function parseHarvestArgs(argv: string[]): HarvestArgs {
 	};
 }
 
+// Greptile PR #920: the monitor checkpoints under its OWN peer name
+// (PI_MONITOR_NAME = monitor-<agent>, coms-net-monitor.ts), not the agent's.
+export function monitorName(agent: string): string {
+	return agent.startsWith("monitor-") ? agent : `monitor-${agent}`;
+}
+
 async function readRows(dbPath: string, windowMs: number): Promise<JournalRow[]> {
 	const { MonitorState } = await import("./monitor/state.ts");
 	const state = new MonitorState(dbPath);
@@ -102,7 +110,11 @@ async function main(): Promise<void> {
 		try {
 			for (const spoke of args.spokes) {
 				const dbPath = path.join(scratch, `${spoke.account}-${spoke.agent}.db`);
-				const restored = await restoreCheckpoint(store, statePrefix(args.bundle, spoke.account, spoke.agent), dbPath);
+				const restored = await restoreCheckpoint(
+					store,
+					statePrefix(args.bundle, spoke.account, monitorName(spoke.agent)),
+					dbPath,
+				);
 				if (!restored.restored) {
 					console.error(`${spoke.agent}: ${restored.reason}${restored.blocked ? " (blocked)" : ""}`);
 					continue;

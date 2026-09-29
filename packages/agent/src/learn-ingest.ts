@@ -17,6 +17,32 @@ import {
 	type SkillProposal,
 } from "./skill-learner.ts";
 
+// Greptile PR #920: a draft need not come from the fleet harvest (which redacts
+// AWS identifiers itself), so the ingest boundary redacts them too, before the
+// Jev projection and before storage. packages/shared's redactor keeps these on
+// purpose (SIO-861: an address is often the subject), so the patterns live here.
+const AWS_REDACTIONS: readonly { re: RegExp; to: string }[] = [
+	{ re: /\barn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:\d{0,12}:\S+/g, to: "[ARN_REDACTED]" },
+	{ re: /\b\d{12}\b/g, to: "[ACCOUNT_REDACTED]" },
+	{ re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, to: "[AKID_REDACTED]" },
+];
+export function redactAwsIdentifiers(text: string): string {
+	let out = text;
+	for (const { re, to } of AWS_REDACTIONS) out = out.replace(re, to);
+	return out;
+}
+
+export function redactDraft(d: CandidateDraft): CandidateDraft {
+	return {
+		...d,
+		title: redactAwsIdentifiers(d.title),
+		applicability: redactAwsIdentifiers(d.applicability),
+		body: redactAwsIdentifiers(d.body),
+		evidence: d.evidence.map((e) => ({ ref: e.ref, excerpt: redactAwsIdentifiers(e.excerpt) })),
+		learned_from: redactAwsIdentifiers(d.learned_from),
+	};
+}
+
 // Default ON, kill-switch read (the capability-flag idiom).
 export function isLearningIngestEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const v = env.LEARNING_INGEST_ENABLED;
@@ -95,7 +121,7 @@ export async function ingestCandidates(drafts: unknown[], agent: string, deps: I
 			report.skipped.push({ name: `#${i}`, reason: `invalid draft: ${path || "shape"}` });
 			continue;
 		}
-		const d = parsed.data;
+		const d = redactDraft(parsed.data);
 		const proposal = draftToProposal(d);
 		const quality = lessonQuality(proposal);
 		if (!quality.ok) {
@@ -109,14 +135,23 @@ export async function ingestCandidates(drafts: unknown[], agent: string, deps: I
 			report.skipped.push({ name: d.skill_name, reason: `jev:${verdict.verdict.reason}` });
 			continue;
 		}
+		// Greptile PR #920: with neither a fleet verdict nor a Jev verdict the draft
+		// is unevaluated material; a reviewer should not meet it as a qualified
+		// candidate. A draft filed rejected (reflect's negative case) is kept as is.
+		if (verdict.outcome !== "applied" && d.task_success === "" && d.status !== "rejected") {
+			report.skipped.push({ name: d.skill_name, reason: `unevaluated:${verdict.reason}` });
+			continue;
+		}
 		if (!deps.dryRun && (await exists(agent, d.kind, d.skill_name))) {
 			report.skipped.push({ name: d.skill_name, reason: "duplicate" });
 			continue;
 		}
 		const nowIso = now();
+		// Greptile PR #920: a draft enters as a candidate whatever it claims; only
+		// the review pane approves. rejected is allowed in (reflect's negative case).
 		const annotations = buildSkillAnnotations(proposal, "", nowIso, d.learned_from, {
 			kind: d.kind,
-			status: d.status,
+			status: d.status === "rejected" ? "rejected" : "candidate",
 			source: d.source,
 			...taskSuccessFor(d, verdict),
 			...(d.target_dir ? { target_dir: d.target_dir } : {}),

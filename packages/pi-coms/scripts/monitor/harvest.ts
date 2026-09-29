@@ -23,8 +23,10 @@ export interface HarvestOrigin {
 
 // The account id never leaves the box: the origin is a short digest of it plus
 // the agent name, stable across runs so the same spoke groups with itself.
+// Greptile PR #920: the monitor's fallback peer name is monitor-aws-<account>,
+// so the agent name is redacted too.
 export function originId(origin: HarvestOrigin): string {
-	return `${createHash("sha256").update(origin.account).digest("hex").slice(0, 8)}/${origin.agent}`;
+	return `${createHash("sha256").update(origin.account).digest("hex").slice(0, 8)}/${redactMonitorText(origin.agent)}`;
 }
 
 export interface HarvestedDiagnosis {
@@ -51,19 +53,33 @@ function str(v: unknown): string {
 	return typeof v === "string" ? v : "";
 }
 
+// A verdict belongs to the cycle it was journaled in. The monitor writes the
+// verdict during triage and the finding row after investigation, so a verdict
+// counts for a finding only when it precedes it inside one cycle window.
+// Greptile PR #920: matching by dedup_key alone let a routine verdict from an
+// earlier cycle taint a later, fresh diagnosis of the same key.
+export const VERDICT_CYCLE_MS = 60 * 60 * 1000;
+
 // Finding rows with a diagnosis the spoke itself produced (a reused one is
 // skipped, or a flapping alarm would count the same lesson many times),
-// joined to actionability_verdict rows by dedup_key.
+// joined to the actionability_verdict rows of the same cycle by dedup_key.
 export function harvestJournal(rows: JournalRow[], origin: HarvestOrigin): HarvestedDiagnosis[] {
 	const id = originId(origin);
-	const skipped = new Map<string, string>();
+	const verdicts = new Map<string, { ms: number; reason: string }[]>();
 	for (const row of rows) {
 		if (row.kind !== "actionability_verdict") continue;
 		const p = asRecord(safeParse(row.payload));
 		if (!p) continue;
 		const key = str(p.dedup_key);
-		if (key) skipped.set(key, str(p.reason) || "skipped");
+		if (!key) continue;
+		const list = verdicts.get(key) ?? [];
+		list.push({ ms: Date.parse(row.ts), reason: str(p.reason) || "skipped" });
+		verdicts.set(key, list);
 	}
+	const skippedReasonFor = (key: string, findingTs: string): string | undefined => {
+		const at = Date.parse(findingTs);
+		return verdicts.get(key)?.find((v) => at - v.ms >= 0 && at - v.ms <= VERDICT_CYCLE_MS)?.reason;
+	};
 	const out: HarvestedDiagnosis[] = [];
 	for (const row of rows) {
 		if (row.kind !== "finding") continue;
@@ -81,6 +97,7 @@ export function harvestJournal(rows: JournalRow[], origin: HarvestOrigin): Harve
 		const probableCause = str(d.probable_cause).trim();
 		if (!probableCause) continue;
 		const dedupKey = str(p.dedup_key);
+		const skippedReason = skippedReasonFor(dedupKey, row.ts);
 		out.push({
 			origin: id,
 			ts: row.ts,
@@ -93,7 +110,7 @@ export function harvestJournal(rows: JournalRow[], origin: HarvestOrigin): Harve
 			suggestedAction: str(d.suggested_action).trim(),
 			evidence,
 			confidence: typeof d.confidence === "number" ? d.confidence : 0,
-			...(skipped.has(dedupKey) ? { skippedReason: skipped.get(dedupKey) } : {}),
+			...(skippedReason ? { skippedReason } : {}),
 		});
 	}
 	return out;
@@ -196,17 +213,27 @@ function sentence(s: string): string {
 
 // Every string is redacted here, once, before it leaves the box; the ingest
 // side treats the draft as data and never sends it to a model unredacted.
+// A diagnosis the fleet itself would stand behind: confident, and not
+// classified routine or duplicate by the monitor's gate in its cycle.
+export function succeeded(m: HarvestedDiagnosis): boolean {
+	return m.confidence >= 0.7 && !m.skippedReason;
+}
+
 export function toCandidateDraft(group: HarvestGroup, targetDir = DEFAULT_TARGET_DIR): CandidateDraft {
 	const r = (s: string) => redactMonitorText(s);
-	const actions = [...new Set(group.members.map((m) => m.suggestedAction).filter((a) => a.length > 0))];
-	const confirm = group.members.flatMap((m) => m.evidence.map((e) => e.command)).find((c) => c.length > 0);
+	// Greptile PR #920: the advice and the evidence come from the members that
+	// succeeded first, so a fleet-successful draft never presents an earlier,
+	// routine or low-confidence member's action as the one that worked.
+	const members = [...group.members].sort((a, b) => Number(succeeded(b)) - Number(succeeded(a)));
+	const actions = [...new Set(members.map((m) => m.suggestedAction).filter((a) => a.length > 0))];
+	const confirm = members.flatMap((m) => m.evidence.map((e) => e.command)).find((c) => c.length > 0);
 	const bodyParts = [
 		`Do: ${sentence(actions[0] ?? "investigate the finding with the evidence below")}`,
 		`Why: ${sentence(group.probableCause)} Seen ${group.members.length} time(s) across ${group.origins.length} spoke(s) (${group.family}).`,
 	];
 	if (actions.length > 1) bodyParts.push(`Also tried: ${actions.slice(1, 3).map(sentence).join(" ")}`);
 	if (confirm) bodyParts.push(`Confirm with: ${confirm}`);
-	const evidence = group.members
+	const evidence = members
 		.flatMap((m, i) =>
 			m.evidence.map((e, j) => ({
 				ref: `journal:${m.origin}#${i}.${j}`,
@@ -215,12 +242,11 @@ export function toCandidateDraft(group: HarvestGroup, targetDir = DEFAULT_TARGET
 		)
 		.slice(0, EVIDENCE_MAX);
 	if (evidence.length === 0) {
-		const m = group.members[0];
+		const m = members[0];
 		if (m) evidence.push({ ref: `journal:${m.origin}#0`, excerpt: cap(r(m.summary || m.probableCause), EXCERPT_MAX) });
 	}
-	// Task success comes from the fleet's own verdict: a confident diagnosis
-	// the monitor did not classify as routine or duplicate.
-	const succeeded = group.members.some((m) => m.confidence >= 0.7 && !m.skippedReason);
+	// Task success comes from the fleet's own verdict (succeeded above).
+	const anySucceeded = members.some(succeeded);
 	return {
 		kind: "runbook",
 		skill_name: slug(group.family, r(group.probableCause)),
@@ -231,8 +257,8 @@ export function toCandidateDraft(group: HarvestGroup, targetDir = DEFAULT_TARGET
 		source: "fleet",
 		learned_from: r(`fleet:${group.origins.join(",")}`),
 		status: "candidate",
-		task_success: succeeded ? "1" : "",
-		task_success_source: succeeded ? "fleet-verdict" : "",
+		task_success: anySucceeded ? "1" : "",
+		task_success_source: anySucceeded ? "fleet-verdict" : "",
 		target_dir: targetDir,
 	};
 }
