@@ -13,9 +13,11 @@
 import { createCheckpointer } from "@devops-agent/checkpointer";
 import { buildSubAgentSystemPrompt } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
+import { type BaseMessage, SystemMessage } from "@langchain/core/messages";
 import { END, START, StateGraph } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { isPiComsConfigured, readPiComsCapability, resolvePiComsConfig } from "../action-tools/pi-verifier.ts";
+import { buildAgentLiveMemorySection } from "../agent-live-memory.ts";
 import { initializeLangSmith } from "../langsmith.ts";
 import { createLlm } from "../llm.ts";
 import { getAgentByName } from "../prompt-context.ts";
@@ -34,6 +36,14 @@ export const PI_FLEET_AGENT_NAME = "pi-fleet-console";
 // the pi-coms config so every capability gate has one declaration site.
 export function isPiFleetGraphEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	return readPiComsCapability(env, "fleetGraph");
+}
+
+// SIO-1888: the console's system message, built per model call rather than once
+// at graph build, so the per-thread recall stashed at bootstrap (and this agent's
+// own runtime memory) reaches every turn. Pure apart from that read; exported for
+// the test.
+export function withFleetLiveMemory(systemPrompt: string, messages: BaseMessage[]): BaseMessage[] {
+	return [new SystemMessage(`${systemPrompt}${buildAgentLiveMemorySection(PI_FLEET_AGENT_NAME)}`), ...messages];
 }
 
 export interface BuildPiFleetGraphOptions {
@@ -70,7 +80,7 @@ export async function buildPiFleetGraph(options: BuildPiFleetGraphOptions = {}) 
 	const reactAgent = createReactAgent({
 		llm: createLlm("orchestrator", PI_FLEET_AGENT_NAME),
 		tools,
-		messageModifier: systemPrompt,
+		messageModifier: (messages) => withFleetLiveMemory(systemPrompt, messages),
 	});
 
 	async function converseFleet(state: PiFleetStateType) {

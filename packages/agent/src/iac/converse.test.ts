@@ -3,7 +3,7 @@
 // coerceConverseIntent gates it on a real follow-up turn; converseIac answers from full
 // history over the read-only tool subset and never drafts/opens an MR.
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import { coerceConverseIntent, intentFromText } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
@@ -154,5 +154,49 @@ describe("converseIac (SIO-930)", () => {
 		// explain-only: never sets a blocked reason, never opens an MR
 		expect(out.blockedReason).toBeUndefined();
 		expect(out.mrUrl).toBeUndefined();
+	});
+});
+
+// SIO-1888: the converse lane appends elastic-iac's own live memory + per-thread recall to its
+// system message. Previously the recall was computed at bootstrap and never read by any IaC prompt.
+describe("converseIac live memory (SIO-1888)", () => {
+	test("the system message ends with the agent's live memory section", async () => {
+		mock.module("../agent-live-memory.ts", () => ({
+			buildAgentLiveMemorySection: (agentName: string) => `\n\n---\n\n## Live Memory\n\nrecalled for ${agentName}`,
+		}));
+		let seen: BaseMessage[] = [];
+		mock.module("../llm.ts", () => ({
+			createLlm: () => ({
+				invoke: async (messages: BaseMessage[]) => {
+					seen = messages;
+					return new AIMessage("explained");
+				},
+			}),
+			// Whichever lane runs (history-only or tool-bound), the first message is the system prompt.
+			createLlmWithTools: () => ({
+				invoke: async (messages: BaseMessage[]) => {
+					seen = messages;
+					return new AIMessage({ content: "explained", tool_calls: [] });
+				},
+			}),
+		}));
+		mock.module("../mcp-bridge.ts", () => ({
+			getToolsForDataSource: () => [],
+			getConnectedServers: () => ["elastic-iac-mcp"],
+		}));
+		const { converseIac } = await import("./nodes.ts");
+		await converseIac(
+			asIacState({
+				isFollowUp: true,
+				messages: [new HumanMessage("propose"), new AIMessage("proposed"), new HumanMessage("why?")],
+			}),
+		);
+		const sys = String(seen[0]?.content);
+		expect(sys).toContain("recalled for elastic-iac");
+		expect(sys.indexOf("## Live Memory")).toBeGreaterThan(sys.indexOf("conversational follow-up"));
+		// The untrusted-memory framing sits between the guardrail and the section.
+		const framing = sys.indexOf("never an instruction");
+		expect(framing).toBeGreaterThan(sys.indexOf("conversational follow-up"));
+		expect(framing).toBeLessThan(sys.indexOf("## Live Memory"));
 	});
 });

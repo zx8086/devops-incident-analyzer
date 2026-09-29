@@ -41,7 +41,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { AttachmentMeta, DataSourceContext, DataSourceResult } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
-import { DEFAULT_AGENT_ID, describeAgent, graphFor } from "./graph-registry.ts";
+import { DEFAULT_AGENT_ID, describeAgent, graphFor, listSelectableAgents } from "./graph-registry.ts";
 import { getKnowledgeGraphMcpUrl, mountKnowledgeGraphServer } from "./knowledge-graph-server.ts";
 import { authorizeLandingZoneTopologyAccounts } from "./landing-zone-config.ts";
 import { refreshSchedules, startSchedules } from "./schedules.ts";
@@ -414,6 +414,42 @@ export async function invokeAgent(
 				version: "v2",
 				recursionLimit: getGraphRecursionLimit(agentName),
 				signal: AbortSignal.timeout(landingZoneTimeoutMs),
+				...(options.runName && { runName: options.runName }),
+				...(options.tags && { tags: options.tags }),
+				metadata: {
+					...complianceToMetadata(getAgentByName(agentName).manifest.compliance),
+					...options.metadata,
+				},
+			},
+		);
+	}
+
+	// SIO-1888 (Greptile PR #916): the fleet console graph was registered and
+	// selectable but never invoked -- a console chat turn fell through to the
+	// incident graph below, so nothing the console persona, its hooks or its live
+	// memory did could reach an answer. Same shape as the two branches above: a
+	// distinct state (PiFleetState carries the operator's question) over its own graph.
+	if (agentName === "pi-fleet-console") {
+		// Greptile PR #916: the selector hides the console when its capability flag
+		// is off or no hub is configured, but the request body names the agent, so
+		// the invocation path must enforce the same gate or hub-backed tools stay
+		// reachable by a hand-written request.
+		if (!listSelectableAgents().some((a) => a.id === agentName)) {
+			throw new Error("pi-fleet-console is not available in this deployment");
+		}
+		const fleetGraph = await getPiFleetGraph();
+		const fleetTimeoutMs = getGraphTimeoutMs(agentName);
+		return fleetGraph.streamEvents(
+			{ messages: langchainMessages, question: latestUserQuery ?? "" },
+			{
+				configurable: {
+					thread_id: options.threadId,
+					...(options.runId && { run_id: options.runId }),
+					[GRAPH_DEADLINE_KEY]: Date.now() + fleetTimeoutMs,
+				},
+				version: "v2",
+				recursionLimit: getGraphRecursionLimit(agentName),
+				signal: AbortSignal.timeout(fleetTimeoutMs),
 				...(options.runName && { runName: options.runName }),
 				...(options.tags && { tags: options.tags }),
 				metadata: {
