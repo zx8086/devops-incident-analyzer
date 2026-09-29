@@ -3,6 +3,7 @@
 // actionability.ts so the decision logic stays pure and offline-testable, and
 // only this file knows there is a network.
 
+import { ZodError } from "zod";
 import type { ActionabilityVerdict } from "./actionability.ts";
 import type { Finding } from "./report.ts";
 import { askSystemOne, type Question, resolveTypeSafeApiKey } from "./typesafe.ts";
@@ -65,6 +66,21 @@ export function redactMonitorText(text: string): string {
 	let out = text;
 	for (const { re, to } of REDACTIONS) out = out.replace(re, to);
 	return out;
+}
+
+// SIO-1885: why a request failed, as a fixed label. The raw message is never
+// forwarded: a JSON or schema error can quote response text (SIO-1833), and this
+// string lands in the journal and operator-visible logs. askSystemOne's own
+// non-2xx error is status-only by construction, so its status is safe to keep.
+export function classifyFailure(reason: unknown): string {
+	if (reason instanceof ZodError) return "schema";
+	if (reason instanceof SyntaxError) return "invalid json";
+	if (reason instanceof Error) {
+		if (reason.name === "TimeoutError" || reason.name === "AbortError") return "timeout";
+		const status = /^TypeSafe request failed with status (\d{3})$/.exec(reason.message)?.[1];
+		if (status) return `http ${status}`;
+	}
+	return "network";
 }
 
 const TRIAGE_Q = "triage";
@@ -165,10 +181,15 @@ export async function judgeActionability(
 	// would silently narrow the safety contract from "an error sends the batch" to
 	// "an error sends the findings that happened to fail", which is not a property
 	// anyone could reason about while reading the cycle.
-	if (results.some((r) => r.status !== "fulfilled")) {
-		throw new Error(
-			`actionability: ${results.filter((r) => r.status !== "fulfilled").length}/${results.length} requests failed`,
-		);
+	const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+	if (failures.length > 0) {
+		const counts = new Map<string, number>();
+		for (const f of failures) {
+			const c = classifyFailure(f.reason);
+			counts.set(c, (counts.get(c) ?? 0) + 1);
+		}
+		const why = [...counts].map(([c, n]) => (n > 1 ? `${c} x${n}` : c)).join(", ");
+		throw new Error(`actionability: ${failures.length}/${results.length} requests failed (${why})`);
 	}
 
 	for (const [i, result] of results.entries()) {
