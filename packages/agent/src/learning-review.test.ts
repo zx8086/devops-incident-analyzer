@@ -8,7 +8,16 @@ import * as realMemoryBackendNs from "./memory-backend.ts";
 const realMemoryBackend = { ...realMemoryBackendNs };
 mock.module("./memory-backend.ts", () => realMemoryBackend);
 
-import { applyEdits, listReviewRows, renderCandidateRunbook, reviewCandidate, rowFromHit } from "./learning-review.ts";
+import {
+	applyEdits,
+	defaultRunbookDir,
+	listReviewRows,
+	neutraliseLabels,
+	renderCandidateRunbook,
+	reviewCandidate,
+	rowFromHit,
+} from "./learning-review.ts";
+import { parseSkillFactBody } from "./skill-promote.ts";
 
 const NOW = "2026-09-29T12:00:00Z";
 const prevBackend = process.env.LIVE_MEMORY_BACKEND;
@@ -164,6 +173,63 @@ describe("reviewCandidate", () => {
 			"agents/incident-analyzer/agent.yaml",
 		]);
 		expect(proposal.files[0]?.contents).toContain("status: approved");
+		// Greptile PR #919: the branch names the owning agent.
+		expect((promote.mock.calls[0]?.[0] as { branch: string } | undefined)?.branch).toBe(
+			"agent/learn/incident-analyzer/skill-lag-corr",
+		);
+	});
+
+	// Greptile PR #919: an approval whose PR was skipped can be approved again to
+	// retry the PR, without a second transition.
+	test("re-approving an approved candidate retries the PR and writes no transition", async () => {
+		const { added } = await install([candidate({ status: "approved" })]);
+		const promote = mock(async (_proposal: unknown) => ({
+			status: "opened" as const,
+			url: "https://github.com/o/r/pull/11",
+		}));
+		const out = await reviewCandidate(
+			{ agent: "incident-analyzer", skillName: "lag-corr", action: "approve" },
+			{
+				// biome-ignore lint/suspicious/noExplicitAny: SIO-1891 - narrow test doubles
+				promote: promote as any,
+				fetchBase: async () => ({ status: "ok" as const, content: "name: incident-analyzer\nskills:\n  - x\n" }),
+				now: () => NOW,
+			},
+		);
+		expect(out).toMatchObject({ ok: true, status: "approved", prStatus: "opened" });
+		expect(added).toHaveLength(0);
+		expect(promote).toHaveBeenCalledTimes(1);
+	});
+
+	test("a stale expectedStatus is refused; reject on an approved candidate is refused", async () => {
+		const { added } = await install([candidate({ status: "approved" })]);
+		expect(
+			await reviewCandidate({
+				agent: "incident-analyzer",
+				skillName: "lag-corr",
+				action: "reject",
+				expectedStatus: "candidate",
+			}),
+		).toMatchObject({ ok: false, code: 409, reason: expect.stringContaining("is now approved") });
+		expect(
+			await reviewCandidate({ agent: "incident-analyzer", skillName: "lag-corr", action: "reject" }),
+		).toMatchObject({
+			ok: false,
+			code: 409,
+			reason: expect.stringContaining("supersede"),
+		});
+		expect(added).toHaveLength(0);
+	});
+
+	test("a skill and a runbook sharing a name are both listed and addressed by kind", async () => {
+		const { added } = await install([candidate(), candidate({ kind: "runbook", source: "fleet" })]);
+		const rows = await listReviewRows("incident-analyzer");
+		expect(rows.map((r) => r.kind)).toEqual(["skill", "runbook"]);
+		await reviewCandidate(
+			{ agent: "incident-analyzer", skillName: "lag-corr", kind: "runbook", action: "reject" },
+			{ now: () => NOW },
+		);
+		expect(added[0]?.annotations).toMatchObject({ kind: "runbook", status: "rejected" });
 	});
 
 	test("approve of a runbook candidate stages markdown under its target dir", async () => {
@@ -189,6 +255,9 @@ describe("reviewCandidate", () => {
 		const proposal = promote.mock.calls[0]?.[0] as { kind: string; files: Array<{ path: string; contents: string }> };
 		expect(proposal.kind).toBe("runbook");
 		expect(proposal.files[0]?.path).toBe("agents/incident-analyzer/knowledge/aws/runbooks/rds-storage-full.md");
+		expect((promote.mock.calls[0]?.[0] as { branch: string } | undefined)?.branch).toBe(
+			"agent/learn/incident-analyzer/runbook-rds-storage-full",
+		);
 		expect(proposal.files[0]?.contents).toContain("# Rds Storage Full (DRAFT)");
 		expect(proposal.files[0]?.contents).toContain("- source: fleet");
 	});
@@ -266,6 +335,21 @@ describe("helpers", () => {
 		expect(text).toContain("Correlate consumer lag with error spikes.");
 		expect(text).toContain("When to use: When a lag alert coincides");
 		expect(text).toContain("Procedure: New procedure text.");
+	});
+
+	test("defaultRunbookDir follows the owning agent", () => {
+		expect(defaultRunbookDir("incident-analyzer")).toBe("agents/incident-analyzer/knowledge/general/runbooks");
+		expect(defaultRunbookDir("elastic-iac")).toBe("agents/elastic-iac/knowledge/runbooks");
+	});
+
+	test("a reviewer's line that starts with a section label survives the round trip", () => {
+		const row = rowFromHit("incident-analyzer", candidate());
+		const text = applyEdits(row, { body: "First step.\nProcedure: not a new section\nEvidence: nor this" });
+		expect(neutraliseLabels("Procedure: x")).toBe(" Procedure: x");
+		const parsed = parseSkillFactBody(text);
+		expect(parsed.procedure).toContain("not a new section");
+		expect(parsed.procedure).toContain("nor this");
+		expect(parsed.evidence).toEqual(["correlated kafka lag with elastic errors"]);
 	});
 
 	test("renderCandidateRunbook emits catalog-shaped frontmatter", () => {

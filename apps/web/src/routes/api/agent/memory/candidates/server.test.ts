@@ -67,6 +67,20 @@ describe("/api/agent/memory/candidates (SIO-1891)", () => {
 		expect(await ok.json()).toEqual({ ok: true, status: "rejected" });
 	});
 
+	test("POST passes kind and expectedStatus through", async () => {
+		const res = await post({
+			agent: "incident-analyzer",
+			skillName: "lag-corr",
+			kind: "runbook",
+			expectedStatus: "candidate",
+			action: "reject",
+		});
+		expect(res.status).toBe(200);
+		expect(reviewCandidate).toHaveBeenCalledWith(
+			expect.objectContaining({ kind: "runbook", expectedStatus: "candidate", action: "reject" }),
+		);
+	});
+
 	test("POST validates the body", async () => {
 		expect((await post({ agent: "incident-analyzer", skillName: "Bad Name", action: "reject" })).status).toBe(400);
 		expect((await post({ agent: "incident-analyzer", skillName: "x", action: "explode" })).status).toBe(400);

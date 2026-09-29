@@ -17,6 +17,8 @@ const ReviewActionSchema = z
 	.object({
 		agent: z.enum(AGENT_IDS),
 		skillName: z.string().regex(/^[a-z0-9-]+$/),
+		kind: z.enum(["skill", "runbook"]).optional(),
+		expectedStatus: z.enum(["candidate", "approved", "rejected", "superseded"]).optional(),
 		action: z.enum(["approve", "reject", "supersede"]),
 		edits: z.object({ title: z.string().max(200).optional(), body: z.string().max(4000).optional() }).optional(),
 		supersedes: z

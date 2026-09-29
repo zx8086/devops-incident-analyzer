@@ -35,12 +35,17 @@ let busy = $state<string | null>(null);
 let editTitle = $state("");
 let editBody = $state("");
 let supersedeBy = $state("");
+// Greptile PR #919: switching agents starts a new load; a slower earlier one
+// must not replace the rows under the new heading.
+let loadToken = 0;
 
 async function load() {
+	const token = ++loadToken;
 	loading = true;
 	error = null;
 	try {
 		const res = await fetch(`/api/agent/memory/candidates?agent=${encodeURIComponent(agent)}`);
+		if (token !== loadToken) return;
 		if (!res.ok) {
 			error =
 				res.status === 404 ? "Learning review is disabled in this deployment." : `Failed to load (${res.status}).`;
@@ -48,11 +53,12 @@ async function load() {
 			return;
 		}
 		const body = (await res.json()) as { candidates: ReviewRowView[] };
+		if (token !== loadToken) return;
 		rows = body.candidates;
 	} catch {
-		error = "Failed to load candidates.";
+		if (token === loadToken) error = "Failed to load candidates.";
 	} finally {
-		loading = false;
+		if (token === loadToken) loading = false;
 	}
 }
 
@@ -70,7 +76,15 @@ function toggle(row: ReviewRowView) {
 async function act(row: ReviewRowView, action: "approve" | "reject" | "supersede") {
 	busy = row.skillName;
 	try {
-		const payload: Record<string, unknown> = { agent, skillName: row.skillName, action };
+		// kind disambiguates a skill and a runbook of one name; expectedStatus is the
+		// status this row showed, so a decision stored since is refused, not stacked.
+		const payload: Record<string, unknown> = {
+			agent,
+			skillName: row.skillName,
+			kind: row.kind === "runbook" ? "runbook" : "skill",
+			expectedStatus: row.status,
+			action,
+		};
 		if (action === "approve") payload.edits = { title: editTitle, body: editBody };
 		if (action === "supersede") payload.supersedes = supersedeBy.trim();
 		const res = await fetch("/api/agent/memory/candidates", {
@@ -131,7 +145,7 @@ const STATUS_CLASS: Record<ReviewRowView["status"], string> = {
       <p class="text-sm text-gray-500">No learning candidates for this agent yet.</p>
     {:else}
       <ul class="space-y-2">
-        {#each rows as row (row.skillName)}
+        {#each rows as row (`${row.kind}:${row.skillName}`)}
           <li class="rounded-lg border border-gray-200">
             <button
               type="button"
