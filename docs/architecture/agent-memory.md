@@ -220,6 +220,7 @@ AGENT_MEMORY_SYNC_WRITES=false      # true => async_processing=false: blocks are
 IAC_PROPOSAL_FACT_TTL_SECONDS=      # TTL on the iac-change proposal fact (W3); default 90d, expires once reconciliation writes the terminal fact
 SKILL_LEARNING_ENABLED=true         # post-turn learning-candidate learner for every agent (W6); kill-switch, agent-memory backend only
 LEARNING_JEV_GATE_ENABLED=true      # SIO-1889 Jev gate before the judge; kill-switch, self-skips without TYPESAFE_API_KEY
+LEARNING_REVIEW_ENABLED=true        # SIO-1891 review pane + /api/agent/memory/candidates; approve opens the promotion PR
 ```
 
 Requires a running Agent Memory Docker container connected to your Capella cluster, with an embedding model + LLM available for vector embeddings and summaries. With async writes (default), semantic search returns a block only once it reaches `status: "ready"`; with `AGENT_MEMORY_SYNC_WRITES=true` a block is `ready` by the time the write returns.

@@ -177,6 +177,23 @@ export {
 	writeCurationMirrorFacts,
 } from "./learn/curation-facts.ts";
 export {
+	gateLearning,
+	isLearningJevGateEnabled,
+	judgeLearning,
+	type LearningGateResult,
+	type LearningVerdict,
+	projectEvents,
+	transcriptToEvents,
+} from "./learning-gate.ts";
+export {
+	isLearningReviewEnabled,
+	listReviewRows,
+	type ReviewAction,
+	type ReviewResult,
+	type ReviewRow,
+	reviewCandidate,
+} from "./learning-review.ts";
+export {
 	type BootstrapContext,
 	type BootstrapResult,
 	getEvidenceToc,
@@ -294,19 +311,10 @@ export {
 	preGateSkip,
 	type SkillLearnerTurn,
 	type SkillProposal,
-	type SkillProposalSummary,
 	SkillProposalSchema,
+	type SkillProposalSummary,
 	TASK_SUCCESS_SOURCES,
 } from "./skill-learner.ts";
-export {
-	gateLearning,
-	isLearningJevGateEnabled,
-	judgeLearning,
-	type LearningGateResult,
-	type LearningVerdict,
-	projectEvents,
-	transcriptToEvents,
-} from "./learning-gate.ts";
 export {
 	installSkillLearner,
 	type OutcomeTurn,

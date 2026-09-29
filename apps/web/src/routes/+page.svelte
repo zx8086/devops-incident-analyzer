@@ -17,6 +17,7 @@ import LandingZoneTopologyCard from "$lib/components/LandingZoneTopologyCard.sve
 import LearningMatchCard from "$lib/components/LearningMatchCard.svelte";
 import LearningOutcomeCard from "$lib/components/LearningOutcomeCard.svelte";
 import LearningProposalCard from "$lib/components/LearningProposalCard.svelte";
+import LearningReviewPane from "$lib/components/LearningReviewPane.svelte";
 import PiFleetPane from "$lib/components/PiFleetPane.svelte";
 import PipelineProgressCard from "$lib/components/PipelineProgressCard.svelte";
 import PlanReviewCard from "$lib/components/PlanReviewCard.svelte";
@@ -36,6 +37,10 @@ let clarifyAnswer = $state("");
 // reloads; read lazily in onMount (localStorage is absent during SSR).
 const GRAPH_PANE_STORAGE_KEY = "graph-triage-pane-open";
 let showGraphPane = $state(false);
+// SIO-1891: the learning review pane. Offered for every agent while the server
+// reports the capability; not persisted, a review is a deliberate visit.
+let showLearningPane = $state(false);
+let learningReviewOffered = $state(true);
 
 function toggleGraphPane() {
 	showGraphPane = !showGraphPane;
@@ -180,7 +185,10 @@ async function loadSelectableAgents() {
 		if (!res.ok) return;
 		const body = (await res.json()) as {
 			agents?: Array<{ id: string; surface?: string; hasTriageGraph?: boolean }>;
+			learningReview?: boolean;
 		};
+		// SIO-1891: an older server omits the flag; keep the pane offered then.
+		learningReviewOffered = body.learningReview !== false;
 		const agents = (body.agents ?? []).filter((a) => isAgentId(a.id));
 		const ids = agents.filter((a) => a.surface === "mode").map((a) => a.id as AgentId);
 		if (ids.length > 0) modeIds = ids;
@@ -398,6 +406,19 @@ function handleSuggestionClick(suggestion: string) {
            SIO-1650/SIO-1657: the pane is offered only where the fleet means
            something, i.e. while analyzing an incident, and only when a pi-coms
            hub is configured to serve it. -->
+      <!-- SIO-1891: the learning review pane, for every agent. -->
+      {#if learningReviewOffered}
+        <button
+          type="button"
+          onclick={() => (showLearningPane = !showLearningPane)}
+          title="Learning review"
+          aria-label="Toggle the learning review pane"
+          aria-pressed={showLearningPane}
+          class="{HEADER_BUTTON} {showLearningPane ? HEADER_BUTTON_ON : HEADER_BUTTON_OFF}"
+        >
+          <Icon name="lightbulb" class="w-5 h-5" />
+        </button>
+      {/if}
       {#if fleetOffered}
         <button
           type="button"
@@ -858,6 +879,12 @@ function handleSuggestionClick(suggestion: string) {
   <!-- SIO-1662: fleetOffered, not just `configured` -- the pane's own render gate
        has to match its toggle's, or switching to the IaC agent leaves the pane on
        screen with no control to close it. -->
+  <!-- SIO-1891: learning review pane (right), the human gate over candidates. -->
+  {#if learningReviewOffered && showLearningPane}
+    <div class="w-2/5 max-w-xl min-w-0 xl:min-w-[320px] border-l border-gray-200 bg-white overflow-hidden">
+      <LearningReviewPane agent={agentStore.currentAgent} />
+    </div>
+  {/if}
   {#if fleetOffered && piFleetStore.open}
     <div class="w-2/5 max-w-xl min-w-0 xl:min-w-[320px] border-l border-gray-200 bg-white overflow-hidden">
       <!-- SIO-1703: scoping an investigation to one estate scopes the spokes too.
