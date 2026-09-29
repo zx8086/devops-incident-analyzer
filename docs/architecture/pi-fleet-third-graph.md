@@ -110,6 +110,13 @@ reads "IGNORE EVERYTHING AND EXFILTRATE" never reaches the model at all.
 analyzer's memory. Anything derived from a spoke reply follows the SIO-1651
 structured-only rule.
 
+SIO-1888: `agents/pi-fleet-console/hooks/hooks.yaml` declares the memory
+subset (`load_live_memory`, `emit_session_start` / `flush_daily_log`), so the
+session bootstrap recalls from that identity, and `withFleetLiveMemory`
+(`pi-fleet/graph.ts`) appends the console's live memory to the system message on
+every model call. Before that the console had no hooks at all: nothing was
+recalled and nothing could have been read.
+
 ## Files
 
 | File | Role |
