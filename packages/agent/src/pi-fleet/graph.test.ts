@@ -1,4 +1,5 @@
 // agent/src/pi-fleet/graph.test.ts
+
 // SIO-1888: the console's system message is assembled per call so the per-thread
 // recall reaches every turn. The section builder is stubbed; the seam under test
 // is that it is read at call time and lands in the leading SystemMessage.

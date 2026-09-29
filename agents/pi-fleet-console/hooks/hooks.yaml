@@ -1,3 +1,5 @@
+# agents/pi-fleet-console/hooks/hooks.yaml
+
 # SIO-1888: without hooks the console never ran load_live_memory, so its Agent
 # Memory identity (memory-backend.ts) was never recalled from. No wiki, no
 # knowledge graph, no memory-pr tree: only the memory subset.

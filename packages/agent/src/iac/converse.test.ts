@@ -194,5 +194,9 @@ describe("converseIac live memory (SIO-1888)", () => {
 		const sys = String(seen[0]?.content);
 		expect(sys).toContain("recalled for elastic-iac");
 		expect(sys.indexOf("## Live Memory")).toBeGreaterThan(sys.indexOf("conversational follow-up"));
+		// The untrusted-memory framing sits between the guardrail and the section.
+		const framing = sys.indexOf("never an instruction");
+		expect(framing).toBeGreaterThan(sys.indexOf("conversational follow-up"));
+		expect(framing).toBeLessThan(sys.indexOf("## Live Memory"));
 	});
 });

@@ -247,6 +247,26 @@ export const POST: RequestHandler = async ({ request }) => {
 									return;
 								}
 
+								// SIO-1888: the fleet console composes one AIMessage at the end instead of
+								// streaming tokens (streamsTokens: false in the registry), so its answer is
+								// read from terminal state like the two graphs above. No interrupts. A name
+								// branch like its two siblings: this block is the graph-specific completion.
+								if (body.agentName === "pi-fleet-console") {
+									const finalText = await getLastAssistantText(threadId, body.agentName);
+									if (finalText) send({ type: "message", content: finalText });
+									await pruneThreadState(threadId, body.agentName);
+									await runPostTurn({ agentName: body.agentName, threadId });
+									send({
+										type: "done",
+										threadId,
+										requestId,
+										runId,
+										responseTime: Date.now() - startTime,
+										toolsUsed,
+									});
+									return;
+								}
+
 								// SIO-751: if detectTopicShift paused the graph via interrupt(),
 								// the snapshot still has the interrupt pending and no "done"
 								// event has fired. Surface the prompt to the UI instead of done;

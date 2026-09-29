@@ -115,7 +115,10 @@ subset (`load_live_memory`, `emit_session_start` / `flush_daily_log`), so the
 session bootstrap recalls from that identity, and `withFleetLiveMemory`
 (`pi-fleet/graph.ts`) appends the console's live memory to the system message on
 every model call. Before that the console had no hooks at all: nothing was
-recalled and nothing could have been read.
+recalled and nothing could have been read. The same change added the console
+branch to `invokeAgent` (`apps/web/src/lib/server/agent.ts`) and its
+terminal-state completion in the stream route: until then a console chat turn
+fell through to the incident graph, so the registered graph was never run.
 
 ## Files
 

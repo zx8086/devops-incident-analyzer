@@ -424,6 +424,35 @@ export async function invokeAgent(
 		);
 	}
 
+	// SIO-1888 (Greptile PR #916): the fleet console graph was registered and
+	// selectable but never invoked -- a console chat turn fell through to the
+	// incident graph below, so nothing the console persona, its hooks or its live
+	// memory did could reach an answer. Same shape as the two branches above: a
+	// distinct state (PiFleetState carries the operator's question) over its own graph.
+	if (agentName === "pi-fleet-console") {
+		const fleetGraph = await getPiFleetGraph();
+		const fleetTimeoutMs = getGraphTimeoutMs(agentName);
+		return fleetGraph.streamEvents(
+			{ messages: langchainMessages, question: latestUserQuery ?? "" },
+			{
+				configurable: {
+					thread_id: options.threadId,
+					...(options.runId && { run_id: options.runId }),
+					[GRAPH_DEADLINE_KEY]: Date.now() + fleetTimeoutMs,
+				},
+				version: "v2",
+				recursionLimit: getGraphRecursionLimit(agentName),
+				signal: AbortSignal.timeout(fleetTimeoutMs),
+				...(options.runName && { runName: options.runName }),
+				...(options.tags && { tags: options.tags }),
+				metadata: {
+					...complianceToMetadata(getAgentByName(agentName).manifest.compliance),
+					...options.metadata,
+				},
+			},
+		);
+	}
+
 	const graph = await getGraph();
 	const graphTimeoutMs = getGraphTimeoutMs();
 	return graph.streamEvents(

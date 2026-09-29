@@ -1,4 +1,5 @@
 // agent/src/agent-live-memory.test.ts
+
 // SIO-1888: buildAgentLiveMemorySection reads the NAMED agent's runtime files and
 // the per-thread recall stash for the CURRENT request's thread.
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
