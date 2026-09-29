@@ -12,6 +12,7 @@ import { recordAgentFactNow, searchAgentMemory, selectedBackend } from "./memory
 import {
 	buildSkillAnnotations,
 	buildSkillFactText,
+	isRunbookDirFor,
 	LearningCandidateSchema,
 	lessonQuality,
 	type SkillProposal,
@@ -125,6 +126,11 @@ export async function ingestCandidates(drafts: unknown[], agent: string, deps: I
 			continue;
 		}
 		const d = redactDraft(parsed.data);
+		// SIO-1896: the PR path must stay inside this agent's knowledge tree.
+		if (d.target_dir && !isRunbookDirFor(agent, d.target_dir)) {
+			report.skipped.push({ name: d.skill_name, reason: "target_dir outside the agent's runbook tree" });
+			continue;
+		}
 		const proposal = draftToProposal(d);
 		const quality = lessonQuality(proposal);
 		if (!quality.ok) {

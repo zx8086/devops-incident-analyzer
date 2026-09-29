@@ -115,6 +115,23 @@ describe("ingestCandidates", () => {
 		expect(rejected.writes[0]?.annotations).toMatchObject({ status: "rejected" });
 	});
 
+	// SIO-1896 (Codex review): the PR path must stay inside the agent's knowledge tree.
+	test("a target_dir outside the agent's runbook tree, or another agent's, is refused", async () => {
+		const h = harness();
+		const report = await ingestCandidates(
+			[
+				draft({ skill_name: "escape", target_dir: "agents/incident-analyzer/skills" }),
+				draft({ skill_name: "other-agent", target_dir: "agents/elastic-iac/knowledge/runbooks" }),
+				draft({ skill_name: "fine", target_dir: "agents/incident-analyzer/knowledge/general/runbooks" }),
+			],
+			"incident-analyzer",
+			{ ...h.deps, gate: applied(0.9) },
+		);
+		expect(report.stored).toEqual(["fine"]);
+		expect(report.skipped.map((s) => s.name)).toEqual(["escape", "other-agent"]);
+		expect(report.skipped[0]?.reason).toContain("runbook tree");
+	});
+
 	// Greptile PR #920: only the review pane approves; a draft's claim is not a state.
 	test("a draft marked approved or superseded enters as a candidate", async () => {
 		const h = harness();
@@ -159,8 +176,7 @@ describe("ingestCandidates", () => {
 			[
 				draft({
 					supersedes: "old-111122223333",
-					target_dir: "agents/incident-analyzer/knowledge/444455556666/runbooks",
-					evidence: [{ ref: "journal:111122223333/x#0", excerpt: "ok" }],
+					evidence: [{ ref: "journal:111122223333/x#0", excerpt: "acct 444455556666 ok" }],
 				}),
 			],
 			"incident-analyzer",

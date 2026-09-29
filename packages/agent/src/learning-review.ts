@@ -14,7 +14,7 @@ import { recordDecision } from "./decision-recorder.ts";
 import { agentManifestPath, buildSkillPrBody, buildSkillPrFiles, buildSkillPrTitle } from "./learn/skill-pr.ts";
 import { type MemorySearchHit, recordAgentFactNow, searchAgentMemory, selectedBackend } from "./memory-backend.ts";
 import { promoteToMemory } from "./memory-promotion.ts";
-import { buildSkillFactText, CANDIDATE_STATUSES, latestPerSkill } from "./skill-learner.ts";
+import { buildSkillFactText, CANDIDATE_STATUSES, isRunbookDirFor, latestPerSkill } from "./skill-learner.ts";
 import { parseSkillFactBody } from "./skill-promote.ts";
 
 const logger = getLogger("agent:learning-review");
@@ -40,6 +40,11 @@ export interface ReviewRow {
 	learnedFrom: string;
 	supersedes?: string;
 	targetDir?: string;
+	// SIO-1896 (Codex review): the promotion PR's outcome, persisted on the
+	// approved fact once known, so a retry is offered only for a skipped or
+	// failed promotion and never re-creates an existing branch.
+	promotion?: string;
+	prUrl?: string;
 	title: string;
 	whenToUse: string;
 	body: string;
@@ -65,6 +70,8 @@ export function rowFromHit(agent: string, hit: MemorySearchHit): ReviewRow {
 		learnedFrom: a.learned_from ?? "",
 		...(a.supersedes ? { supersedes: a.supersedes } : {}),
 		...(a.target_dir ? { targetDir: a.target_dir } : {}),
+		...(a.promotion ? { promotion: a.promotion } : {}),
+		...(a.pr_url ? { prUrl: a.pr_url } : {}),
 		title: parsed.description ?? "",
 		whenToUse: parsed.whenToUse ?? "",
 		body: parsed.procedure,
@@ -104,7 +111,16 @@ export interface ReviewAction {
 }
 
 export type ReviewResult =
-	| { ok: true; status: CandidateStatus; prStatus?: string; prUrl?: string; prReason?: string }
+	| {
+			ok: true;
+			status: CandidateStatus;
+			prStatus?: string;
+			prUrl?: string;
+			prReason?: string;
+			// Codex SIO-1896: false when the promotion outcome could not be written, so
+			// the pane must not offer a retry the server would refuse.
+			promotionStored?: boolean;
+	  }
 	| { ok: false; code: 404 | 409 | 500; reason: string };
 
 export interface ReviewDeps {
@@ -189,6 +205,9 @@ export function renderCandidateRunbook(row: ReviewRow, text: string): string {
 	return lines.join("\n");
 }
 
+// SIO-1896: promotion outcomes the pane and the server let a reviewer retry.
+export const RETRYABLE_PROMOTIONS: ReadonlySet<string> = new Set(["skipped", "failed"]);
+
 export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {}): Promise<ReviewResult> {
 	if (selectedBackend() !== "agent-memory") {
 		return {
@@ -224,8 +243,12 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 		return { ok: false, code: 409, reason: `candidate "${row.skillName}" is already ${row.status}` };
 	}
 
-	const transition = async (patch: Partial<Record<string, string>>, text = hit.text): Promise<boolean> => {
-		const next: AnnotationMap = { ...hit.annotations, learned_at: now() };
+	const transition = async (
+		patch: Partial<Record<string, string>>,
+		text = hit.text,
+		base: AnnotationMap = hit.annotations,
+	): Promise<boolean> => {
+		const next: AnnotationMap = { ...base, learned_at: now() };
 		for (const [k, v] of Object.entries(patch)) if (v !== undefined) next[k] = v;
 		return recordAgentFactNow(action.agent, text, next);
 	};
@@ -267,10 +290,31 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 			reason: `candidate "${row.skillName}" has no confirmed task_success (thumbs-up or a completed outcome); refusing to approve`,
 		};
 	}
+	// SIO-1896 (Codex review): the stored target_dir becomes the PR path; refuse
+	// one outside this agent's knowledge tree before anything is written.
+	if (row.kind === "runbook" && row.targetDir && !isRunbookDirFor(row.agent, row.targetDir)) {
+		decision("skipped", "target-dir-outside-tree");
+		return {
+			ok: false,
+			code: 409,
+			reason: `candidate "${row.skillName}" targets a directory outside ${row.agent}'s runbook tree`,
+		};
+	}
 	// Greptile PR #919: a candidate approved earlier whose PR was skipped or failed
 	// can be approved again: no second transition (its edits are the approved text),
 	// only the promotion PR is retried.
 	const reapproval = row.status === "approved";
+	// Codex SIO-1896: only a skipped or failed promotion is retried. An opened one
+	// is done, a blocked one (secret scan) fails the same way on unchanged text,
+	// and an unrecorded outcome is treated as done rather than risk a duplicate.
+	if (reapproval && !RETRYABLE_PROMOTIONS.has(row.promotion ?? "")) {
+		decision("skipped", "already-promoted");
+		return {
+			ok: false,
+			code: 409,
+			reason: `candidate "${row.skillName}" already had its promotion (${row.promotion ?? "outcome not recorded"})${row.prUrl ? ` ${row.prUrl}` : ""}`,
+		};
+	}
 	const text = reapproval ? hit.text : applyEdits(row, action.edits);
 	if (!reapproval && !(await transition({ status: "approved" }, text))) {
 		return { ok: false, code: 500, reason: "transition not stored" };
@@ -278,6 +322,47 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 	const annotations: AnnotationMap = { ...hit.annotations, status: "approved", learned_at: now() };
 
 	const promote = deps.promote ?? promoteToMemory;
+	// Persist the outcome as a newer approved fact once it is known; readers keep
+	// the latest per skill, so the row then carries promotion and pr_url.
+	// Codex SIO-1896: the outcome is appended on top of the LATEST fact, re-read
+	// after the PR call: a reject or supersede written meanwhile wins, and a
+	// rejected write leaves the row without an outcome (no retry offered, a later
+	// approve refused). Both are said in the response. The re-read and the append
+	// are not atomic: Agent Memory facts are append-only with no version token, so
+	// the millisecond window between them is the same one every transition in this
+	// file has (the expectedStatus check above), accepted rather than a second
+	// corrective write.
+	const recordPromotion = async (status: string, url?: string): Promise<string | undefined> => {
+		const latest = (await latestHits(action.agent)).find(
+			(h) => h.annotations.skill_name === row.skillName && (h.annotations.kind ?? "skill") === row.kind,
+		);
+		const latestStatus = latest?.annotations.status;
+		if (!latest || latestStatus !== "approved") {
+			logger.warn(
+				{ agent: row.agent, skill: row.skillName, promotion: status, status: latestStatus },
+				"promotion outcome not stored: row changed during promotion",
+			);
+			return `row is now ${latestStatus ?? "missing"}; promotion outcome not recorded`;
+		}
+		const stored = await transition(
+			{ status: "approved", promotion: status, ...(url ? { pr_url: url } : {}) },
+			text,
+			latest.annotations,
+		);
+		if (stored) return undefined;
+		logger.warn({ agent: row.agent, skill: row.skillName, promotion: status }, "promotion outcome not stored");
+		return "promotion outcome not stored; the row cannot be retried from the pane";
+	};
+	const withNote = (reason: string | undefined, note: string | undefined) =>
+		note ? (reason ? `${reason}; ${note}` : note) : reason;
+	const done = (prStatus: string, prReason: string | undefined, note: string | undefined, prUrl?: string) => ({
+		ok: true as const,
+		status: "approved" as const,
+		prStatus,
+		...(prUrl ? { prUrl } : {}),
+		prReason: withNote(prReason, note),
+		promotionStored: note === undefined,
+	});
 	try {
 		if (row.kind === "runbook") {
 			const dir = row.targetDir ?? defaultRunbookDir(row.agent);
@@ -291,15 +376,17 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 				files: [{ path: `${dir}/${row.skillName}.md`, contents: renderCandidateRunbook(row, text) }],
 				labels: ["learning-review", "runbook-draft"],
 			});
+			const note = await recordPromotion(result.status, result.url);
 			decision("applied", `approved-runbook-${result.status}`);
-			return { ok: true, status: "approved", prStatus: result.status, prUrl: result.url, prReason: result.reason };
+			return done(result.status, result.reason, note, result.url);
 		}
 		const fetchBase = deps.fetchBase ?? fetchBaseFileContent;
 		const base = await fetchBase(agentManifestPath(row.agent));
 		if (base.status === "skipped" || base.content === null) {
 			const reason = base.status === "skipped" ? base.reason : "agent.yaml not found on base branch";
+			const note = await recordPromotion("skipped");
 			decision("applied", "approved-no-pr");
-			return { ok: true, status: "approved", prStatus: "skipped", prReason: reason };
+			return done("skipped", reason, note);
 		}
 		const built = buildSkillPrFiles(base.content, {
 			agent: row.agent,
@@ -308,8 +395,9 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 			body: text,
 		});
 		if (!built.ok) {
+			const note = await recordPromotion("skipped");
 			decision("applied", "approved-no-pr");
-			return { ok: true, status: "approved", prStatus: "skipped", prReason: built.reason };
+			return done("skipped", built.reason, note);
 		}
 		const result = await promote({
 			kind: "new-skill",
@@ -319,15 +407,17 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 			files: built.files,
 			labels: ["learning-review", "skill-promotion"],
 		});
+		const note = await recordPromotion(result.status, result.url);
 		decision("applied", `approved-skill-${result.status}`);
-		return { ok: true, status: "approved", prStatus: result.status, prUrl: result.url, prReason: result.reason };
+		return done(result.status, result.reason, note, result.url);
 	} catch (error) {
 		// The approval is recorded; only the PR failed. Say so rather than undo it.
 		logger.warn(
 			{ agent: row.agent, skill: row.skillName, error: error instanceof Error ? error.message : String(error) },
 			"promotion PR failed after approval",
 		);
+		const note = await recordPromotion("failed").catch(() => "promotion outcome not stored");
 		decision("applied", "approved-pr-failed");
-		return { ok: true, status: "approved", prStatus: "failed", prReason: "promotion PR failed" };
+		return done("failed", "promotion PR failed", note);
 	}
 }

@@ -14,6 +14,9 @@ export interface ReviewRowView {
 	taskSuccessSource: string;
 	learnedAt: string;
 	learnedFrom: string;
+	// SIO-1896: the promotion PR's persisted outcome (opened | skipped | failed).
+	promotion?: string;
+	prUrl?: string;
 	title: string;
 	whenToUse: string;
 	body: string;
@@ -23,7 +26,14 @@ export interface ReviewRowView {
 }
 
 export type ReviewResponse =
-	| { ok: true; status: ReviewRowView["status"]; prStatus?: string; prUrl?: string; prReason?: string }
+	| {
+			ok: true;
+			status: ReviewRowView["status"];
+			prStatus?: string;
+			prUrl?: string;
+			prReason?: string;
+			promotionStored?: boolean;
+	  }
 	| { ok: false; httpStatus: number; error: string };
 
 export function describeTaskSuccess(row: Pick<ReviewRowView, "taskSuccess" | "taskSuccessSource">): string {
@@ -32,8 +42,18 @@ export function describeTaskSuccess(row: Pick<ReviewRowView, "taskSuccess" | "ta
 	return "success unconfirmed";
 }
 
-export function canApprove(row: Pick<ReviewRowView, "status" | "taskSuccess">): boolean {
-	return row.status === "candidate" && row.taskSuccess === "1";
+// SIO-1896 (Codex review): an approved row may be approved again only when its
+// promotion PR was skipped or failed; the server retries the PR. An opened one
+// is done, a blocked one fails the same way on unchanged text, and an
+// unrecorded outcome is treated as done (mirrors RETRYABLE_PROMOTIONS server side).
+export function canApprove(row: Pick<ReviewRowView, "status" | "taskSuccess" | "promotion">): boolean {
+	if (row.taskSuccess !== "1") return false;
+	if (row.status === "candidate") return true;
+	return row.status === "approved" && (row.promotion === "skipped" || row.promotion === "failed");
+}
+
+export function approveLabel(row: Pick<ReviewRowView, "status">): string {
+	return row.status === "approved" ? "Retry PR" : "Approve";
 }
 
 export function isTerminal(row: Pick<ReviewRowView, "status">): boolean {
@@ -64,6 +84,14 @@ export function applyReviewResponse(
 				: res.prStatus
 					? `PR ${res.prStatus}${res.prReason ? ` (${res.prReason})` : ""}`
 					: undefined;
-		return { ...row, status: res.status, message: pr ?? `now ${res.status}` };
+		return {
+			...row,
+			status: res.status,
+			// Codex SIO-1896: an outcome the server could not store gives the row no
+			// promotion, so no retry is offered that the server would refuse.
+			...(res.prStatus && res.promotionStored !== false ? { promotion: res.prStatus } : {}),
+			...(res.prUrl ? { prUrl: res.prUrl } : {}),
+			message: pr ?? `now ${res.status}`,
+		};
 	});
 }

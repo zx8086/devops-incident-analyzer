@@ -95,6 +95,14 @@ export const CANDIDATE_STATUSES = ["candidate", "approved", "rejected", "superse
 export const CANDIDATE_SOURCES = ["turn", "hil", "reflect", "fleet"] as const;
 export const TASK_SUCCESS_SOURCES = ["", "jev", "feedback", "hil", "turn-outcome", "fleet-verdict", "reflect"] as const;
 
+// SIO-1896 (Codex review): a runbook candidate's target_dir is used verbatim
+// as the repository path of its promotion PR, so it is accepted only inside
+// the OWNING agent's knowledge tree, e.g. agents/<agent>/knowledge/aws/runbooks.
+export function isRunbookDirFor(agent: string, dir: string): boolean {
+	const m = /^agents\/([a-z0-9-]+)\/knowledge(?:\/[a-z0-9-]+)*\/runbooks$/.exec(dir);
+	return m !== null && m[1] === agent;
+}
+
 export const LearningCandidateSchema = z.object({
 	kind: z.enum(["skill", "runbook"]),
 	skill_name: z.string().regex(/^[a-z0-9-]+$/),

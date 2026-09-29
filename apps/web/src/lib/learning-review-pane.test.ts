@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyReviewResponse,
+	approveLabel,
 	canApprove,
 	describeTaskSuccess,
 	isTerminal,
@@ -31,7 +32,16 @@ describe("learning review pane rules (SIO-1891)", () => {
 	test("approve is offered only to a candidate with confirmed task_success", () => {
 		expect(canApprove(row())).toBe(false);
 		expect(canApprove(row({ taskSuccess: "1" }))).toBe(true);
+		// SIO-1896: an approved row retries its PR only when the promotion did not open.
 		expect(canApprove(row({ taskSuccess: "1", status: "approved" }))).toBe(false);
+		expect(canApprove(row({ taskSuccess: "1", status: "approved", promotion: "opened" }))).toBe(false);
+		// Codex SIO-1896: blocked content fails the same way again, so no retry
+		expect(canApprove(row({ taskSuccess: "1", status: "approved", promotion: "blocked" }))).toBe(false);
+		expect(canApprove(row({ taskSuccess: "1", status: "approved", promotion: "failed" }))).toBe(true);
+		expect(canApprove(row({ taskSuccess: "1", status: "approved", promotion: "skipped" }))).toBe(true);
+		expect(approveLabel(row({ status: "approved" }))).toBe("Retry PR");
+		expect(approveLabel(row())).toBe("Approve");
+		expect(canApprove(row({ taskSuccess: "", status: "approved" }))).toBe(false);
 		expect(isTerminal(row({ status: "superseded" }))).toBe(true);
 	});
 
@@ -66,7 +76,25 @@ describe("learning review pane rules (SIO-1891)", () => {
 			prStatus: "opened",
 			prUrl: "https://github.com/o/r/pull/9",
 		});
-		expect(out[0]).toMatchObject({ status: "approved", message: "PR opened: https://github.com/o/r/pull/9" });
+		expect(out[0]).toMatchObject({
+			status: "approved",
+			promotion: "opened",
+			prUrl: "https://github.com/o/r/pull/9",
+			message: "PR opened: https://github.com/o/r/pull/9",
+		});
+		expect(canApprove(out[0] as ReviewRowView)).toBe(false);
+		// Codex SIO-1896: an outcome the server could not store gives no promotion,
+		// so no retry is offered that the server would refuse with 409.
+		const unstored = applyReviewResponse([row({ taskSuccess: "1" })], row(), {
+			ok: true,
+			status: "approved",
+			prStatus: "failed",
+			prReason: "promotion PR failed; promotion outcome not stored",
+			promotionStored: false,
+		});
+		expect(unstored[0]?.promotion).toBeUndefined();
+		expect(canApprove(unstored[0] as ReviewRowView)).toBe(false);
+		expect(unstored[0]?.message).toContain("promotion outcome not stored");
 		const skipped = applyReviewResponse([row()], row(), {
 			ok: true,
 			status: "approved",

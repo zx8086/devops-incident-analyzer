@@ -2,7 +2,13 @@
 import { describe, expect, test } from "bun:test";
 import { validateSkillFile } from "@devops-agent/gitagent-bridge";
 import type { AnnotationMap } from "@devops-agent/shared";
-import { agentManifestPath, agentSkillDir, buildSkillPrBody, buildSkillPrFiles, buildSkillPrTitle } from "./skill-pr.ts";
+import {
+	agentManifestPath,
+	agentSkillDir,
+	buildSkillPrBody,
+	buildSkillPrFiles,
+	buildSkillPrTitle,
+} from "./skill-pr.ts";
 
 const AGENT = "incident-analyzer";
 
@@ -114,8 +120,12 @@ describe("buildSkillPrFiles (SIO-1346)", () => {
 
 describe("buildSkillPrTitle / buildSkillPrBody (SIO-1346)", () => {
 	test("title names the skill and the owning agent", () => {
-		expect(buildSkillPrTitle(AGENT, "lag-correlation")).toBe("Promote learned skill: lag-correlation (incident-analyzer)");
-		expect(buildSkillPrTitle("elastic-iac", "lag-correlation")).toBe("Promote learned skill: lag-correlation (elastic-iac)");
+		expect(buildSkillPrTitle(AGENT, "lag-correlation")).toBe(
+			"Promote learned skill: lag-correlation (incident-analyzer)",
+		);
+		expect(buildSkillPrTitle("elastic-iac", "lag-correlation")).toBe(
+			"Promote learned skill: lag-correlation (elastic-iac)",
+		);
 	});
 
 	// SIO-1889: another agent's candidate lands under ITS tree, never the orchestrator's.

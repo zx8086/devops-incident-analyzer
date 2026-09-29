@@ -309,6 +309,7 @@ export {
 	buildSkillFactText,
 	CANDIDATE_SOURCES,
 	CANDIDATE_STATUSES,
+	isRunbookDirFor,
 	isSkillLearningEnabled,
 	judgeTurn,
 	type LearningCandidate,
