@@ -8,6 +8,7 @@
 import type { AgentId } from "$lib/agent-ids";
 import {
 	applyReviewResponse,
+	approveLabel,
 	canApprove,
 	describeTaskSuccess,
 	isTerminal,
@@ -212,10 +213,10 @@ const STATUS_CLASS: Record<ReviewRowView["status"], string> = {
                       type="button"
                       onclick={() => act(row, "approve")}
                       disabled={busy === rowKey(row) || !canApprove(row)}
-                      title={canApprove(row) ? "Approve and open the promotion PR" : "Needs a confirmed task_success (thumbs-up or a completed outcome)"}
+                      title={canApprove(row) ? (row.status === "approved" ? "Retry the promotion PR" : "Approve and open the promotion PR") : "Needs a confirmed task_success (thumbs-up or a completed outcome)"}
                       class="rounded bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      Approve
+                      {approveLabel(row)}
                     </button>
                     {#if row.status !== "approved"}
                       <button

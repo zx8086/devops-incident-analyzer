@@ -27,8 +27,18 @@ export interface GitHubClient {
 	// Create a single commit containing all files on top of baseSha. Returns the
 	// new commit sha. Does not move any ref.
 	createCommitWithFiles(opts: { baseSha: string; files: GitHubFile[]; message: string }): Promise<string>;
-	// Create a new branch ref pointing at commitSha. Fails if the branch exists.
-	createBranch(branch: string, commitSha: string): Promise<void>;
+	// Create the branch ref at commitSha ("created"), or report that it already
+	// exists ("exists"). Refs are never moved or force-reset (Codex SIO-1896:
+	// GitHub's ref API has no compare-and-swap, so any move-then-check races a
+	// concurrent caller); creation itself is atomic and is the only ownership test.
+	createBranch(branch: string, commitSha: string): Promise<"created" | "exists">;
+	// The newest PR whose head is this branch, in any state (Greptile PR #924): an
+	// open one is reused by a retry, a closed or merged one refuses it (SIO-1357
+	// fail-closed on repeated closure), and only a branch with no PR at all is a
+	// partial attempt that createBranch may move.
+	// Scoped to the configured base (Codex SIO-1896): a PR from the same branch
+	// into another base is not this promotion. Without a base: any PR on the head.
+	findPullRequest(head: string, base?: string): Promise<(CreatedPullRequest & { state: "open" | "closed" }) | null>;
 	// Open a PR from head into base.
 	createPullRequest(opts: { title: string; head: string; base: string; body: string }): Promise<CreatedPullRequest>;
 	// Add labels to an existing PR. Separate from createPullRequest because the
@@ -69,6 +79,18 @@ async function ghFetch<T>(config: GitHubClientConfig, method: string, path: stri
 // blobs + a tree, then creates the branch ref and the PR.
 export function createFetchGitHubClient(config: GitHubClientConfig): GitHubClient {
 	const repoPath = `/repos/${config.repo}`;
+	const findPr = async (head: string, base?: string) => {
+		const owner = config.repo.split("/")[0] ?? "";
+		// newest first (GitHub sorts by created desc), any state
+		const query = `state=all&per_page=1&head=${encodeURIComponent(`${owner}:${head}`)}${base ? `&base=${encodeURIComponent(base)}` : ""}`;
+		const prs = await ghFetch<Array<{ html_url: string; number: number; state: "open" | "closed" }>>(
+			config,
+			"GET",
+			`${repoPath}/pulls?${query}`,
+		);
+		const pr = prs[0];
+		return pr ? { url: pr.html_url, number: pr.number, state: pr.state } : null;
+	};
 	return {
 		async getBaseSha(base) {
 			const ref = await ghFetch<{ object: { sha: string } }>(config, "GET", `${repoPath}/git/ref/heads/${base}`);
@@ -127,7 +149,21 @@ export function createFetchGitHubClient(config: GitHubClientConfig): GitHubClien
 		},
 
 		async createBranch(branch, commitSha) {
-			await ghFetch(config, "POST", `${repoPath}/git/refs`, { ref: `refs/heads/${branch}`, sha: commitSha });
+			try {
+				await ghFetch(config, "POST", `${repoPath}/git/refs`, { ref: `refs/heads/${branch}`, sha: commitSha });
+				return "created";
+			} catch (error) {
+				// Only GitHub's own "Reference already exists" is an existing ref; any
+				// other 422 (an invalid ref name, say) propagates (Codex SIO-1896).
+				if (error instanceof Error && / 422 /.test(error.message) && /Reference already exists/.test(error.message)) {
+					return "exists";
+				}
+				throw error;
+			}
+		},
+
+		async findPullRequest(head, base) {
+			return findPr(head, base);
 		},
 
 		async createPullRequest({ title, head, base, body }) {

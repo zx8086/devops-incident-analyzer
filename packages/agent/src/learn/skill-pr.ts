@@ -30,7 +30,10 @@ export interface SkillPrInput {
 	body: string;
 }
 
-export type SkillPrFilesResult = { ok: true; files: MemoryPrFile[] } | { ok: false; reason: string };
+// terminal: the failure repeats on every retry (the skill is already listed);
+// otherwise the base manifest may be repaired later and a retry can succeed
+// (Codex SIO-1896).
+export type SkillPrFilesResult = { ok: true; files: MemoryPrFile[] } | { ok: false; reason: string; terminal: boolean };
 
 // baseManifestYaml MUST be the agent.yaml content fetched from the base branch
 // (fetchBaseFileContent) -- the memory-pr tree write replaces the whole file,
@@ -41,12 +44,16 @@ export function buildSkillPrFiles(baseManifestYaml: string, input: SkillPrInput)
 	try {
 		edit = addSkillToManifest(baseManifestYaml, input.skillName);
 	} catch (error) {
-		return { ok: false, reason: `agent.yaml edit failed: ${error instanceof Error ? error.message : String(error)}` };
+		return {
+			ok: false,
+			reason: `agent.yaml edit failed: ${error instanceof Error ? error.message : String(error)}`,
+			terminal: false,
+		};
 	}
 	if (!edit.changed) {
 		// Second dedup layer, independent of skillProposalExists: the manifest already
 		// lists the skill (e.g. a sibling PR merged), so there is nothing to activate.
-		return { ok: false, reason: `skill "${input.skillName}" already listed in agent.yaml` };
+		return { ok: false, reason: `skill "${input.skillName}" already listed in agent.yaml`, terminal: true };
 	}
 	const markdown = renderSkillMarkdown({ annotations: input.annotations, body: input.body }, { mode: "pr" });
 	return {

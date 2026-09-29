@@ -158,15 +158,14 @@ export async function runIncidentClose(ctx: ClosureContext, deps: ClosureDeps): 
 
 // SIO-1357: idempotency against duplicate PRs on repeated closure of the same
 // thread comes from the deterministic branch name (buildWikiPageProposal:
-// agent/learn/closure-<thread>) plus GitHub's own ref semantics, not a
-// separate check here. createBranch (memory-pr/src/github-client.ts) POSTs
-// `refs/heads/<branch>` unconditionally -- GitHub 422s if the ref already
-// exists, ghFetch throws on any non-ok response, and the executor's own
-// per-step try/catch (runOne) converts that throw into a "failed" learn
-// StepRunResult rather than a second PR. A repeat "close incident" for the
-// same thread therefore fails closed (no PR, logged failure) instead of
-// opening a duplicate -- verified by the "second closure attempt on the same
-// thread fails closed" test below.
+// agent/learn/closure-<thread>) plus openMemoryPr's own lookup, not a
+// separate check here. Since Greptile PR #924 / Codex SIO-1896, openMemoryPr
+// asks GitHub for the newest PR on that branch first and returns "blocked"
+// with its URL whether it is open or closed; a branch with no PR at all (a
+// partial earlier attempt) is a retryable "skipped" that names the branch to
+// delete. Refs are never moved. A repeat "close incident" for the same thread
+// therefore never opens a duplicate -- verified by the "second closure attempt
+// on the same thread fails closed" test below.
 
 // Production ClosureDeps: the real Bedrock call (createLlm + invokeWithDeadline,
 // mirroring learnDistill in learn/distill.ts) and the real memory-pr write.

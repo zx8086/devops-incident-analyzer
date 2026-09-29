@@ -14,7 +14,7 @@ import { recordDecision } from "./decision-recorder.ts";
 import { agentManifestPath, buildSkillPrBody, buildSkillPrFiles, buildSkillPrTitle } from "./learn/skill-pr.ts";
 import { type MemorySearchHit, recordAgentFactNow, searchAgentMemory, selectedBackend } from "./memory-backend.ts";
 import { promoteToMemory } from "./memory-promotion.ts";
-import { buildSkillFactText, CANDIDATE_STATUSES, latestPerSkill } from "./skill-learner.ts";
+import { buildSkillFactText, CANDIDATE_STATUSES, isRunbookDirFor, latestPerSkill } from "./skill-learner.ts";
 import { parseSkillFactBody } from "./skill-promote.ts";
 
 const logger = getLogger("agent:learning-review");
@@ -40,18 +40,77 @@ export interface ReviewRow {
 	learnedFrom: string;
 	supersedes?: string;
 	targetDir?: string;
+	// SIO-1896: the promotion PR's outcome, read from a separate kind:promotion
+	// fact (Greptile #924: an outcome stored as another approved skill fact could
+	// outrank a reject written meanwhile). A retry is offered only for a skipped
+	// or failed promotion and never re-creates an existing branch.
+	promotion?: string;
+	prUrl?: string;
 	title: string;
 	whenToUse: string;
 	body: string;
 	evidence: string[];
 }
 
-export function rowFromHit(agent: string, hit: MemorySearchHit): ReviewRow {
+function strictlyAfter(stamp: string, previous: string | undefined): string {
+	const prev = Date.parse(previous ?? "");
+	const next = Date.parse(stamp);
+	return Number.isFinite(prev) && next <= prev ? new Date(prev + 1).toISOString() : stamp;
+}
+
+function parseStatus(raw: string | undefined): CandidateStatus {
+	return (CANDIDATE_STATUSES as readonly string[]).includes(raw ?? "") ? (raw as CandidateStatus) : "candidate";
+}
+
+// The latest promotion outcome per (target kind, skill name), each its own fact.
+export type PromotionOutcome = { promotion: string; prUrl?: string };
+
+function promotionKey(kind: string, skillName: string): string {
+	return `${kind}:${skillName}`;
+}
+
+// Codex SIO-1896: one targeted read per APPROVED candidate (the only rows a
+// retry decision needs), keyed by the candidate's own kind and name. No bulk
+// read: a bounded bulk result could go stale or miss a row once history is
+// long, and the fallback it needed was where the last two defects lived.
+// Codex SIO-1896: deterministic retrieval ignores `limit` (memory-backend omits
+// relevant_k), so an agent can have far more approved candidates than 64 per
+// kind; the reads run in bounded batches rather than one request per row at once.
+const OUTCOME_READ_CONCURRENCY = 8;
+
+async function latestPromotions(agent: string, candidates: MemorySearchHit[]): Promise<Map<string, PromotionOutcome>> {
+	const out = new Map<string, PromotionOutcome>();
+	const approved = candidates.filter((h) => h.annotations.status === "approved" && h.annotations.skill_name);
+	for (let i = 0; i < approved.length; i += OUTCOME_READ_CONCURRENCY) {
+		await Promise.all(
+			approved.slice(i, i + OUTCOME_READ_CONCURRENCY).map(async (h) => {
+				const target_kind = h.annotations.kind ?? "skill";
+				const skill_name = h.annotations.skill_name ?? "";
+				const hits = await searchAgentMemory(agent, "", { kind: "promotion", target_kind, skill_name }, 8, {
+					deterministic: true,
+				});
+				let best: MemorySearchHit | undefined;
+				for (const hit of hits) {
+					if (!hit.annotations.promotion) continue;
+					if (!best || newest(hit) > newest(best)) best = hit;
+				}
+				if (!best) return;
+				out.set(promotionKey(target_kind, skill_name), {
+					promotion: best.annotations.promotion ?? "",
+					...(best.annotations.pr_url ? { prUrl: best.annotations.pr_url } : {}),
+				});
+			}),
+		);
+	}
+	return out;
+}
+
+const newest = (h: MemorySearchHit) => Date.parse(h.annotations.learned_at ?? "") || 0;
+
+export function rowFromHit(agent: string, hit: MemorySearchHit, outcome?: PromotionOutcome): ReviewRow {
 	const a = hit.annotations;
 	const parsed = parseSkillFactBody(hit.text);
-	const status = (CANDIDATE_STATUSES as readonly string[]).includes(a.status ?? "")
-		? (a.status as CandidateStatus)
-		: "candidate";
+	const status = parseStatus(a.status);
 	return {
 		agent,
 		skillName: a.skill_name ?? "",
@@ -65,6 +124,8 @@ export function rowFromHit(agent: string, hit: MemorySearchHit): ReviewRow {
 		learnedFrom: a.learned_from ?? "",
 		...(a.supersedes ? { supersedes: a.supersedes } : {}),
 		...(a.target_dir ? { targetDir: a.target_dir } : {}),
+		...(outcome ? { promotion: outcome.promotion } : {}),
+		...(outcome?.prUrl ? { prUrl: outcome.prUrl } : {}),
 		title: parsed.description ?? "",
 		whenToUse: parsed.whenToUse ?? "",
 		body: parsed.procedure,
@@ -84,7 +145,13 @@ async function latestHits(agent: string): Promise<MemorySearchHit[]> {
 
 export async function listReviewRows(agent: string): Promise<ReviewRow[]> {
 	if (selectedBackend() !== "agent-memory") return [];
-	return (await latestHits(agent)).map((h) => rowFromHit(agent, h)).filter((r) => r.skillName !== "");
+	const hits = await latestHits(agent);
+	const promotions = await latestPromotions(agent, hits);
+	return hits
+		.map((h) =>
+			rowFromHit(agent, h, promotions.get(promotionKey(h.annotations.kind ?? "skill", h.annotations.skill_name ?? ""))),
+		)
+		.filter((r) => r.skillName !== "");
 }
 
 export interface ReviewAction {
@@ -104,7 +171,16 @@ export interface ReviewAction {
 }
 
 export type ReviewResult =
-	| { ok: true; status: CandidateStatus; prStatus?: string; prUrl?: string; prReason?: string }
+	| {
+			ok: true;
+			status: CandidateStatus;
+			prStatus?: string;
+			prUrl?: string;
+			prReason?: string;
+			// Codex SIO-1896: false when the promotion outcome could not be written, so
+			// the pane must not offer a retry the server would refuse.
+			promotionStored?: boolean;
+	  }
 	| { ok: false; code: 404 | 409 | 500; reason: string };
 
 export interface ReviewDeps {
@@ -189,6 +265,9 @@ export function renderCandidateRunbook(row: ReviewRow, text: string): string {
 	return lines.join("\n");
 }
 
+// SIO-1896: promotion outcomes the pane and the server let a reviewer retry.
+export const RETRYABLE_PROMOTIONS: ReadonlySet<string> = new Set(["skipped", "failed"]);
+
 export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {}): Promise<ReviewResult> {
 	if (selectedBackend() !== "agent-memory") {
 		return {
@@ -198,12 +277,18 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 		};
 	}
 	const now = deps.now ?? (() => new Date().toISOString());
-	const candidates = (await latestHits(action.agent)).filter((h) => h.annotations.skill_name === action.skillName);
+	const hits = await latestHits(action.agent);
+	const candidates = hits.filter((h) => h.annotations.skill_name === action.skillName);
+	const promotions = await latestPromotions(action.agent, candidates);
 	const hit = action.kind
 		? candidates.find((h) => (h.annotations.kind ?? "skill") === action.kind)
 		: (candidates.find((h) => (h.annotations.kind ?? "skill") === "skill") ?? candidates[0]);
 	if (!hit) return { ok: false, code: 404, reason: `no candidate "${action.skillName}" for agent ${action.agent}` };
-	const row = rowFromHit(action.agent, hit);
+	const row = rowFromHit(
+		action.agent,
+		hit,
+		promotions.get(promotionKey(hit.annotations.kind ?? "skill", action.skillName)),
+	);
 	const decision = (outcome: "applied" | "skipped", note: string) =>
 		recordDecision({ seam: "learning-review", outcome, note: `${action.action}:${note}` });
 
@@ -224,8 +309,15 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 		return { ok: false, code: 409, reason: `candidate "${row.skillName}" is already ${row.status}` };
 	}
 
-	const transition = async (patch: Partial<Record<string, string>>, text = hit.text): Promise<boolean> => {
-		const next: AnnotationMap = { ...hit.annotations, learned_at: now() };
+	const transition = async (
+		patch: Partial<Record<string, string>>,
+		text = hit.text,
+		base: AnnotationMap = hit.annotations,
+	): Promise<boolean> => {
+		// Codex SIO-1896: latestPerSkill keeps the EARLIER hit on a learned_at tie,
+		// and two writes in one call (approval, then a synchronous skipped outcome)
+		// can share a millisecond; the later fact is stamped strictly newer.
+		const next: AnnotationMap = { ...base, learned_at: strictlyAfter(now(), base.learned_at) };
 		for (const [k, v] of Object.entries(patch)) if (v !== undefined) next[k] = v;
 		return recordAgentFactNow(action.agent, text, next);
 	};
@@ -267,10 +359,31 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 			reason: `candidate "${row.skillName}" has no confirmed task_success (thumbs-up or a completed outcome); refusing to approve`,
 		};
 	}
+	// SIO-1896 (Codex review): the stored target_dir becomes the PR path; refuse
+	// one outside this agent's knowledge tree before anything is written.
+	if (row.kind === "runbook" && row.targetDir && !isRunbookDirFor(row.agent, row.targetDir)) {
+		decision("skipped", "target-dir-outside-tree");
+		return {
+			ok: false,
+			code: 409,
+			reason: `candidate "${row.skillName}" targets a directory outside ${row.agent}'s runbook tree`,
+		};
+	}
 	// Greptile PR #919: a candidate approved earlier whose PR was skipped or failed
 	// can be approved again: no second transition (its edits are the approved text),
 	// only the promotion PR is retried.
 	const reapproval = row.status === "approved";
+	// Codex SIO-1896: only a skipped or failed promotion is retried. An opened one
+	// is done, a blocked one (secret scan) fails the same way on unchanged text,
+	// and an unrecorded outcome is treated as done rather than risk a duplicate.
+	if (reapproval && !RETRYABLE_PROMOTIONS.has(row.promotion ?? "")) {
+		decision("skipped", "already-promoted");
+		return {
+			ok: false,
+			code: 409,
+			reason: `candidate "${row.skillName}" already had its promotion (${row.promotion ?? "outcome not recorded"})${row.prUrl ? ` ${row.prUrl}` : ""}`,
+		};
+	}
 	const text = reapproval ? hit.text : applyEdits(row, action.edits);
 	if (!reapproval && !(await transition({ status: "approved" }, text))) {
 		return { ok: false, code: 500, reason: "transition not stored" };
@@ -278,56 +391,122 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 	const annotations: AnnotationMap = { ...hit.annotations, status: "approved", learned_at: now() };
 
 	const promote = deps.promote ?? promoteToMemory;
-	try {
-		if (row.kind === "runbook") {
-			const dir = row.targetDir ?? defaultRunbookDir(row.agent);
-			// Greptile PR #919: the branch names the owning agent, so two agents
-			// approving the same name never collide.
-			const result = await promote({
-				kind: "runbook",
-				branch: `agent/learn/${row.agent}/runbook-${row.skillName}`,
-				title: `Runbook from learning review: ${row.skillName} (${row.agent})`,
-				body: `Approved in the learning review pane (SIO-1891). Source: ${row.source}, learned from ${row.learnedFrom}. Merging catalogs it for ${row.agent}.`,
-				files: [{ path: `${dir}/${row.skillName}.md`, contents: renderCandidateRunbook(row, text) }],
-				labels: ["learning-review", "runbook-draft"],
+	type Recorded = { note?: string; status: CandidateStatus };
+	// Greptile #924: the outcome is its OWN fact (kind:promotion), merged into the
+	// row at read time, so it can never outrank a reject or supersede written
+	// while the PR was opening (facts are immutable and the latest skill fact
+	// wins by learned_at; an outcome written as an approved skill fact could).
+	// The re-read after the PR call only decides what status to REPORT.
+	const recordPromotion = async (status: string, url?: string): Promise<Recorded> => {
+		const stored = await recordAgentFactNow(
+			action.agent,
+			`Promotion outcome for ${row.kind} ${row.skillName}: ${status}${url ? ` ${url}` : ""}`,
+			{
+				kind: "promotion",
+				skill_name: row.skillName,
+				target_kind: row.kind,
+				promotion: status,
+				...(url ? { pr_url: url } : {}),
+				learned_at: now(),
+				agent: action.agent,
+			},
+		);
+		const latest = (await latestHits(action.agent)).find(
+			(h) => h.annotations.skill_name === row.skillName && (h.annotations.kind ?? "skill") === row.kind,
+		);
+		const latestStatus = parseStatus(latest?.annotations.status);
+		const reported: CandidateStatus =
+			latestStatus === "rejected" || latestStatus === "superseded" ? latestStatus : "approved";
+		if (stored) return { status: reported };
+		logger.warn({ agent: row.agent, skill: row.skillName, promotion: status }, "promotion outcome not stored");
+		return { note: "promotion outcome not stored; the row cannot be retried from the pane", status: reported };
+	};
+	const withNote = (reason: string | undefined, note: string | undefined) =>
+		note ? (reason ? `${reason}; ${note}` : note) : reason;
+	const done = (prStatus: string, prReason: string | undefined, rec: Recorded, prUrl?: string) => ({
+		ok: true as const,
+		status: rec.status,
+		prStatus,
+		...(prUrl ? { prUrl } : {}),
+		prReason: withNote(prReason, rec.note),
+		promotionStored: rec.note === undefined,
+	});
+	// Codex SIO-1896: only the PR work is inside this try. A memory failure while
+	// storing the outcome afterwards is reported as such, never as a PR failure
+	// (which would offer a retry against a PR that did open).
+	type Promotion = { prStatus: string; reason?: string; url?: string; note: string };
+	const runPromotion = async (): Promise<Promotion> => {
+		try {
+			if (row.kind === "runbook") {
+				const dir = row.targetDir ?? defaultRunbookDir(row.agent);
+				// Greptile PR #919: the branch names the owning agent, so two agents
+				// approving the same name never collide.
+				const result = await promote({
+					kind: "runbook",
+					branch: `agent/learn/${row.agent}/runbook-${row.skillName}`,
+					title: `Runbook from learning review: ${row.skillName} (${row.agent})`,
+					body: `Approved in the learning review pane (SIO-1891). Source: ${row.source}, learned from ${row.learnedFrom}. Merging catalogs it for ${row.agent}.`,
+					files: [{ path: `${dir}/${row.skillName}.md`, contents: renderCandidateRunbook(row, text) }],
+					labels: ["learning-review", "runbook-draft"],
+				});
+				return {
+					prStatus: result.status,
+					reason: result.reason,
+					url: result.url,
+					note: `approved-runbook-${result.status}`,
+				};
+			}
+			const fetchBase = deps.fetchBase ?? fetchBaseFileContent;
+			const base = await fetchBase(agentManifestPath(row.agent));
+			if (base.status === "skipped" || base.content === null) {
+				const reason = base.status === "skipped" ? base.reason : "agent.yaml not found on base branch";
+				return { prStatus: "skipped", reason, note: "approved-no-pr" };
+			}
+			const built = buildSkillPrFiles(base.content, {
+				agent: row.agent,
+				skillName: row.skillName,
+				annotations,
+				body: text,
 			});
-			decision("applied", `approved-runbook-${result.status}`);
-			return { ok: true, status: "approved", prStatus: result.status, prUrl: result.url, prReason: result.reason };
+			if (!built.ok) {
+				// Codex SIO-1896: a manifest that already lists the skill fails the same
+				// way on every retry ("blocked", not retryable); one the edit cannot
+				// parse may be repaired on the base branch later ("skipped", retryable).
+				return built.terminal
+					? { prStatus: "blocked", reason: built.reason, note: "approved-blocked" }
+					: { prStatus: "skipped", reason: built.reason, note: "approved-no-pr" };
+			}
+			const result = await promote({
+				kind: "new-skill",
+				branch: `agent/learn/${row.agent}/skill-${row.skillName}`,
+				title: buildSkillPrTitle(row.agent, row.skillName),
+				body: buildSkillPrBody(row.agent, row.skillName, annotations),
+				files: built.files,
+				labels: ["learning-review", "skill-promotion"],
+			});
+			return {
+				prStatus: result.status,
+				reason: result.reason,
+				url: result.url,
+				note: `approved-skill-${result.status}`,
+			};
+		} catch (error) {
+			// The approval is recorded; only the PR failed. Say so rather than undo it.
+			logger.warn(
+				{ agent: row.agent, skill: row.skillName, error: error instanceof Error ? error.message : String(error) },
+				"promotion PR failed after approval",
+			);
+			return { prStatus: "failed", reason: "promotion PR failed", note: "approved-pr-failed" };
 		}
-		const fetchBase = deps.fetchBase ?? fetchBaseFileContent;
-		const base = await fetchBase(agentManifestPath(row.agent));
-		if (base.status === "skipped" || base.content === null) {
-			const reason = base.status === "skipped" ? base.reason : "agent.yaml not found on base branch";
-			decision("applied", "approved-no-pr");
-			return { ok: true, status: "approved", prStatus: "skipped", prReason: reason };
-		}
-		const built = buildSkillPrFiles(base.content, {
-			agent: row.agent,
-			skillName: row.skillName,
-			annotations,
-			body: text,
-		});
-		if (!built.ok) {
-			decision("applied", "approved-no-pr");
-			return { ok: true, status: "approved", prStatus: "skipped", prReason: built.reason };
-		}
-		const result = await promote({
-			kind: "new-skill",
-			branch: `agent/learn/${row.agent}/skill-${row.skillName}`,
-			title: buildSkillPrTitle(row.agent, row.skillName),
-			body: buildSkillPrBody(row.agent, row.skillName, annotations),
-			files: built.files,
-			labels: ["learning-review", "skill-promotion"],
-		});
-		decision("applied", `approved-skill-${result.status}`);
-		return { ok: true, status: "approved", prStatus: result.status, prUrl: result.url, prReason: result.reason };
-	} catch (error) {
-		// The approval is recorded; only the PR failed. Say so rather than undo it.
+	};
+	const outcome = await runPromotion();
+	const rec = await recordPromotion(outcome.prStatus, outcome.url).catch((error): Recorded => {
 		logger.warn(
 			{ agent: row.agent, skill: row.skillName, error: error instanceof Error ? error.message : String(error) },
-			"promotion PR failed after approval",
+			"promotion outcome not stored",
 		);
-		decision("applied", "approved-pr-failed");
-		return { ok: true, status: "approved", prStatus: "failed", prReason: "promotion PR failed" };
-	}
+		return { note: "promotion outcome not stored; the row cannot be retried from the pane", status: "approved" };
+	});
+	decision("applied", outcome.note);
+	return done(outcome.prStatus, outcome.reason, rec, outcome.url);
 }

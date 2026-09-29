@@ -76,9 +76,13 @@ export function harvestJournal(rows: JournalRow[], origin: HarvestOrigin): Harve
 		list.push({ ms: Date.parse(row.ts), reason: str(p.reason) || "skipped" });
 		verdicts.set(key, list);
 	}
+	// SIO-1896 (Codex review): journalRows is oldest-first, so the NEWEST verdict
+	// preceding the finding is the current cycle's; an older one inside the window
+	// (cycles closer than an hour) must not outrank it.
 	const skippedReasonFor = (key: string, findingTs: string): string | undefined => {
 		const at = Date.parse(findingTs);
-		return verdicts.get(key)?.find((v) => at - v.ms >= 0 && at - v.ms <= VERDICT_CYCLE_MS)?.reason;
+		const eligible = (verdicts.get(key) ?? []).filter((v) => at - v.ms >= 0 && at - v.ms <= VERDICT_CYCLE_MS);
+		return eligible.length > 0 ? eligible[eligible.length - 1]?.reason : undefined;
 	};
 	const out: HarvestedDiagnosis[] = [];
 	for (const row of rows) {

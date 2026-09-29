@@ -108,6 +108,24 @@ describe("verdict join and origin (Greptile PR #920)", () => {
 		// verdict from a cycle three hours earlier: a fresh diagnosis is not tainted
 		const later = harvestJournal([verdict("2026-09-28T07:00:00.000Z"), findingRow("2026-09-28T10:05:00.000Z")], origin);
 		expect(later[0]?.skippedReason).toBeUndefined();
+		// SIO-1896 (Codex review): two verdicts inside the window, the newest preceding one counts
+		const dup = {
+			ts: "2026-09-28T10:03:00.000Z",
+			kind: "actionability_verdict",
+			payload: JSON.stringify({
+				dedup_key: "k",
+				family: "rds",
+				severity: "warn",
+				resource: "r",
+				reason: "duplicate",
+				enforced: true,
+			}),
+		};
+		const newest = harvestJournal(
+			[verdict("2026-09-28T10:00:00.000Z"), dup, findingRow("2026-09-28T10:05:00.000Z")],
+			origin,
+		);
+		expect(newest[0]?.skippedReason).toBe("duplicate");
 		// verdict written after the finding belongs to a later cycle
 		const after = harvestJournal([findingRow("2026-09-28T10:05:00.000Z"), verdict("2026-09-28T10:10:00.000Z")], origin);
 		expect(after[0]?.skippedReason).toBeUndefined();

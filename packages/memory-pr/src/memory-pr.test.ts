@@ -1,6 +1,7 @@
 // memory-pr/src/memory-pr.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
 import type { CreatedPullRequest, GitHubClient, GitHubFile } from "./github-client.ts";
+import { createFetchGitHubClient } from "./github-client.ts";
 import { _setMemoryPrClientForTesting, fetchBaseFileContent, openMemoryPr } from "./index.ts";
 import { scanContent, scanFiles } from "./secret-scan.ts";
 import { MemoryPrProposalSchema } from "./types.ts";
@@ -24,6 +25,11 @@ function makeFakeClient(fileContent: string | null = "base file content"): { cli
 		},
 		async createBranch(branch, commitSha) {
 			calls.push(`createBranch:${branch}:${commitSha}`);
+			return "created" as const;
+		},
+		async findPullRequest(head, base) {
+			calls.push(`findPullRequest:${head}->${base}`);
+			return null;
 		},
 		async createPullRequest(opts): Promise<CreatedPullRequest> {
 			calls.push(`createPR:${opts.head}->${opts.base}`);
@@ -131,6 +137,7 @@ describe("openMemoryPr happy path", () => {
 		expect(result.status).toBe("opened");
 		expect(result.url).toContain("/pull/7");
 		expect(calls).toEqual([
+			"findPullRequest:agent/learn/kafka-lag->main",
 			"getBaseSha:main",
 			"createCommit:agents/incident-analyzer/memory/wiki/pages/kafka-lag.md",
 			"createBranch:agent/learn/kafka-lag:commitsha",
@@ -147,8 +154,83 @@ describe("openMemoryPr happy path", () => {
 		expect(calls).toEqual([]);
 	});
 
-	// CodeRabbit PR #568: labels used to be accepted by the schema but silently
-	// discarded -- they now reach GitHub via the Issues API after PR creation.
+	// Greptile PR #924 / Codex SIO-1896: nothing is reused, refreshed or moved. A
+	// branch with a PR (open or closed) blocks with that PR's URL; a branch with
+	// no PR at all is a retryable skip naming it; a PR a concurrent attempt
+	// opened first blocks the same way rather than failing.
+	test("an open PR on the branch blocks with its URL and writes nothing", async () => {
+		const { client, calls } = makeFakeClient();
+		client.findPullRequest = async (head, base) => {
+			calls.push(`findPullRequest:${head}->${base}`);
+			return { url: "https://github.com/o/r/pull/7", number: 7, state: "open" };
+		};
+		const result = await openMemoryPr(validProposal, { env: enabledEnv, client });
+		expect(result).toMatchObject({
+			status: "blocked",
+			url: "https://github.com/o/r/pull/7",
+			number: 7,
+			reason: expect.stringContaining("open PR #7"),
+		});
+		expect(calls).toEqual(["findPullRequest:agent/learn/kafka-lag->main"]);
+	});
+
+	test("an existing branch: with a PR into ANY base it blocks, without one it is a retryable skip", async () => {
+		const withPr = makeFakeClient();
+		const lookups: Array<string | undefined> = [];
+		withPr.client.findPullRequest = async (_head, base) => {
+			lookups.push(base);
+			// Greptile #924: a PR into another base is found only by the base-less lookup
+			return base === undefined ? { url: "https://github.com/o/r/pull/9", number: 9, state: "open" } : null;
+		};
+		withPr.client.createBranch = async () => "exists";
+		expect(await openMemoryPr(validProposal, { env: enabledEnv, client: withPr.client })).toMatchObject({
+			status: "blocked",
+			reason: expect.stringContaining("pull/9"),
+		});
+		expect(withPr.calls.some((c) => c.startsWith("createPR"))).toBe(false);
+		expect(lookups).toEqual(["main", undefined]);
+
+		const { client, calls } = makeFakeClient();
+		client.createBranch = async () => "exists";
+		expect(await openMemoryPr(validProposal, { env: enabledEnv, client })).toMatchObject({
+			status: "skipped",
+			reason: expect.stringContaining("delete the branch to retry"),
+		});
+		expect(calls.some((c) => c.startsWith("createPR"))).toBe(false);
+	});
+
+	test("a PR the concurrent attempt opened first blocks with its URL instead of failing", async () => {
+		const { client } = makeFakeClient();
+		let looked = 0;
+		client.findPullRequest = async () =>
+			++looked === 1 ? null : { url: "https://github.com/o/r/pull/8", number: 8, state: "open" };
+		client.createPullRequest = async () => {
+			throw new Error(
+				"GitHub API POST /repos/o/r/pulls failed: 422 Unprocessable Entity A pull request already exists",
+			);
+		};
+		expect(await openMemoryPr(validProposal, { env: enabledEnv, client })).toMatchObject({
+			status: "blocked",
+			reason: expect.stringContaining("pull/8"),
+		});
+		expect(looked).toBe(2);
+	});
+
+	// SIO-1357 stays fail-closed: a branch whose PR was closed or merged is done.
+	test("a closed or merged PR on the branch blocks a new one and writes nothing", async () => {
+		const { client, calls } = makeFakeClient();
+		client.findPullRequest = async (head, base) => {
+			calls.push(`findPullRequest:${head}->${base}`);
+			return { url: "https://github.com/o/r/pull/6", number: 6, state: "closed" };
+		};
+		const result = await openMemoryPr(validProposal, { env: enabledEnv, client });
+		expect(result).toMatchObject({
+			status: "blocked",
+			reason: expect.stringContaining("now closed; a reviewed proposal is not re-proposed automatically"),
+		});
+		expect(calls).toEqual(["findPullRequest:agent/learn/kafka-lag->main"]);
+	});
+
 	test("forwards proposal labels to the opened PR", async () => {
 		const { client, calls } = makeFakeClient();
 		const result = await openMemoryPr(
@@ -171,6 +253,64 @@ describe("openMemoryPr happy path", () => {
 });
 
 // SIO-1346: base-branch reads for proposals that edit an existing file.
+// Greptile PR #924: the fetch client behind openMemoryPr's idempotency.
+describe("createFetchGitHubClient branch and PR lookup", () => {
+	const realFetch = globalThis.fetch;
+	afterEach(() => {
+		globalThis.fetch = realFetch;
+	});
+	const client = createFetchGitHubClient({ token: "t", repo: "o/r", apiBaseUrl: "https://gh.test" });
+
+	test("createBranch creates a fresh ref, reports an existing one, never moves it", async () => {
+		globalThis.fetch = (async () => new Response("{}", { status: 201 })) as unknown as typeof fetch;
+		expect(await client.createBranch("agent/learn/x", "abc")).toBe("created");
+		const methods: string[] = [];
+		globalThis.fetch = (async (_u: string | URL | Request, init?: RequestInit) => {
+			methods.push(init?.method ?? "GET");
+			return new Response('{"message":"Reference already exists"}', {
+				status: 422,
+				statusText: "Unprocessable Entity",
+			});
+		}) as typeof fetch;
+		expect(await client.createBranch("agent/learn/x", "abc")).toBe("exists");
+		expect(methods).toEqual(["POST"]);
+	});
+
+	// Codex SIO-1896: any OTHER 422 (an invalid ref name) is an error, not "exists"
+	test("createBranch propagates a 422 that is not an existing reference", async () => {
+		globalThis.fetch = (async () =>
+			new Response('{"message":"Reference name is not well-formed"}', {
+				status: 422,
+				statusText: "Unprocessable Entity",
+			})) as unknown as typeof fetch;
+		await expect(client.createBranch("agent/learn/foo..bar", "abc")).rejects.toThrow(/not well-formed/);
+	});
+
+	test("createBranch rethrows any other failure", async () => {
+		globalThis.fetch = (async () =>
+			new Response("nope", { status: 500, statusText: "Server Error" })) as unknown as typeof fetch;
+		await expect(client.createBranch("agent/learn/x", "abc")).rejects.toThrow(/500/);
+	});
+
+	test("findPullRequest asks for the newest PR on owner:branch into the base, in any state", async () => {
+		let url = "";
+		globalThis.fetch = (async (u: string | URL | Request) => {
+			url = String(u);
+			return new Response(JSON.stringify([{ html_url: "https://github.com/o/r/pull/3", number: 3, state: "closed" }]), {
+				status: 200,
+			});
+		}) as typeof fetch;
+		expect(await client.findPullRequest("agent/learn/x", "main")).toEqual({
+			url: "https://github.com/o/r/pull/3",
+			number: 3,
+			state: "closed",
+		});
+		expect(url).toBe("https://gh.test/repos/o/r/pulls?state=all&per_page=1&head=o%3Aagent%2Flearn%2Fx&base=main");
+		globalThis.fetch = (async () => new Response("[]", { status: 200 })) as unknown as typeof fetch;
+		expect(await client.findPullRequest("agent/learn/x", "main")).toBeNull();
+	});
+});
+
 describe("fetchBaseFileContent", () => {
 	const prevKill = process.env.AGENT_KILL_SWITCH;
 	afterEach(() => {

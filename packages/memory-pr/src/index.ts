@@ -7,7 +7,7 @@
 
 import { getLogger } from "@devops-agent/observability";
 import { isKillSwitchActive } from "@devops-agent/shared";
-import { createFetchGitHubClient, type GitHubClient } from "./github-client.ts";
+import { type CreatedPullRequest, createFetchGitHubClient, type GitHubClient } from "./github-client.ts";
 import { scanFiles } from "./secret-scan.ts";
 import { type MemoryPrProposal, MemoryPrProposalSchema, type OpenMemoryPrResult } from "./types.ts";
 
@@ -125,19 +125,63 @@ export async function openMemoryPr(
 
 	const client = resolveClient(options, config.token, config.repo);
 
+	// Greptile PR #924 / Codex SIO-1896: a branch that already has a PR, open or
+	// closed, blocks with that PR's URL. Nothing is reused, refreshed or moved:
+	// GitHub's ref API has no compare-and-swap, so every "recover the branch"
+	// strategy raced a concurrent caller. Branch creation is atomic and is the
+	// only ownership test; a branch left by a partial earlier attempt (no PR) is
+	// a retryable skip that names it, so an operator can delete it and retry.
+	// SIO-1357 keeps its guarantee: a repeated closure of the same thread finds
+	// its PR and blocks instead of opening a duplicate.
+	// Greptile #924: the advice depends on the state. A closed or merged PR means
+	// this proposal was reviewed already and is never re-proposed automatically.
+	const taken = (pr: CreatedPullRequest & { state: "open" | "closed" }): OpenMemoryPrResult => ({
+		status: "blocked",
+		// Codex SIO-1896: callers read the structured fields (runIncidentClose
+		// returns opened.url), so the existing PR is there, not only in the reason.
+		url: pr.url,
+		number: pr.number,
+		reason:
+			pr.state === "open"
+				? `branch "${parsed.branch}" already has open PR #${pr.number} (${pr.url}); review that PR instead`
+				: `branch "${parsed.branch}" already had PR #${pr.number} (${pr.url}), now closed; a reviewed proposal is not re-proposed automatically`,
+	});
+	const existing = await client.findPullRequest(parsed.branch, config.base);
+	if (existing) return taken(existing);
+
 	const baseSha = await client.getBaseSha(config.base);
 	const commitSha = await client.createCommitWithFiles({
 		baseSha,
 		files: parsed.files,
 		message: `${proposal.title}\n\nAutomated durable-memory proposal (${proposal.kind}). Review before merge.`,
 	});
-	await client.createBranch(parsed.branch, commitSha);
-	const pr = await client.createPullRequest({
-		title: proposal.title,
-		head: parsed.branch,
-		base: config.base,
-		body: proposal.body,
-	});
+	if ((await client.createBranch(parsed.branch, commitSha)) === "exists") {
+		// Greptile #924: any base here. A PR into another base still backs the
+		// branch, and the "delete it" advice below must never point at a live PR.
+		const pr = await client.findPullRequest(parsed.branch);
+		if (pr) return taken(pr);
+		return {
+			status: "skipped",
+			reason: `branch "${parsed.branch}" exists without a PR (a partial earlier attempt); delete the branch to retry`,
+		};
+	}
+	let pr: CreatedPullRequest;
+	try {
+		pr = await client.createPullRequest({
+			title: proposal.title,
+			head: parsed.branch,
+			base: config.base,
+			body: proposal.body,
+		});
+	} catch (error) {
+		// 422 "A pull request already exists": a concurrent attempt got there first.
+		const raced =
+			error instanceof Error && / 422 /.test(error.message)
+				? await client.findPullRequest(parsed.branch, config.base)
+				: null;
+		if (!raced) throw error;
+		return taken(raced);
+	}
 
 	// Best-effort: the PR is already open, so a labeling failure must not turn an
 	// "opened" result into a thrown failure (a retry would double-open the branch).
