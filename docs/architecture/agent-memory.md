@@ -172,7 +172,7 @@ An IaC change proposal fact (W3) is written `proposed` and TTL-decays. A backgro
 
 ### Skill-learning loop (SIO-1015 / 1016 / 1017 / 1018)
 
-Incident-analyzer only. After a turn, the post-turn learner seam (`skill-learner.ts`) pre-gates on agent identity, `complex` query, `confidence >= 0.6`, and >= 2 datasources; an LLM judge over a PII-redacted transcript proposes a reusable skill, which is written as a `kind:skill` **proposal fact** (deduped by `skill_name`, R6) — never auto-loaded. Humans promote a proposal into a real `SKILL.md` (`skill:promote`, SIO-1017); thereafter the skill's confidence evolves from per-turn outcomes via Laplace smoothing on its frontmatter (SIO-1016), traced by the per-turn skill-application signal (SIO-1018). Requires the agent-memory backend (the file backend has no fact storage for proposals).
+Every top-level agent (SIO-1889). After a turn, the post-turn learner seam (`skill-learner.ts`) pre-gates on a `complex` query plus either `confidence >= 0.6` and >= 2 datasources (the orchestrator) or the graph's own `completed` outcome (the others); a Jev gate (`learning-gate.ts`: task_success >= 0.5 as a hard precondition, then a mean of three questions >= 0.6, agent-beacon's rule) runs before the full-model judge; the judge, over a PII-redacted transcript, proposes a reusable skill with verbatim evidence quotes (verified against the transcript) which must pass the lesson-quality rubric; the result is a `kind:skill` **candidate fact** carrying `status` / `source` / `task_success` / `task_success_source` (deduped by `skill_name`, R6) — never auto-loaded. A state change is a newer fact with the same `skill_name`; readers keep the latest (`listLearningCandidates`). Humans promote a proposal into a real `SKILL.md` (`skill:promote`, SIO-1017); thereafter the skill's confidence evolves from per-turn outcomes via Laplace smoothing on its frontmatter (SIO-1016), traced by the per-turn skill-application signal (SIO-1018). Requires the agent-memory backend (the file backend has no fact storage for proposals).
 
 ### Block-ID logging (SIO-991)
 
@@ -218,7 +218,8 @@ AGENT_MEMORY_BEARER_TOKEN=          # required only if the service runs with OID
 AGENT_MEMORY_DAILYLOG_TTL_SECONDS=  # short TTL for breadcrumbs; omit for no decay (facts never decay)
 AGENT_MEMORY_SYNC_WRITES=false      # true => async_processing=false: blocks are searchable on write
 IAC_PROPOSAL_FACT_TTL_SECONDS=      # TTL on the iac-change proposal fact (W3); default 90d, expires once reconciliation writes the terminal fact
-SKILL_LEARNING_ENABLED=false        # incident-analyzer post-turn skill-proposal learner (W6); agent-memory backend only
+SKILL_LEARNING_ENABLED=true         # post-turn learning-candidate learner for every agent (W6); kill-switch, agent-memory backend only
+LEARNING_JEV_GATE_ENABLED=true      # SIO-1889 Jev gate before the judge; kill-switch, self-skips without TYPESAFE_API_KEY
 ```
 
 Requires a running Agent Memory Docker container connected to your Capella cluster, with an embedding model + LLM available for vector embeddings and summaries. With async writes (default), semantic search returns a block only once it reaches `status: "ready"`; with `AGENT_MEMORY_SYNC_WRITES=true` a block is `ready` by the time the write returns.

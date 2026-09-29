@@ -1,6 +1,6 @@
 // agent/src/skill-promote-cli.test.ts
 import { describe, expect, test } from "bun:test";
-import { parsePromoteArgs, skillFilePath } from "./skill-promote-cli.ts";
+import { parsePromoteArgs, selectPromotableCandidate, skillFilePath } from "./skill-promote-cli.ts";
 
 describe("parsePromoteArgs (SIO-1017)", () => {
 	test("parses --agent / --skill / --force", () => {
@@ -41,5 +41,21 @@ describe("parsePromoteArgs modes (SIO-1345)", () => {
 	});
 	test("still throws without --skill in promote modes", () => {
 		expect(() => parsePromoteArgs(["--pr"])).toThrow(/--skill/);
+	});
+});
+
+// SIO-1889 (Greptile PR #917): promotion follows the LATEST review state.
+describe("selectPromotableCandidate", () => {
+	test("refuses a rejected or superseded latest state and accepts a candidate", () => {
+		expect(selectPromotableCandidate([])).toMatchObject({ ok: false });
+		expect(selectPromotableCandidate([{ text: "t", annotations: { status: "rejected" } }])).toMatchObject({
+			ok: false,
+			reason: expect.stringContaining("rejected"),
+		});
+		expect(selectPromotableCandidate([{ text: "t", annotations: { status: "superseded" } }])).toMatchObject({
+			ok: false,
+		});
+		expect(selectPromotableCandidate([{ text: "t", annotations: {} }])).toMatchObject({ ok: true });
+		expect(selectPromotableCandidate([{ text: "t", annotations: { status: "approved" } }])).toMatchObject({ ok: true });
 	});
 });

@@ -13,7 +13,7 @@
 // selects a whole different code path over a different state shape (IacState vs
 // AgentState); collapsing those would hide a real difference behind a lookup.
 
-import { isPiComsConfigured, isPiFleetGraphEnabled } from "@devops-agent/agent";
+import { type IacStateType, iacTurnOutcome, isPiComsConfigured, isPiFleetGraphEnabled } from "@devops-agent/agent";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StateSnapshot } from "@langchain/langgraph";
 import { AGENT_IDS, type AgentId, DEFAULT_AGENT_ID, isAgentId } from "$lib/agent-ids";
@@ -46,6 +46,10 @@ export interface AgentDescriptor {
 	// Selectability (listSelectableAgents) is a separate question -- CAN this
 	// deployment run it at all -- and both still apply.
 	readonly surface: "mode" | "contextual";
+	// SIO-1889: the turn's terminal outcome for the post-turn learner, read from
+	// the graph's own state. "completed" is the only value that passes the
+	// learner's pre-gate for an agent without a confidence score.
+	readonly turnOutcome: (values: Record<string, unknown>) => string;
 	// Resolves this agent's compiled graph. Kept as a thunk so registering an
 	// agent never eagerly compiles its graph or connects MCP.
 	//
@@ -83,6 +87,8 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		streamsTokens: true,
 		hasTriageGraph: true,
 		surface: "mode",
+		// The validator's turn-level error signal; the learner keys off confidence anyway.
+		turnOutcome: (values) => (values.validationResult === "fail" ? "failed" : "completed"),
 		graph: getGraph,
 	},
 	// SIO-1655 (Phase 2c). Registered always so the id resolves and routes give a
@@ -104,6 +110,15 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		// incident analyzer's context, so it is offered from there rather than
 		// cycled as a peer of the IaC config maker.
 		surface: "contextual",
+		// Greptile PR #917: a turn that asked spokes and heard from none did not
+		// succeed. PiFleetState.replies carries each spoke's status; with replies
+		// and no "answered" among them the turn failed. No replies (the model
+		// answered without asking anyone) counts as completed; thumbs (SIO-1890)
+		// still outranks this.
+		turnOutcome: (values) => {
+			const replies = Array.isArray(values.replies) ? (values.replies as Array<{ status?: string }>) : [];
+			return replies.length > 0 && !replies.some((r) => r.status === "answered") ? "failed" : "completed";
+		},
 		graph: getPiFleetGraph,
 	},
 	"elastic-iac": {
@@ -116,6 +131,7 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		streamsTokens: false,
 		hasTriageGraph: true,
 		surface: "mode",
+		turnOutcome: (values) => iacTurnOutcome(values as IacStateType),
 		graph: getIacGraph,
 	},
 	"landing-zone-terraform": {
@@ -126,6 +142,8 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		streamsTokens: false,
 		hasTriageGraph: true,
 		surface: "mode",
+		// LandingZoneOutcome: pending | answered | blocked | failed.
+		turnOutcome: (values) => (values.outcome === "answered" ? "completed" : String(values.outcome ?? "pending")),
 		graph: getLandingZoneGraph,
 	},
 };

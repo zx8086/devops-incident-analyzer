@@ -282,14 +282,31 @@ export { respond } from "./responder.ts";
 export {
 	buildSkillAnnotations,
 	buildSkillFactText,
+	CANDIDATE_SOURCES,
+	CANDIDATE_STATUSES,
 	isSkillLearningEnabled,
 	judgeTurn,
+	type LearningCandidate,
+	LearningCandidateSchema,
 	learnFromTurn,
+	lessonQuality,
+	listLearningCandidates,
 	preGateSkip,
 	type SkillLearnerTurn,
 	type SkillProposal,
+	type SkillProposalSummary,
 	SkillProposalSchema,
+	TASK_SUCCESS_SOURCES,
 } from "./skill-learner.ts";
+export {
+	gateLearning,
+	isLearningJevGateEnabled,
+	judgeLearning,
+	type LearningGateResult,
+	type LearningVerdict,
+	projectEvents,
+	transcriptToEvents,
+} from "./learning-gate.ts";
 export {
 	installSkillLearner,
 	type OutcomeTurn,
