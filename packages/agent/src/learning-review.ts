@@ -51,12 +51,20 @@ export interface ReviewRow {
 	evidence: string[];
 }
 
+function strictlyAfter(stamp: string, previous: string | undefined): string {
+	const prev = Date.parse(previous ?? "");
+	const next = Date.parse(stamp);
+	return Number.isFinite(prev) && next <= prev ? new Date(prev + 1).toISOString() : stamp;
+}
+
+function parseStatus(raw: string | undefined): CandidateStatus {
+	return (CANDIDATE_STATUSES as readonly string[]).includes(raw ?? "") ? (raw as CandidateStatus) : "candidate";
+}
+
 export function rowFromHit(agent: string, hit: MemorySearchHit): ReviewRow {
 	const a = hit.annotations;
 	const parsed = parseSkillFactBody(hit.text);
-	const status = (CANDIDATE_STATUSES as readonly string[]).includes(a.status ?? "")
-		? (a.status as CandidateStatus)
-		: "candidate";
+	const status = parseStatus(a.status);
 	return {
 		agent,
 		skillName: a.skill_name ?? "",
@@ -248,7 +256,10 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 		text = hit.text,
 		base: AnnotationMap = hit.annotations,
 	): Promise<boolean> => {
-		const next: AnnotationMap = { ...base, learned_at: now() };
+		// Codex SIO-1896: latestPerSkill keeps the EARLIER hit on a learned_at tie,
+		// and two writes in one call (approval, then a synchronous skipped outcome)
+		// can share a millisecond; the later fact is stamped strictly newer.
+		const next: AnnotationMap = { ...base, learned_at: strictlyAfter(now(), base.learned_at) };
 		for (const [k, v] of Object.entries(patch)) if (v !== undefined) next[k] = v;
 		return recordAgentFactNow(action.agent, text, next);
 	};
@@ -332,36 +343,43 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 	// the millisecond window between them is the same one every transition in this
 	// file has (the expectedStatus check above), accepted rather than a second
 	// corrective write.
-	const recordPromotion = async (status: string, url?: string): Promise<string | undefined> => {
+	type Recorded = { note?: string; status: CandidateStatus };
+	const recordPromotion = async (status: string, url?: string): Promise<Recorded> => {
 		const latest = (await latestHits(action.agent)).find(
 			(h) => h.annotations.skill_name === row.skillName && (h.annotations.kind ?? "skill") === row.kind,
 		);
-		const latestStatus = latest?.annotations.status;
-		if (!latest || latestStatus !== "approved") {
+		const latestStatus = parseStatus(latest?.annotations.status);
+		if (latestStatus === "rejected" || latestStatus === "superseded") {
 			logger.warn(
 				{ agent: row.agent, skill: row.skillName, promotion: status, status: latestStatus },
 				"promotion outcome not stored: row changed during promotion",
 			);
-			return `row is now ${latestStatus ?? "missing"}; promotion outcome not recorded`;
+			// Greptile #924: report the status the re-read found, not "approved".
+			return { note: `row is now ${latestStatus}; promotion outcome not recorded`, status: latestStatus };
 		}
+		// Codex SIO-1896: writes are async by default (AGENT_MEMORY_SYNC_WRITES), so
+		// the approval just written may not be searchable yet and the re-read can
+		// still show the candidate. Only a terminal transition is a reason to skip;
+		// otherwise the outcome goes on top of the approval this call made.
+		const base = latest && latestStatus === "approved" ? latest.annotations : annotations;
 		const stored = await transition(
 			{ status: "approved", promotion: status, ...(url ? { pr_url: url } : {}) },
 			text,
-			latest.annotations,
+			base,
 		);
-		if (stored) return undefined;
+		if (stored) return { status: "approved" };
 		logger.warn({ agent: row.agent, skill: row.skillName, promotion: status }, "promotion outcome not stored");
-		return "promotion outcome not stored; the row cannot be retried from the pane";
+		return { note: "promotion outcome not stored; the row cannot be retried from the pane", status: "approved" };
 	};
 	const withNote = (reason: string | undefined, note: string | undefined) =>
 		note ? (reason ? `${reason}; ${note}` : note) : reason;
-	const done = (prStatus: string, prReason: string | undefined, note: string | undefined, prUrl?: string) => ({
+	const done = (prStatus: string, prReason: string | undefined, rec: Recorded, prUrl?: string) => ({
 		ok: true as const,
-		status: "approved" as const,
+		status: rec.status,
 		prStatus,
 		...(prUrl ? { prUrl } : {}),
-		prReason: withNote(prReason, note),
-		promotionStored: note === undefined,
+		prReason: withNote(prReason, rec.note),
+		promotionStored: rec.note === undefined,
 	});
 	try {
 		if (row.kind === "runbook") {
@@ -395,9 +413,12 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 			body: text,
 		});
 		if (!built.ok) {
-			const note = await recordPromotion("skipped");
-			decision("applied", "approved-no-pr");
-			return done("skipped", built.reason, note);
+			// Codex SIO-1896: a manifest that already lists the skill, or one the
+			// edit cannot parse, fails the same way on every retry: terminal, so
+			// "blocked" (not retryable) rather than "skipped".
+			const note = await recordPromotion("blocked");
+			decision("applied", "approved-blocked");
+			return done("blocked", built.reason, note);
 		}
 		const result = await promote({
 			kind: "new-skill",
@@ -416,7 +437,9 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 			{ agent: row.agent, skill: row.skillName, error: error instanceof Error ? error.message : String(error) },
 			"promotion PR failed after approval",
 		);
-		const note = await recordPromotion("failed").catch(() => "promotion outcome not stored");
+		const note = await recordPromotion("failed").catch(
+			(): Recorded => ({ note: "promotion outcome not stored", status: "approved" }),
+		);
 		decision("applied", "approved-pr-failed");
 		return done("failed", "promotion PR failed", note);
 	}

@@ -78,18 +78,20 @@ export function applyReviewResponse(
 	return rows.map((row) => {
 		if (rowKey(row) !== key) return row;
 		if (!res.ok) return { ...row, message: `${res.httpStatus}: ${res.error}` };
+		// Codex SIO-1896: an opened PR can still carry a warning (outcome not stored)
 		const pr =
 			res.prStatus === "opened" && res.prUrl
-				? `PR opened: ${res.prUrl}`
+				? `PR opened: ${res.prUrl}${res.prReason ? ` (${res.prReason})` : ""}`
 				: res.prStatus
 					? `PR ${res.prStatus}${res.prReason ? ` (${res.prReason})` : ""}`
 					: undefined;
 		return {
 			...row,
 			status: res.status,
-			// Codex SIO-1896: an outcome the server could not store gives the row no
-			// promotion, so no retry is offered that the server would refuse.
-			...(res.prStatus && res.promotionStored !== false ? { promotion: res.prStatus } : {}),
+			// Codex SIO-1896 / Greptile #924: an outcome the server could not store gives
+			// the row no promotion (a stale earlier one is cleared too), so no retry is
+			// offered against a branch or PR the last attempt may have left behind.
+			promotion: res.prStatus && res.promotionStored !== false ? res.prStatus : undefined,
 			...(res.prUrl ? { prUrl: res.prUrl } : {}),
 			message: pr ?? `now ${res.status}`,
 		};

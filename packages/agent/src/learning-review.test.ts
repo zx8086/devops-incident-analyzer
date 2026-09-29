@@ -264,6 +264,78 @@ describe("reviewCandidate", () => {
 		expect(writes).toBe(2);
 	});
 
+	// Codex SIO-1896: a skill already listed in agent.yaml fails identically on
+	// every retry, so the outcome is terminal and the pane offers no retry.
+	test("a skill already listed in the manifest is approved but blocked, not retryable", async () => {
+		const s = await install([candidate()]);
+		const out = await reviewCandidate(
+			{ agent: "incident-analyzer", skillName: "lag-corr", action: "approve" },
+			{
+				promote: async () => {
+					throw new Error("must not be called");
+				},
+				fetchBase: async () => ({ status: "ok" as const, content: "name: incident-analyzer\nskills:\n  - lag-corr\n" }),
+				now: () => NOW,
+			},
+		);
+		expect(out).toMatchObject({
+			ok: true,
+			status: "approved",
+			prStatus: "blocked",
+			prReason: expect.stringContaining("already listed"),
+			promotionStored: true,
+		});
+		expect(s.added[1]?.annotations).toMatchObject({ status: "approved", promotion: "blocked" });
+		// a second approve is refused: blocked is not in RETRYABLE_PROMOTIONS
+		expect(
+			await reviewCandidate({ agent: "incident-analyzer", skillName: "lag-corr", action: "approve" }),
+		).toMatchObject({ ok: false, code: 409 });
+	});
+
+	// Codex SIO-1896: an approval and a synchronous skipped outcome can land in
+	// the same millisecond; latestPerSkill keeps the earlier hit on a tie, so the
+	// outcome must be stamped strictly newer or the retry state is lost on reload.
+	test("a same-millisecond outcome fact is stamped strictly after the approval", async () => {
+		const s = await install([candidate()]);
+		const out = await reviewCandidate(
+			{ agent: "incident-analyzer", skillName: "lag-corr", action: "approve" },
+			{
+				fetchBase: async () => ({ status: "skipped" as const, reason: "MEMORY_PR_ENABLED is not set" }),
+				now: () => NOW,
+			},
+		);
+		expect(out).toMatchObject({ ok: true, prStatus: "skipped", promotionStored: true });
+		expect(s.added).toHaveLength(2);
+		const [approval, outcome] = s.added.map((a) => a.annotations ?? {});
+		expect(approval?.learned_at).toBe(NOW);
+		expect(Date.parse(outcome?.learned_at ?? "")).toBeGreaterThan(Date.parse(NOW));
+		const rows = await listReviewRows("incident-analyzer");
+		expect(rows.find((r) => r.skillName === "lag-corr")).toMatchObject({ status: "approved", promotion: "skipped" });
+	});
+
+	// Codex SIO-1896: Agent Memory writes are async by default, so the approval
+	// just written may not be searchable when the outcome is recorded; a stale
+	// "candidate" read is not a concurrent decision and the outcome is stored.
+	test("an approval not yet visible to search still gets its promotion outcome", async () => {
+		const s = await install([candidate()]);
+		s.client.searchMemory = async () => [candidate()]; // index lags every write
+		const out = await reviewCandidate(
+			{ agent: "incident-analyzer", skillName: "lag-corr", action: "approve" },
+			{
+				promote: async () => ({ status: "opened" as const, url: "https://github.com/o/r/pull/14" }),
+				fetchBase: async () => ({ status: "ok" as const, content: "name: incident-analyzer\nskills:\n  - x\n" }),
+				now: () => NOW,
+			},
+		);
+		expect(out).toMatchObject({ ok: true, status: "approved", prStatus: "opened", promotionStored: true });
+		expect(s.added).toHaveLength(2);
+		expect(s.added[1]?.annotations).toMatchObject({
+			status: "approved",
+			promotion: "opened",
+			pr_url: "https://github.com/o/r/pull/14",
+		});
+	});
+
 	// Codex SIO-1896: a reject or supersede written while the PR call ran must not
 	// be undone by the outcome fact; it is skipped and the response says so.
 	test("a transition written during promotion wins; no outcome fact is appended", async () => {
@@ -281,8 +353,10 @@ describe("reviewCandidate", () => {
 				now: () => NOW,
 			},
 		);
+		// Greptile #924: the response carries the status the re-read found
 		expect(out).toMatchObject({
 			ok: true,
+			status: "rejected",
 			prStatus: "opened",
 			promotionStored: false,
 			prReason: expect.stringContaining("row is now rejected"),

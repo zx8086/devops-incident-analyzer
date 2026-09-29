@@ -108,9 +108,11 @@ describe("SIO-1357 runIncidentClose", () => {
 	});
 
 	// SIO-1357: idempotency proof -- a second closure for the SAME thread hits
-	// the SAME deterministic branch. openMemoryPr's real implementation throws
-	// on a duplicate ref (GitHub 422); this simulates that via the injected dep
-	// to prove the workflow fails closed rather than opening a duplicate PR.
+	// the SAME deterministic branch. openMemoryPr's real implementation refuses
+	// a branch that already has a PR (since Greptile PR #924 it looks the PR up
+	// first; before, GitHub 422'd the duplicate ref and it threw); this simulates
+	// the refusal via the injected dep to prove the workflow fails closed rather
+	// than opening a duplicate PR.
 	test("second closure attempt on the same thread fails closed (no duplicate PR)", async () => {
 		const openedBranches = new Set<string>();
 		const { deps } = fakeDeps({

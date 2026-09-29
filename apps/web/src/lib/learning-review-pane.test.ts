@@ -85,7 +85,7 @@ describe("learning review pane rules (SIO-1891)", () => {
 		expect(canApprove(out[0] as ReviewRowView)).toBe(false);
 		// Codex SIO-1896: an outcome the server could not store gives no promotion,
 		// so no retry is offered that the server would refuse with 409.
-		const unstored = applyReviewResponse([row({ taskSuccess: "1" })], row(), {
+		const unstored = applyReviewResponse([row({ taskSuccess: "1", status: "approved", promotion: "failed" })], row(), {
 			ok: true,
 			status: "approved",
 			prStatus: "failed",
@@ -95,6 +95,19 @@ describe("learning review pane rules (SIO-1891)", () => {
 		expect(unstored[0]?.promotion).toBeUndefined();
 		expect(canApprove(unstored[0] as ReviewRowView)).toBe(false);
 		expect(unstored[0]?.message).toContain("promotion outcome not stored");
+		// Codex SIO-1896: the warning is shown even when the PR itself opened
+		const openedUnstored = applyReviewResponse([row({ taskSuccess: "1" })], row(), {
+			ok: true,
+			status: "approved",
+			prStatus: "opened",
+			prUrl: "https://github.com/o/r/pull/12",
+			prReason: "promotion outcome not stored; the row cannot be retried from the pane",
+			promotionStored: false,
+		});
+		expect(openedUnstored[0]?.message).toBe(
+			"PR opened: https://github.com/o/r/pull/12 (promotion outcome not stored; the row cannot be retried from the pane)",
+		);
+		expect(openedUnstored[0]?.promotion).toBeUndefined();
 		const skipped = applyReviewResponse([row()], row(), {
 			ok: true,
 			status: "approved",

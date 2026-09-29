@@ -7,7 +7,7 @@
 
 import { getLogger } from "@devops-agent/observability";
 import { isKillSwitchActive } from "@devops-agent/shared";
-import { createFetchGitHubClient, type GitHubClient } from "./github-client.ts";
+import { type CreatedPullRequest, createFetchGitHubClient, type GitHubClient } from "./github-client.ts";
 import { scanFiles } from "./secret-scan.ts";
 import { type MemoryPrProposal, MemoryPrProposalSchema, type OpenMemoryPrResult } from "./types.ts";
 
@@ -125,23 +125,16 @@ export async function openMemoryPr(
 
 	const client = resolveClient(options, config.token, config.repo);
 
-	const baseSha = await client.getBaseSha(config.base);
-	const commitSha = await client.createCommitWithFiles({
-		baseSha,
-		files: parsed.files,
-		message: `${proposal.title}\n\nAutomated durable-memory proposal (${proposal.kind}). Review before merge.`,
-	});
-	await client.createBranch(parsed.branch, commitSha);
-	const pr = await client.createPullRequest({
-		title: proposal.title,
-		head: parsed.branch,
-		base: config.base,
-		body: proposal.body,
-	});
-
+	// Greptile PR #924: a retry whose earlier attempt opened a PR (but could not
+	// record it) reuses that PR rather than failing on the existing branch. A
+	// closed or merged PR on the branch refuses the write instead (SIO-1357: a
+	// repeated closure of the same thread must never open a duplicate).
 	// Best-effort: the PR is already open, so a labeling failure must not turn an
 	// "opened" result into a thrown failure (a retry would double-open the branch).
-	if (parsed.labels && parsed.labels.length > 0) {
+	// Also applied to a reused PR, whose first attempt may have died before
+	// labeling (Codex SIO-1896); adding a label twice is a no-op on GitHub.
+	const labelBestEffort = async (pr: CreatedPullRequest) => {
+		if (!parsed.labels || parsed.labels.length === 0) return;
 		try {
 			await client.addLabels(pr.number, parsed.labels);
 		} catch (error) {
@@ -150,7 +143,83 @@ export async function openMemoryPr(
 				"memory review PR opened but labeling failed",
 			);
 		}
+	};
+
+	const existing = await client.findPullRequest(parsed.branch, config.base);
+	if (existing?.state === "open") {
+		logger.info({ url: existing.url, number: existing.number, branch: parsed.branch }, "memory review PR already open");
+		await labelBestEffort(existing);
+		return {
+			status: "opened",
+			url: existing.url,
+			number: existing.number,
+			reason: "an open PR for this branch already exists",
+		};
 	}
+	if (existing) {
+		return {
+			status: "blocked",
+			reason: `branch "${parsed.branch}" already had PR #${existing.number} (${existing.url}), now closed`,
+		};
+	}
+
+	const baseSha = await client.getBaseSha(config.base);
+	const commitSha = await client.createCommitWithFiles({
+		baseSha,
+		files: parsed.files,
+		message: `${proposal.title}\n\nAutomated durable-memory proposal (${proposal.kind}). Review before merge.`,
+	});
+	const created = await client.createBranch(parsed.branch, commitSha);
+	if (created === "busy") {
+		// Codex SIO-1896: a concurrent attempt owns the branch; nothing was
+		// written, and "skipped" leaves the caller free to retry later.
+		return { status: "skipped", reason: `another attempt on branch "${parsed.branch}" is in progress; retry later` };
+	}
+	if (created === "taken") {
+		// Codex SIO-1896: a concurrent caller may have opened the intended PR (same
+		// base) between the first lookup and the 422; reuse it. Otherwise the branch
+		// belongs to a PR into another base, or a closed one, and a retry cannot help.
+		const same = await client.findPullRequest(parsed.branch, config.base);
+		if (same?.state === "open") {
+			logger.info(
+				{ url: same.url, number: same.number, branch: parsed.branch },
+				"memory review PR opened concurrently",
+			);
+			await labelBestEffort(same);
+			return { status: "opened", url: same.url, number: same.number, reason: "opened by a concurrent attempt" };
+		}
+		return {
+			status: "blocked",
+			reason: same
+				? `branch "${parsed.branch}" already had PR #${same.number} (${same.url}), now closed`
+				: `branch "${parsed.branch}" is used by a PR into another base`,
+		};
+	}
+	let pr: CreatedPullRequest;
+	try {
+		pr = await client.createPullRequest({
+			title: proposal.title,
+			head: parsed.branch,
+			base: config.base,
+			body: proposal.body,
+		});
+	} catch (error) {
+		// 422 "A pull request already exists": the concurrent attempt got there
+		// first; converge on its PR rather than fail.
+		const raced =
+			error instanceof Error && / 422 /.test(error.message)
+				? await client.findPullRequest(parsed.branch, config.base)
+				: null;
+		if (raced?.state !== "open") throw error;
+		logger.info(
+			{ url: raced.url, number: raced.number, branch: parsed.branch },
+			"memory review PR opened concurrently",
+		);
+		await labelBestEffort(raced);
+		return { status: "opened", url: raced.url, number: raced.number, reason: "opened by a concurrent attempt" };
+	}
+
+	await labelBestEffort(pr);
 
 	logger.info({ url: pr.url, number: pr.number, kind: proposal.kind }, "opened memory review PR");
 	return { status: "opened", url: pr.url, number: pr.number };

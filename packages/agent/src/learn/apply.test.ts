@@ -608,6 +608,10 @@ describe("SIO-1346 skill promotion PR", () => {
 			},
 			async createBranch(branch) {
 				calls.push(`createBranch:${branch}`);
+				return "created" as const;
+			},
+			async findPullRequest() {
+				return null;
 			},
 			async createPullRequest() {
 				calls.push("createPR");
