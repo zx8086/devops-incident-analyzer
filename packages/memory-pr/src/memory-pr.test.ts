@@ -1,7 +1,7 @@
 // memory-pr/src/memory-pr.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
 import type { CreatedPullRequest, GitHubClient, GitHubFile } from "./github-client.ts";
-import { createFetchGitHubClient, STALE_BRANCH_MS } from "./github-client.ts";
+import { createFetchGitHubClient } from "./github-client.ts";
 import { _setMemoryPrClientForTesting, fetchBaseFileContent, openMemoryPr } from "./index.ts";
 import { scanContent, scanFiles } from "./secret-scan.ts";
 import { MemoryPrProposalSchema } from "./types.ts";
@@ -154,80 +154,56 @@ describe("openMemoryPr happy path", () => {
 		expect(calls).toEqual([]);
 	});
 
-	// CodeRabbit PR #568: labels used to be accepted by the schema but silently
-	// discarded -- they now reach GitHub via the Issues API after PR creation.
-	// Greptile PR #924: an opened-but-unrecorded promotion is retried; the retry
-	// must find the PR the first attempt opened, not fail on its branch.
-	test("reuses an already-open PR for the branch and writes nothing", async () => {
+	// Greptile PR #924 / Codex SIO-1896: nothing is reused, refreshed or moved. A
+	// branch with a PR (open or closed) blocks with that PR's URL; a branch with
+	// no PR at all is a retryable skip naming it; a PR a concurrent attempt
+	// opened first blocks the same way rather than failing.
+	test("an open PR on the branch blocks with its URL and writes nothing", async () => {
 		const { client, calls } = makeFakeClient();
 		client.findPullRequest = async (head, base) => {
 			calls.push(`findPullRequest:${head}->${base}`);
 			return { url: "https://github.com/o/r/pull/7", number: 7, state: "open" };
 		};
-		const result = await openMemoryPr({ ...validProposal, labels: ["learning-review"] }, { env: enabledEnv, client });
-		expect(result).toMatchObject({ status: "opened", url: "https://github.com/o/r/pull/7", number: 7 });
-		// Codex SIO-1896: a reused PR still gets the proposal labels (best-effort)
-		expect(calls).toEqual(["findPullRequest:agent/learn/kafka-lag->main", "addLabels:7:learning-review"]);
-	});
-
-	// Codex SIO-1896: a branch a concurrent attempt just created is left alone.
-	test("a busy branch skips without opening a PR, so the caller can retry later", async () => {
-		const { client, calls } = makeFakeClient();
-		client.createBranch = async (branch) => {
-			calls.push(`createBranch:${branch}`);
-			return "busy";
-		};
 		const result = await openMemoryPr(validProposal, { env: enabledEnv, client });
-		expect(result).toMatchObject({ status: "skipped", reason: expect.stringContaining("in progress") });
-		expect(calls.some((c) => c.startsWith("createPR"))).toBe(false);
+		expect(result).toMatchObject({ status: "blocked", reason: expect.stringContaining("pull/7, open") });
+		expect(calls).toEqual(["findPullRequest:agent/learn/kafka-lag->main"]);
 	});
 
-	test("a branch taken by a PR into another base blocks and writes nothing more", async () => {
-		const { client, calls } = makeFakeClient();
-		client.createBranch = async (branch) => {
-			calls.push(`createBranch:${branch}`);
-			return "taken";
-		};
-		const result = await openMemoryPr(validProposal, { env: enabledEnv, client });
-		expect(result).toMatchObject({ status: "blocked", reason: expect.stringContaining("another base") });
-		expect(calls.some((c) => c.startsWith("createPR"))).toBe(false);
-	});
-
-	// Codex SIO-1896: "taken" can also mean a concurrent caller opened the intended
-	// same-base PR after the first lookup; that PR is reused, not reported blocked.
-	test("a branch taken by a same-base PR opened meanwhile is reused as opened", async () => {
-		const { client, calls } = makeFakeClient();
+	test("an existing branch: with a PR it blocks, without one it is a retryable skip", async () => {
+		const withPr = makeFakeClient();
 		let looked = 0;
-		client.findPullRequest = async (head, base) => {
-			calls.push(`findPullRequest:${head}->${base}`);
-			looked += 1;
-			return looked === 1 ? null : { url: "https://github.com/o/r/pull/9", number: 9, state: "open" };
-		};
-		client.createBranch = async () => "taken";
-		const result = await openMemoryPr({ ...validProposal, labels: ["l"] }, { env: enabledEnv, client });
-		expect(result).toMatchObject({ status: "opened", url: "https://github.com/o/r/pull/9", number: 9 });
-		expect(calls.filter((c) => c.startsWith("findPullRequest"))).toEqual([
-			"findPullRequest:agent/learn/kafka-lag->main",
-			"findPullRequest:agent/learn/kafka-lag->main",
-		]);
-		expect(calls).toContain("addLabels:9:l");
+		withPr.client.findPullRequest = async () =>
+			++looked === 1 ? null : { url: "https://github.com/o/r/pull/9", number: 9, state: "open" };
+		withPr.client.createBranch = async () => "exists";
+		expect(await openMemoryPr(validProposal, { env: enabledEnv, client: withPr.client })).toMatchObject({
+			status: "blocked",
+			reason: expect.stringContaining("pull/9"),
+		});
+		expect(withPr.calls.some((c) => c.startsWith("createPR"))).toBe(false);
+
+		const { client, calls } = makeFakeClient();
+		client.createBranch = async () => "exists";
+		expect(await openMemoryPr(validProposal, { env: enabledEnv, client })).toMatchObject({
+			status: "skipped",
+			reason: expect.stringContaining("delete the branch to retry"),
+		});
 		expect(calls.some((c) => c.startsWith("createPR"))).toBe(false);
 	});
 
-	test("a PR the concurrent attempt opened first is returned instead of a failure", async () => {
+	test("a PR the concurrent attempt opened first blocks with its URL instead of failing", async () => {
 		const { client } = makeFakeClient();
 		let looked = 0;
-		client.findPullRequest = async () => {
-			looked += 1;
-			return looked === 1 ? null : { url: "https://github.com/o/r/pull/8", number: 8, state: "open" };
-		};
+		client.findPullRequest = async () =>
+			++looked === 1 ? null : { url: "https://github.com/o/r/pull/8", number: 8, state: "open" };
 		client.createPullRequest = async () => {
 			throw new Error(
 				"GitHub API POST /repos/o/r/pulls failed: 422 Unprocessable Entity A pull request already exists",
 			);
 		};
-		const result = await openMemoryPr(validProposal, { env: enabledEnv, client });
-		expect(result).toMatchObject({ status: "opened", url: "https://github.com/o/r/pull/8", number: 8 });
+		expect(await openMemoryPr(validProposal, { env: enabledEnv, client })).toMatchObject({
+			status: "blocked",
+			reason: expect.stringContaining("pull/8"),
+		});
 		expect(looked).toBe(2);
 	});
 
@@ -239,7 +215,7 @@ describe("openMemoryPr happy path", () => {
 			return { url: "https://github.com/o/r/pull/6", number: 6, state: "closed" };
 		};
 		const result = await openMemoryPr(validProposal, { env: enabledEnv, client });
-		expect(result).toMatchObject({ status: "blocked", reason: expect.stringContaining("#6") });
+		expect(result).toMatchObject({ status: "blocked", reason: expect.stringContaining("pull/6, closed") });
 		expect(calls).toEqual(["findPullRequest:agent/learn/kafka-lag->main"]);
 	});
 
@@ -273,64 +249,29 @@ describe("createFetchGitHubClient branch and PR lookup", () => {
 	});
 	const client = createFetchGitHubClient({ token: "t", repo: "o/r", apiBaseUrl: "https://gh.test" });
 
-	// The existing ref's commit age decides: old = abandoned partial attempt
-	// (moved), young = a concurrent caller's branch (busy, untouched).
-	function refStub(commitDate: string, foreignPr = false) {
-		const seen: Array<{ method: string; url: string; body: string | null }> = [];
-		globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
-			const method = init?.method ?? "GET";
-			const u = String(url);
-			seen.push({ method, url: u, body: typeof init?.body === "string" ? init.body : null });
-			if (method === "POST") {
-				return new Response('{"message":"Reference already exists"}', {
-					status: 422,
-					statusText: "Unprocessable Entity",
-				});
-			}
-			if (u.includes("/pulls?")) {
-				return new Response(
-					foreignPr ? '[{"html_url":"https://github.com/o/r/pull/5","number":5,"state":"open"}]' : "[]",
-					{ status: 200 },
-				);
-			}
-			if (u.endsWith("/git/ref/heads/agent/learn/x")) return new Response('{"object":{"sha":"old1"}}', { status: 200 });
-			if (u.endsWith("/git/commits/old1")) {
-				return new Response(JSON.stringify({ committer: { date: commitDate } }), { status: 200 });
-			}
-			return new Response("{}", { status: 200 });
-		}) as typeof fetch;
-		return seen;
-	}
-
-	test("createBranch creates a fresh ref", async () => {
+	test("createBranch creates a fresh ref, reports an existing one, never moves it", async () => {
 		globalThis.fetch = (async () => new Response("{}", { status: 201 })) as unknown as typeof fetch;
 		expect(await client.createBranch("agent/learn/x", "abc")).toBe("created");
+		const methods: string[] = [];
+		globalThis.fetch = (async (_u: string | URL | Request, init?: RequestInit) => {
+			methods.push(init?.method ?? "GET");
+			return new Response('{"message":"Reference already exists"}', {
+				status: 422,
+				statusText: "Unprocessable Entity",
+			});
+		}) as typeof fetch;
+		expect(await client.createBranch("agent/learn/x", "abc")).toBe("exists");
+		expect(methods).toEqual(["POST"]);
 	});
 
-	test("createBranch moves an abandoned ref (422, old commit) to the new commit with force", async () => {
-		const seen = refStub(new Date(Date.now() - STALE_BRANCH_MS - 1000).toISOString());
-		expect(await client.createBranch("agent/learn/x", "abc")).toBe("moved");
-		expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual([
-			"POST https://gh.test/repos/o/r/git/refs",
-			"GET https://gh.test/repos/o/r/pulls?state=all&per_page=1&head=o%3Aagent%2Flearn%2Fx",
-			"GET https://gh.test/repos/o/r/git/ref/heads/agent/learn/x",
-			"GET https://gh.test/repos/o/r/git/commits/old1",
-			"PATCH https://gh.test/repos/o/r/git/refs/heads/agent/learn/x",
-		]);
-		expect(JSON.parse(seen[4]?.body ?? "{}")).toEqual({ sha: "abc", force: true });
-	});
-
-	// Codex SIO-1896: a PR into ANY base owns the ref, however old; never move it.
-	test("createBranch never moves a ref that a PR into another base uses", async () => {
-		const seen = refStub(new Date(Date.now() - STALE_BRANCH_MS - 1000).toISOString(), true);
-		expect(await client.createBranch("agent/learn/x", "abc")).toBe("taken");
-		expect(seen.some((s) => s.method === "PATCH")).toBe(false);
-	});
-
-	test("createBranch leaves a young ref alone (422, recent commit) and reports busy", async () => {
-		const seen = refStub(new Date().toISOString());
-		expect(await client.createBranch("agent/learn/x", "abc")).toBe("busy");
-		expect(seen.some((s) => s.method === "PATCH")).toBe(false);
+	// Codex SIO-1896: any OTHER 422 (an invalid ref name) is an error, not "exists"
+	test("createBranch propagates a 422 that is not an existing reference", async () => {
+		globalThis.fetch = (async () =>
+			new Response('{"message":"Reference name is not well-formed"}', {
+				status: 422,
+				statusText: "Unprocessable Entity",
+			})) as unknown as typeof fetch;
+		await expect(client.createBranch("agent/learn/foo..bar", "abc")).rejects.toThrow(/not well-formed/);
 	});
 
 	test("createBranch rethrows any other failure", async () => {

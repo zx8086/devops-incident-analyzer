@@ -27,14 +27,11 @@ export interface GitHubClient {
 	// Create a single commit containing all files on top of baseSha. Returns the
 	// new commit sha. Does not move any ref.
 	createCommitWithFiles(opts: { baseSha: string; files: GitHubFile[]; message: string }): Promise<string>;
-	// Create the branch ref at commitSha ("created"). An existing ref is either a
-	// partial earlier attempt (branch created, PR never opened), which is moved to
-	// commitSha ("moved") so a retry can proceed (Greptile PR #924), or one a
-	// concurrent caller created moments ago, which is left alone ("busy") so the
-	// other caller's PR keeps its own commit (Codex SIO-1896).
-	// A ref that any PR uses, whatever its base, is never moved: "taken" (Codex
-	// SIO-1896, a PR into another base would otherwise be rewritten).
-	createBranch(branch: string, commitSha: string): Promise<"created" | "moved" | "busy" | "taken">;
+	// Create the branch ref at commitSha ("created"), or report that it already
+	// exists ("exists"). Refs are never moved or force-reset (Codex SIO-1896:
+	// GitHub's ref API has no compare-and-swap, so any move-then-check races a
+	// concurrent caller); creation itself is atomic and is the only ownership test.
+	createBranch(branch: string, commitSha: string): Promise<"created" | "exists">;
 	// The newest PR whose head is this branch, in any state (Greptile PR #924): an
 	// open one is reused by a retry, a closed or merged one refuses it (SIO-1357
 	// fail-closed on repeated closure), and only a branch with no PR at all is a
@@ -58,9 +55,6 @@ export interface GitHubClientConfig {
 }
 
 const DEFAULT_API = "https://api.github.com";
-// ponytail: an existing ref younger than this is a concurrent attempt, older is
-// abandoned; a lock (a marker PR or a GitHub check) would remove the guess.
-export const STALE_BRANCH_MS = 10 * 60 * 1000;
 
 async function ghFetch<T>(config: GitHubClientConfig, method: string, path: string, body?: unknown): Promise<T> {
 	const url = `${config.apiBaseUrl ?? DEFAULT_API}${path}`;
@@ -159,20 +153,12 @@ export function createFetchGitHubClient(config: GitHubClientConfig): GitHubClien
 				await ghFetch(config, "POST", `${repoPath}/git/refs`, { ref: `refs/heads/${branch}`, sha: commitSha });
 				return "created";
 			} catch (error) {
-				// 422 "Reference already exists". Its commit's age tells a concurrent
-				// attempt (young: leave it) from an abandoned partial one (old: move it).
-				if (!(error instanceof Error && / 422 /.test(error.message))) throw error;
-				// A PR on this ref into ANY base owns it; moving the ref would rewrite that PR.
-				if (await findPr(branch)) return "taken";
-				const ref = await ghFetch<{ object: { sha: string } }>(config, "GET", `${repoPath}/git/ref/heads/${branch}`);
-				const commit = await ghFetch<{ committer: { date: string } }>(
-					config,
-					"GET",
-					`${repoPath}/git/commits/${ref.object.sha}`,
-				);
-				if (Date.now() - Date.parse(commit.committer.date) < STALE_BRANCH_MS) return "busy";
-				await ghFetch(config, "PATCH", `${repoPath}/git/refs/heads/${branch}`, { sha: commitSha, force: true });
-				return "moved";
+				// Only GitHub's own "Reference already exists" is an existing ref; any
+				// other 422 (an invalid ref name, say) propagates (Codex SIO-1896).
+				if (error instanceof Error && / 422 /.test(error.message) && /Reference already exists/.test(error.message)) {
+					return "exists";
+				}
+				throw error;
 			}
 		},
 
