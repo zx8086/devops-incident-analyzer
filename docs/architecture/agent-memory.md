@@ -186,7 +186,7 @@ Whether learning helps is answered from two existing instruments, never from log
 | `learning-feedback` | `skill-learner.ts` `recordTurnFeedback` (SIO-1890) | `applied` when every eligible transition was stored, else `failed` | `thumbs-up:<stored>/<eligible>` or `thumbs-down:...` |
 | `learning-review` | `learning-review.ts` (SIO-1891) | `applied` for a stored decision, `skipped` for a refusal | `<action>:<what>`, e.g. `approve:approved-skill-opened`, `approve:task-success-unconfirmed`, `reject:stale` |
 
-The ratios the epic promised are then one query away:
+The applied/skipped/failed counts per seam are then one query away (divide by the seam's total for the ratio):
 
 ```bash
 sqlite3 "$DECISION_METRICS_DB_PATH" "select seam, outcome, count(*) from decision_metrics where seam like 'learning-%' group by 1, 2"
@@ -194,7 +194,7 @@ sqlite3 "$DECISION_METRICS_DB_PATH" "select seam, outcome, count(*) from decisio
 
 Calibrate the Jev gate thresholds (agent-beacon's 0.5 floor and 0.6 mean, `learning-gate.ts`) from the `learning-gate` rows after the first week, the way `RERANK_DROP_BELOW` was tuned from the rerank rows: `topScore` and `bottomScore` carry the two numbers the rule compares.
 
-**Replay eval, before and after.** Approved knowledge activates only by PR merge (a skill under `agents/<agent>/skills/`, a runbook under the agent's knowledge tree). Its effect is measured with the incident replay eval, which tags each experiment with the git revision (`packages/agent/src/eval/run-incident-replay-eval.ts`): run `bun run --filter @devops-agent/agent eval:incident-replay` on `main` immediately before and immediately after the promotion PR merges, then compare the two experiments in LangSmith on `root_cause_accuracy`, `runbook_selection_vs_usage` and `citation_grounding`. A learning that moves none of them is a candidate for supersession in the review pane, not a fact to keep.
+**Replay eval, before and after.** Approved knowledge activates only by PR merge (a skill under `agents/<agent>/skills/`, a runbook under the agent's knowledge tree). Its effect is measured with the incident replay eval, which tags each experiment with the git revision (`packages/agent/src/eval/run-incident-replay-eval.ts`): run `bun run --filter @devops-agent/agent eval:incident-replay` on `main` immediately before and immediately after the promotion PR merges, then compare the two experiments in LangSmith on `root_cause_accuracy`, `runbook_selection_vs_usage` and `citation_grounding`. One run each side sits inside judge and model noise (the harness says so), so use its repetition option for at least three runs per side with the same judge model, and compare medians; the live datasources drift between runs too, so a small movement is not a verdict. A learning that moves none of them is a candidate for supersession in the review pane. Supersession changes only the stored candidate state: once the promotion PR has merged, the skill file and its `agent.yaml` entry (or the runbook file) stay live until a separate PR removes them.
 
 ### Block-ID logging (SIO-991)
 
