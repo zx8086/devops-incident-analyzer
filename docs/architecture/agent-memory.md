@@ -174,6 +174,28 @@ An IaC change proposal fact (W3) is written `proposed` and TTL-decays. A backgro
 
 Every top-level agent (SIO-1889). After a turn, the post-turn learner seam (`skill-learner.ts`) pre-gates on a `complex` query plus either `confidence >= 0.6` and >= 2 datasources (the orchestrator) or the graph's own `completed` outcome (the others); a Jev gate (`learning-gate.ts`: task_success >= 0.5 as a hard precondition, then a mean of three questions >= 0.6, agent-beacon's rule) runs before the full-model judge; the judge, over a PII-redacted transcript, proposes a reusable skill with verbatim evidence quotes (verified against the transcript) which must pass the lesson-quality rubric; the result is a `kind:skill` **candidate fact** carrying `status` / `source` / `task_success` / `task_success_source` (deduped by `skill_name`, R6) — never auto-loaded. A state change is a newer fact with the same `skill_name`; readers keep the latest (`listLearningCandidates`). **Reflect (SIO-1893).** `reflect:analyze --emit-candidates drafts.json` also writes the analysis's `create` portfolio items as `kind:skill` candidate drafts (source `reflect`, evidence from the finding's excerpts, filed rejected with `task_success` 0 when a session carried a negative user reaction), in the same file shape `learn:ingest` reads. Humans promote a proposal into a real `SKILL.md` (`skill:promote`, SIO-1017); thereafter the skill's confidence evolves from per-turn outcomes via Laplace smoothing on its frontmatter (SIO-1016), traced by the per-turn skill-application signal (SIO-1018). Requires the agent-memory backend (the file backend has no fact storage for proposals).
 
+### Measuring learning (SIO-1894)
+
+Whether learning helps is answered from two existing instruments, never from log lines.
+
+**Decision rows.** Three seams write to the SIO-1858 `decision_metrics` table through `recordDecision` (`packages/agent/src/decision-recorder.ts`), which is a no-op unless `DECISION_METRICS_DB_PATH` is set:
+
+| Seam | Written by | `outcome` | `note` |
+|---|---|---|---|
+| `learning-gate` | `learning-gate.ts` (the Jev gate, SIO-1889) and `skill-learner.ts` (the rubric) | `applied` (Jev answered; `topScore` = mean, `bottomScore` = task_success), `skipped` (flag off, no key, or `rubric:<item>`), `failed` (call failed; `status-<code>` or `call-failed`) | `qualifies`, the failing question, or the rubric item |
+| `learning-feedback` | `skill-learner.ts` `recordTurnFeedback` (SIO-1890) | `applied` when every eligible transition was stored, else `failed` | `thumbs-up:<stored>/<eligible>` or `thumbs-down:...` |
+| `learning-review` | `learning-review.ts` (SIO-1891) | `applied` for a stored decision, `skipped` for a refusal | `<action>:<what>`, e.g. `approve:approved-skill-opened`, `approve:task-success-unconfirmed`, `reject:stale` |
+
+The ratios the epic promised are then one query away:
+
+```bash
+sqlite3 "$DECISION_METRICS_DB_PATH" "select seam, outcome, count(*) from decision_metrics where seam like 'learning-%' group by 1, 2"
+```
+
+Calibrate the Jev gate thresholds (agent-beacon's 0.5 floor and 0.6 mean, `learning-gate.ts`) from the `learning-gate` rows after the first week, the way `RERANK_DROP_BELOW` was tuned from the rerank rows: `topScore` and `bottomScore` carry the two numbers the rule compares.
+
+**Replay eval, before and after.** Approved knowledge activates only by PR merge (a skill under `agents/<agent>/skills/`, a runbook under the agent's knowledge tree). Its effect is measured with the incident replay eval, which tags each experiment with the git revision (`packages/agent/src/eval/run-incident-replay-eval.ts`): run `bun run --filter @devops-agent/agent eval:incident-replay` on `main` immediately before and immediately after the promotion PR merges, then compare the two experiments in LangSmith on `root_cause_accuracy`, `runbook_selection_vs_usage` and `citation_grounding`. A learning that moves none of them is a candidate for supersession in the review pane, not a fact to keep.
+
 ### Block-ID logging (SIO-991)
 
 `addFacts`/`addMessages` return `AddMemoryResult { blockIds }`, and `searchMemory` surfaces each hit's `blockId`. The writer logs the `user_id` + `session_id` + `block_id` of every flushed write and recall (log markers `flushed agent-memory writes`, `agent-memory search|recall`, `recallIacChangeIntent`) so a write/recall can be cross-referenced to its Couchbase block during diagnosis.
