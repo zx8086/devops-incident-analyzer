@@ -17,12 +17,18 @@ import { getLogger } from "@devops-agent/observability";
 import { type AnnotationMap, redactPiiContent } from "@devops-agent/shared";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
+import { recordDecision } from "./decision-recorder.ts";
 import { gateLearning, type LearningGateResult, transcriptToEvents } from "./learning-gate.ts";
 import { createLlm, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
 import { parseLlmJson } from "./llm-json.ts";
-import { dedupePreferring, enqueueFact, type MemorySearchHit, searchAgentMemory, selectedBackend } from "./memory-backend.ts";
+import {
+	dedupePreferring,
+	type MemorySearchHit,
+	recordAgentFactNow,
+	searchAgentMemory,
+	selectedBackend,
+} from "./memory-backend.ts";
 import { extractTextFromContent } from "./message-utils.ts";
-import { recordDecision } from "./decision-recorder.ts";
 
 const logger = getLogger("agent:skill-learner");
 
@@ -95,7 +101,10 @@ export const LearningCandidateSchema = z.object({
 	applicability: z.string().min(1),
 	// What to do, why, how to confirm.
 	body: z.string().min(1),
-	evidence: z.array(z.object({ ref: z.string(), excerpt: z.string().max(400) })).min(1).max(5),
+	evidence: z
+		.array(z.object({ ref: z.string(), excerpt: z.string().max(400) }))
+		.min(1)
+		.max(5),
 	source: z.enum(CANDIDATE_SOURCES),
 	learned_from: z.string().min(1),
 	status: z.enum(CANDIDATE_STATUSES),
@@ -162,10 +171,20 @@ export function redactForJudge(transcript: string): string {
 
 // SIO-1889: a quote the judge did not actually copy from the transcript is not
 // evidence. Whitespace-normalised substring check; nothing fuzzier, so a
-// paraphrase never passes as a citation.
+// paraphrase never passes as a citation. Greptile PR #917: only the ASSISTANT's
+// part of the transcript grounds a lesson -- a procedure the user merely stated
+// is a claim, not observed work. The caller's transcript labels turns
+// "User:" / "Assistant:" (readCompletedTurn); with no such labels the whole text
+// is treated as the agent's.
+export function assistantText(transcript: string): string {
+	const parts = transcript.split(/(?=^(?:User|Assistant):)/m);
+	const assistant = parts.filter((p) => p.startsWith("Assistant:"));
+	return assistant.length > 0 ? assistant.join("\n") : transcript;
+}
+
 export function verifyEvidence(quotes: string[] | undefined, redactedTranscript: string): string[] {
 	const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
-	const haystack = norm(redactedTranscript);
+	const haystack = norm(assistantText(redactedTranscript));
 	return (quotes ?? []).map((q) => q.trim()).filter((q) => q.length >= 8 && haystack.includes(norm(q)));
 }
 
@@ -361,7 +380,11 @@ export interface LearnFromTurnDeps {
 // Entry point invoked by the post-turn learner seam. Gated, best-effort, never
 // throws to the caller. `nowIso` is injected so the module stays deterministic in
 // tests (Date is not called here).
-export async function learnFromTurn(turn: SkillLearnerTurn, nowIso: string, deps: LearnFromTurnDeps = {}): Promise<void> {
+export async function learnFromTurn(
+	turn: SkillLearnerTurn,
+	nowIso: string,
+	deps: LearnFromTurnDeps = {},
+): Promise<void> {
 	if (!isSkillLearningEnabled()) return;
 	// Durable proposals require the agent-memory backend; on the file default there
 	// is nowhere to store a kind:skill fact, so the learner is a no-op.
@@ -378,7 +401,10 @@ export async function learnFromTurn(turn: SkillLearnerTurn, nowIso: string, deps
 	// to the judge exactly as before the gate existed.
 	const gate = await (deps.gate ?? gateLearning)({ events: transcriptToEvents(turn.transcript) });
 	if (gate.outcome === "applied" && !gate.verdict.qualifies) {
-		logger.debug({ threadId: turn.threadId, agent: turn.agentName, reason: gate.verdict.reason }, "learning gate: not reusable");
+		logger.debug(
+			{ threadId: turn.threadId, agent: turn.agentName, reason: gate.verdict.reason },
+			"learning gate: not reusable",
+		);
 		return;
 	}
 
@@ -397,11 +423,19 @@ export async function learnFromTurn(turn: SkillLearnerTurn, nowIso: string, deps
 		return;
 	}
 
-	enqueueFact(
+	// Greptile PR #917: the write-behind queue binds whatever session is active at
+	// enqueue time, and three awaits sit between the pre-gate and this line, so an
+	// overlapping request could relabel the candidate. The direct write binds
+	// turn.agentName itself.
+	const stored = await recordAgentFactNow(
+		turn.agentName,
 		buildSkillFactText(proposal),
-		nowIso,
 		buildSkillAnnotations(proposal, turn.threadId, nowIso, undefined, initialTaskSuccess(turn, gate)),
 	);
+	if (!stored) {
+		logger.warn({ skill: proposal.name, agent: turn.agentName }, "skill candidate write was not accepted");
+		return;
+	}
 	logger.info(
 		{ skill: proposal.name, agent: turn.agentName, category: proposal.task_category },
 		"crystallized skill candidate",

@@ -109,6 +109,13 @@ describe("SIO-1889 turnOutcome", () => {
 		expect(describeAgent("incident-analyzer").turnOutcome({ validationResult: "fail" })).toBe("failed");
 		expect(describeAgent("incident-analyzer").turnOutcome({})).toBe("completed");
 		expect(describeAgent("pi-fleet-console").turnOutcome({})).toBe("completed");
+		// Greptile PR #917: spokes asked, none answered -> the turn did not succeed.
+		expect(
+			describeAgent("pi-fleet-console").turnOutcome({ replies: [{ status: "no-reply" }, { status: "failed" }] }),
+		).toBe("failed");
+		expect(
+			describeAgent("pi-fleet-console").turnOutcome({ replies: [{ status: "failed" }, { status: "answered" }] }),
+		).toBe("completed");
 		expect(describeAgent("elastic-iac").turnOutcome({})).toBe("completed");
 	});
 });

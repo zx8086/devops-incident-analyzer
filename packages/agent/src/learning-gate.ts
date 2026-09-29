@@ -149,6 +149,9 @@ export async function gateLearning(input: LearningGateInput, deps: LearningGateD
 		const read = (id: LearningQuestionId): number => {
 			const n = asNoul(response.answers[id])?.noul;
 			if (n === undefined) throw new Error(`missing noul answer for ${id}`);
+			// Greptile PR #917: a probability outside [0, 1] would pass the floor and
+			// distort the mean and the calibration rows; the response is untrusted input.
+			if (!Number.isFinite(n) || n < 0 || n > 1) throw new Error(`out-of-range noul for ${id}`);
 			return n;
 		};
 		const verdict = judgeLearning(
@@ -172,9 +175,11 @@ export async function gateLearning(input: LearningGateInput, deps: LearningGateD
 		});
 		return { outcome: "applied", verdict, model: response.model };
 	} catch (error) {
-		// Status or shape only, never upstream text: the metrics DB is read by
-		// humans and the repo is public.
-		const reason = error instanceof Error && /status \d+/.test(error.message) ? error.message : "call-failed";
+		// Status CODE only, never upstream text: the metrics DB is read by humans and
+		// the repo is public. Greptile PR #917: a message that merely contains a status
+		// phrase can still carry echoed response text, so only the digits survive.
+		const status = error instanceof Error ? /status (\d+)/.exec(error.message)?.[1] : undefined;
+		const reason = status ? `status-${status}` : "call-failed";
 		recordDecision({ seam, outcome: "failed", requestId: input.requestId, latencyMs: now() - started, note: reason });
 		return { outcome: "failed", reason };
 	}

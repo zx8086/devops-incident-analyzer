@@ -110,8 +110,15 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		// incident analyzer's context, so it is offered from there rather than
 		// cycled as a peer of the IaC config maker.
 		surface: "contextual",
-		// No outcome signal of its own: thumbs (SIO-1890) decides task_success.
-		turnOutcome: () => "completed",
+		// Greptile PR #917: a turn that asked spokes and heard from none did not
+		// succeed. PiFleetState.replies carries each spoke's status; with replies
+		// and no "answered" among them the turn failed. No replies (the model
+		// answered without asking anyone) counts as completed; thumbs (SIO-1890)
+		// still outranks this.
+		turnOutcome: (values) => {
+			const replies = Array.isArray(values.replies) ? (values.replies as Array<{ status?: string }>) : [];
+			return replies.length > 0 && !replies.some((r) => r.status === "answered") ? "failed" : "completed";
+		},
 		graph: getPiFleetGraph,
 	},
 	"elastic-iac": {

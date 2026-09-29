@@ -59,6 +59,22 @@ export function parsePromoteArgs(argv: string[]): PromoteArgs {
 	};
 }
 
+// SIO-1889 (Greptile PR #917): promotion takes the LATEST fact for the skill and
+// refuses one whose latest state is rejected or superseded -- otherwise an older
+// version of a rejected lesson could still open a promotion PR. Pure, so the
+// rule is unit-tested without the backend.
+export function selectPromotableCandidate<H extends { text: string; annotations: Record<string, string | undefined> }>(
+	latest: H[],
+): { ok: true; hit: H } | { ok: false; reason: string } {
+	const hit = latest[0];
+	if (!hit) return { ok: false, reason: 'No kind:skill candidate found for skill_name="<skill>" (agent <agent>).' };
+	const status = hit.annotations.status ?? "candidate";
+	if (status === "rejected" || status === "superseded") {
+		return { ok: false, reason: `Candidate "<skill>" (agent <agent>) is ${status}; refusing to promote it.` };
+	}
+	return { ok: true, hit };
+}
+
 // The manifest hint a human pastes into agent.yaml in default (draft) mode. --pr
 // performs this edit itself, on a branch.
 function manifestHint(agent: string, skill: string): string {
@@ -110,14 +126,16 @@ async function main(): Promise<void> {
 	const skill = args.skill;
 	if (!skill) throw new Error("missing required --skill <skill_name>");
 
-	const hits = await searchAgentMemory(args.agent, "", { kind: "skill", skill_name: skill }, 1, {
+	const { latestPerSkill } = await import("./skill-learner.ts");
+	const hits = await searchAgentMemory(args.agent, "", { kind: "skill", skill_name: skill }, 64, {
 		deterministic: true,
 	});
-	const hit = hits[0];
-	if (!hit) {
-		console.error(`No kind:skill proposal found for skill_name="${skill}" (agent ${args.agent}).`);
+	const chosen = selectPromotableCandidate(latestPerSkill(hits));
+	if (!chosen.ok) {
+		console.error(chosen.reason.replace("<skill>", skill).replace("<agent>", args.agent));
 		process.exit(1);
 	}
+	const hit = chosen.hit;
 
 	const filePath = skillFilePath(getWorkspaceRoot(), args.agent, skill);
 	if (existsSync(filePath) && !args.force) {

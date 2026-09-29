@@ -45,7 +45,9 @@ describe("judgeLearning (beacon rule)", () => {
 	});
 
 	test("task_success at the floor then needs the mean to clear 0.6", () => {
-		expect(judgeLearning({ task_success: 0.5, reusable_correction: 0.9, evidence_supported: 0.9 }).qualifies).toBe(true);
+		expect(judgeLearning({ task_success: 0.5, reusable_correction: 0.9, evidence_supported: 0.9 }).qualifies).toBe(
+			true,
+		);
 		const low = judgeLearning({ task_success: 0.5, reusable_correction: 0.5, evidence_supported: 0.6 });
 		expect(low.qualifies).toBe(false);
 		expect(low.reason).toBe("reusable_correction");
@@ -121,10 +123,7 @@ describe("gateLearning", () => {
 		expect(out.model).toBe("jev-1.13.0");
 		expect(seen?.questions).toBe(LEARNING_QUESTIONS);
 		const state = seen?.state as { session: string[] } | undefined;
-		expect(state?.session).toEqual([
-			"User: fix the lag",
-			"Assistant: done, it was the ILM policy",
-		]);
+		expect(state?.session).toEqual(["User: fix the lag", "Assistant: done, it was the ILM policy"]);
 		expect(rows).toHaveLength(1);
 		expect(rows[0]).toMatchObject({ seam: "learning-gate", outcome: "applied", note: "qualifies", requestId: "r1" });
 		expect(rows[0]?.topScore).toBeCloseTo(0.8);
@@ -158,7 +157,7 @@ describe("gateLearning", () => {
 				},
 			},
 		);
-		expect(out).toEqual({ outcome: "failed", reason: "TypeSafe request failed with status 503" });
+		expect(out).toEqual({ outcome: "failed", reason: "status-503" });
 		const other = await gateLearning(
 			{ events: ["x"] },
 			{
@@ -170,6 +169,31 @@ describe("gateLearning", () => {
 		);
 		expect(other).toEqual({ outcome: "failed", reason: "call-failed" });
 		expect(rows.every((r) => !String(r.note).includes("123-45"))).toBe(true);
+	});
+
+	test("a probability outside [0, 1] is a failure, never averaged in", async () => {
+		const out = await gateLearning(
+			{ events: ["x"] },
+			{
+				apiKey: "k",
+				ask: async () => answers({ task_success: 1.7, reusable_correction: 0.9, evidence_supported: 0.9 }),
+			},
+		);
+		expect(out.outcome).toBe("failed");
+		expect(rows[0]).toMatchObject({ outcome: "failed", note: "call-failed" });
+	});
+
+	test("a status phrase inside echoed text yields only the code", async () => {
+		const out = await gateLearning(
+			{ events: ["x"] },
+			{
+				apiKey: "k",
+				ask: async () => {
+					throw new Error("status 502 while parsing: user ssn 123-45-6789");
+				},
+			},
+		);
+		expect(out).toEqual({ outcome: "failed", reason: "status-502" });
 	});
 
 	test("a missing answer is a failure, not a silent zero", async () => {

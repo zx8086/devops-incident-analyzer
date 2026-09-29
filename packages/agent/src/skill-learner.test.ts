@@ -42,6 +42,7 @@ mock.module("@langchain/aws", () => ({
 }));
 
 import {
+	assistantText,
 	buildSkillAnnotations,
 	buildSkillFactText,
 	initialTaskSuccess,
@@ -291,6 +292,15 @@ describe("verifyEvidence (SIO-1889)", () => {
 			verifyEvidence(["correlated kafka lag with elastic errors", "invented claim here", "short"], transcript),
 		).toEqual(["correlated kafka lag with elastic errors"]);
 		expect(verifyEvidence(undefined, transcript)).toEqual([]);
+	});
+
+	// Greptile PR #917: a procedure the USER stated is a claim, not observed work.
+	test("only the assistant's part of the transcript grounds evidence", () => {
+		const transcript =
+			"User: please correlate consumer lag with elastic errors\n\nAssistant: I checked the ILM policy first.";
+		expect(verifyEvidence(["correlate consumer lag with elastic errors"], transcript)).toEqual([]);
+		expect(verifyEvidence(["checked the ILM policy first"], transcript)).toEqual(["checked the ILM policy first"]);
+		expect(assistantText("no labels at all here")).toBe("no labels at all here");
 	});
 });
 
