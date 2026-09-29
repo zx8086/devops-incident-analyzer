@@ -463,6 +463,36 @@ describe("learnFromTurn", () => {
 		expect(added[0]?.annotations?.task_success_source).toBe("turn-outcome");
 	});
 
+	// Greptile PR #917: a transiently rejected direct write is queued for the flush
+	// retry when the active session is this turn's own, and dropped otherwise.
+	test("a rejected direct write is queued only when the active session is this turn's", async () => {
+		process.env.SKILL_LEARNING_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient, pendingWriteCount, setActiveMemorySession, clearActiveMemorySession } =
+			await import("./memory-backend.ts");
+		const { client } = memStub();
+		client.addFacts = async (_ref: unknown, facts: string[]) => ({
+			blockIds: [],
+			acceptedCount: 0,
+			rejectedCount: facts.length,
+		});
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(client as any);
+		llmContent =
+			'{"worthy":true,"name":"lag-corr","description":"Correlate lag with errors.","when_to_use":"When lag and errors rise together.","procedure_summary":"Pull consumer lag and elastic error rate over one window, then align the timestamps to confirm.","task_category":"lag","evidence":["correlated kafka lag with elastic errors"]}';
+
+		setActiveMemorySession("incident-analyzer", "t1");
+		await learnFromTurn(turn(), NOW);
+		expect(pendingWriteCount()).toBe(1);
+
+		clearActiveMemorySession();
+		const { __resetMemoryQueue } = await import("./memory-backend.ts");
+		__resetMemoryQueue();
+		setActiveMemorySession("incident-analyzer", "another-thread");
+		await learnFromTurn(turn(), NOW);
+		expect(pendingWriteCount()).toBe(0);
+	});
+
 	test("a Jev verdict that does not qualify ends the turn before the judge", async () => {
 		process.env.SKILL_LEARNING_ENABLED = "true";
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";

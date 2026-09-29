@@ -23,8 +23,11 @@ import { createLlm, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
 import { parseLlmJson } from "./llm-json.ts";
 import {
 	dedupePreferring,
+	enqueueFact,
+	getActiveMemoryRef,
 	type MemorySearchHit,
 	recordAgentFactNow,
+	resolveUserId,
 	searchAgentMemory,
 	selectedBackend,
 } from "./memory-backend.ts";
@@ -427,13 +430,25 @@ export async function learnFromTurn(
 	// enqueue time, and three awaits sit between the pre-gate and this line, so an
 	// overlapping request could relabel the candidate. The direct write binds
 	// turn.agentName itself.
-	const stored = await recordAgentFactNow(
-		turn.agentName,
-		buildSkillFactText(proposal),
-		buildSkillAnnotations(proposal, turn.threadId, nowIso, undefined, initialTaskSuccess(turn, gate)),
-	);
+	const text = buildSkillFactText(proposal);
+	const annotations = buildSkillAnnotations(proposal, turn.threadId, nowIso, undefined, initialTaskSuccess(turn, gate));
+	const stored = await recordAgentFactNow(turn.agentName, text, annotations);
 	if (!stored) {
-		logger.warn({ skill: proposal.name, agent: turn.agentName }, "skill candidate write was not accepted");
+		// Greptile PR #917 (round 2): a transient rejection must not lose the
+		// candidate. The write-behind queue retries at flush and teardown, but it
+		// binds whatever session is active NOW, so it is only a safe fallback when
+		// that session is this turn's own; otherwise the candidate is dropped with a
+		// warning rather than filed under another conversation.
+		const active = getActiveMemoryRef();
+		if (active && active.userId === resolveUserId(turn.agentName) && active.sessionId === turn.threadId) {
+			enqueueFact(text, nowIso, annotations);
+			logger.warn(
+				{ skill: proposal.name, agent: turn.agentName },
+				"skill candidate queued for retry after a rejected write",
+			);
+		} else {
+			logger.warn({ skill: proposal.name, agent: turn.agentName }, "skill candidate write was not accepted; dropped");
+		}
 		return;
 	}
 	logger.info(
