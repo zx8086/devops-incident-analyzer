@@ -10,6 +10,8 @@ const mockStreamEvents = mock(() => ({
 }));
 
 const mockUpdateState = mock(() => Promise.resolve());
+// SIO-1888: toggled per test so the console can be selectable or not.
+const mockIsPiComsConfigured = mock(() => false);
 const bootOrder: string[] = [];
 const mockRegisterSchedules = mock(() => {
 	bootOrder.push("schedules");
@@ -105,7 +107,7 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-1655: graph-registry imports both from the barrel to gate the console:
 	// the capability flag AND whether a hub exists to serve it.
 	isPiFleetGraphEnabled: mock(() => true),
-	isPiComsConfigured: mock(() => false),
+	isPiComsConfigured: mockIsPiComsConfigured,
 	// SIO-1888: the console is routed through invokeAgent now, so its graph has the
 	// same surface as the other two mocked builders.
 	buildPiFleetGraph: mock(() =>
@@ -461,6 +463,7 @@ describe("invokeAgent", () => {
 	// incident graph. It now runs the console graph with the operator's question.
 	test("routes the fleet console to its own graph with the operator's question", async () => {
 		mockStreamEvents.mockClear();
+		mockIsPiComsConfigured.mockReturnValueOnce(true);
 
 		await invokeAgent([{ role: "user", content: "what is eu-oit-dev doing?" }], {
 			threadId: "thread-fleet",
@@ -476,6 +479,16 @@ describe("invokeAgent", () => {
 		expect(call[0].targetDataSources).toBeUndefined();
 		expect(call[0].requestId).toBeUndefined();
 		expect((call[1].metadata as Record<string, unknown>).request_id).toBe("request-fleet");
+	});
+
+	// Greptile PR #916: the selector's gate must hold on the invocation path too.
+	test("refuses the fleet console when it is not selectable in this deployment", async () => {
+		mockStreamEvents.mockClear();
+		mockIsPiComsConfigured.mockReturnValueOnce(false);
+		await expect(
+			invokeAgent([{ role: "user", content: "hi" }], { threadId: "thread-fleet-off", agentName: "pi-fleet-console" }),
+		).rejects.toThrow("not available");
+		expect(mockStreamEvents).not.toHaveBeenCalled();
 	});
 });
 
