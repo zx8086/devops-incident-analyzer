@@ -13,6 +13,7 @@ import {
 	isTerminal,
 	type ReviewResponse,
 	type ReviewRowView,
+	rowKey,
 } from "$lib/learning-review-pane";
 import Icon from "./Icon.svelte";
 
@@ -63,18 +64,18 @@ async function load() {
 }
 
 function toggle(row: ReviewRowView) {
-	if (expanded === row.skillName) {
+	if (expanded === rowKey(row)) {
 		expanded = null;
 		return;
 	}
-	expanded = row.skillName;
+	expanded = rowKey(row);
 	editTitle = row.title;
 	editBody = row.body;
 	supersedeBy = "";
 }
 
 async function act(row: ReviewRowView, action: "approve" | "reject" | "supersede") {
-	busy = row.skillName;
+	busy = rowKey(row);
 	try {
 		// kind disambiguates a skill and a runbook of one name; expectedStatus is the
 		// status this row showed, so a decision stored since is refused, not stacked.
@@ -96,9 +97,9 @@ async function act(row: ReviewRowView, action: "approve" | "reject" | "supersede
 		const reply: ReviewResponse = res.ok
 			? (data as Extract<ReviewResponse, { ok: true }>)
 			: { ok: false, httpStatus: res.status, error: String(data.error ?? res.statusText) };
-		rows = applyReviewResponse(rows, row.skillName, reply);
+		rows = applyReviewResponse(rows, row, reply);
 	} catch {
-		rows = applyReviewResponse(rows, row.skillName, { ok: false, httpStatus: 0, error: "request failed" });
+		rows = applyReviewResponse(rows, row, { ok: false, httpStatus: 0, error: "request failed" });
 	} finally {
 		busy = null;
 	}
@@ -145,12 +146,12 @@ const STATUS_CLASS: Record<ReviewRowView["status"], string> = {
       <p class="text-sm text-gray-500">No learning candidates for this agent yet.</p>
     {:else}
       <ul class="space-y-2">
-        {#each rows as row (`${row.kind}:${row.skillName}`)}
+        {#each rows as row (rowKey(row))}
           <li class="rounded-lg border border-gray-200">
             <button
               type="button"
               onclick={() => toggle(row)}
-              aria-expanded={expanded === row.skillName}
+              aria-expanded={expanded === rowKey(row)}
               class="flex w-full items-start justify-between gap-3 px-3 py-2 text-left hover:bg-gray-50"
             >
               <span class="min-w-0">
@@ -165,10 +166,10 @@ const STATUS_CLASS: Record<ReviewRowView["status"], string> = {
                   <span class="rounded bg-gray-100 px-1.5 py-0.5 text-gray-700">{row.evidence.length} evidence</span>
                 </span>
               </span>
-              <Icon name={expanded === row.skillName ? "collapse" : "expand"} class="mt-1 h-4 w-4 shrink-0 text-gray-400" />
+              <Icon name={expanded === rowKey(row) ? "collapse" : "expand"} class="mt-1 h-4 w-4 shrink-0 text-gray-400" />
             </button>
 
-            {#if expanded === row.skillName}
+            {#if expanded === rowKey(row)}
               <div class="space-y-3 border-t border-gray-100 px-3 py-3">
                 <p class="text-xs text-gray-500">learned {row.learnedAt} from {row.learnedFrom}; confidence {row.confidence || "n/a"}</p>
                 <label class="block text-xs font-medium text-gray-700">
@@ -210,7 +211,7 @@ const STATUS_CLASS: Record<ReviewRowView["status"], string> = {
                     <button
                       type="button"
                       onclick={() => act(row, "approve")}
-                      disabled={busy === row.skillName || !canApprove(row)}
+                      disabled={busy === rowKey(row) || !canApprove(row)}
                       title={canApprove(row) ? "Approve and open the promotion PR" : "Needs a confirmed task_success (thumbs-up or a completed outcome)"}
                       class="rounded bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
                     >
@@ -220,7 +221,7 @@ const STATUS_CLASS: Record<ReviewRowView["status"], string> = {
                       <button
                         type="button"
                         onclick={() => act(row, "reject")}
-                        disabled={busy === row.skillName}
+                        disabled={busy === rowKey(row)}
                         class="rounded bg-gray-700 px-3 py-1 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-40"
                       >
                         Reject
@@ -236,7 +237,7 @@ const STATUS_CLASS: Record<ReviewRowView["status"], string> = {
                     <button
                       type="button"
                       onclick={() => act(row, "supersede")}
-                      disabled={busy === row.skillName || supersedeBy.trim() === ""}
+                      disabled={busy === rowKey(row) || supersedeBy.trim() === ""}
                       class="rounded border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-40"
                     >
                       Supersede

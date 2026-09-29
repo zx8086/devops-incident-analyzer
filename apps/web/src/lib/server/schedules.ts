@@ -24,7 +24,7 @@ import {
 	topologyCronEnabled as topologyBackendAvailable,
 } from "@devops-agent/agent";
 import { loadSchedules, loadWorkflows } from "@devops-agent/gitagent-bridge";
-import { getLogger } from "@devops-agent/observability";
+import { getLogger, runWithRequestContext } from "@devops-agent/observability";
 
 const log = getLogger("agent:schedules");
 
@@ -126,12 +126,43 @@ export function startSchedules(): void {
 	}
 }
 
+// SIO-1887 (Greptile PR #915): a sweep fires from a timer, not an HTTP request, so
+// nothing named its agent and every live-memory write it made (reconcile's key
+// decisions, the GitLab import's daily-log breadcrumbs) fell to the writer's
+// incident-analyzer default. Each sweep declares the agent it acts for; the
+// synthetic thread id also makes the sweep's log lines correlatable.
+export const SCHEDULE_AGENTS = {
+	"iac-reconcile-sweep": "elastic-iac",
+	"kg-topology-sweep": "incident-analyzer",
+	"kg-purge-sweep": "incident-analyzer",
+	"iac-gitlab-import-sweep": "elastic-iac",
+	"lz-gitlab-import-sweep": "landing-zone-terraform",
+} as const;
+
+export function underScheduleAgent<T>(
+	scheduleId: keyof typeof SCHEDULE_AGENTS,
+	run: () => Promise<T>,
+): () => Promise<T> {
+	return async () =>
+		runWithRequestContext(
+			{
+				threadId: `schedule:${scheduleId}`,
+				runId: crypto.randomUUID(),
+				requestId: crypto.randomUUID(),
+				agentName: SCHEDULE_AGENTS[scheduleId],
+			},
+			run,
+		);
+}
+
 export const SCHEDULE_NODE_HANDLERS = {
 	nodes: {
-		"iac-reconcile-sweep": () => reconcileAll({ source: "cron" }),
-		"kg-topology-sweep": () => runTopologySweep({ source: "cron" }),
-		"kg-purge-sweep": () => runUncuratedPurgeSweep({ source: "cron" }),
-		"iac-gitlab-import-sweep": () => importExternalChanges({ source: "cron" }),
-		"lz-gitlab-import-sweep": () => runLandingZoneGitLabImportSweep(),
+		"iac-reconcile-sweep": underScheduleAgent("iac-reconcile-sweep", () => reconcileAll({ source: "cron" })),
+		"kg-topology-sweep": underScheduleAgent("kg-topology-sweep", () => runTopologySweep({ source: "cron" })),
+		"kg-purge-sweep": underScheduleAgent("kg-purge-sweep", () => runUncuratedPurgeSweep({ source: "cron" })),
+		"iac-gitlab-import-sweep": underScheduleAgent("iac-gitlab-import-sweep", () =>
+			importExternalChanges({ source: "cron" }),
+		),
+		"lz-gitlab-import-sweep": underScheduleAgent("lz-gitlab-import-sweep", () => runLandingZoneGitLabImportSweep()),
 	},
 };

@@ -40,12 +40,23 @@ export function isTerminal(row: Pick<ReviewRowView, "status">): boolean {
 	return row.status === "rejected" || row.status === "superseded";
 }
 
+// One row is identified by kind AND name: a skill and a runbook may share a
+// name (Greptile PR #919), and they are reviewed separately.
+export function rowKey(row: Pick<ReviewRowView, "kind" | "skillName">): string {
+	return `${row.kind}:${row.skillName}`;
+}
+
 // Apply the server's answer to the one row it concerns. A refusal keeps the
 // row's state and carries the reason; a success moves the state and reports
 // the PR, if any.
-export function applyReviewResponse(rows: ReviewRowView[], skillName: string, res: ReviewResponse): ReviewRowView[] {
+export function applyReviewResponse(
+	rows: ReviewRowView[],
+	target: Pick<ReviewRowView, "kind" | "skillName">,
+	res: ReviewResponse,
+): ReviewRowView[] {
+	const key = rowKey(target);
 	return rows.map((row) => {
-		if (row.skillName !== skillName) return row;
+		if (rowKey(row) !== key) return row;
 		if (!res.ok) return { ...row, message: `${res.httpStatus}: ${res.error}` };
 		const pr =
 			res.prStatus === "opened" && res.prUrl

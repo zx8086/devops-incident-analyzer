@@ -17,6 +17,10 @@ import type { RequestHandler } from "./$types";
 
 const log = getLogger("api.agent.topic-shift");
 
+// SIO-1887: this route serves incident-analyzer only; the name reaches the
+// request context so live-memory writes resolve to its runtime dir.
+const AGENT = "incident-analyzer";
+
 const ResumeRequestSchema = z.object({
 	threadId: z.string().min(1),
 	decision: z.enum(["continue", "fresh"]),
@@ -40,7 +44,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			const runId = crypto.randomUUID();
 			const requestId = crypto.randomUUID();
 
-			await runWithRequestContext({ threadId: body.threadId, runId, requestId }, async () => {
+			await runWithRequestContext({ threadId: body.threadId, runId, requestId, agentName: AGENT }, async () => {
 				log.info("agent.request.resume.start");
 				const startTime = Date.now();
 				try {
@@ -93,7 +97,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							await pruneThreadState(body.threadId);
 							// SIO-942: persist this turn's live-memory blocks (best-effort). Topic-shift
 							// is an incident-analyzer continuation, matching the default above.
-							await runPostTurn({ agentName: "incident-analyzer", threadId: body.threadId });
+							await runPostTurn({ agentName: AGENT, threadId: body.threadId });
 							const responseTime = Date.now() - startTime;
 							log.info({ responseTime, toolsUsed: toolsUsed.length, toolNames: toolsUsed }, "agent.request.resume.end");
 							send({

@@ -6,6 +6,7 @@ import {
 	describeTaskSuccess,
 	isTerminal,
 	type ReviewRowView,
+	rowKey,
 } from "./learning-review-pane.ts";
 
 const row = (over: Partial<ReviewRowView> = {}): ReviewRowView => ({
@@ -44,31 +45,36 @@ describe("learning review pane rules (SIO-1891)", () => {
 
 	test("a 409 keeps the row's state and shows the server's reason on that row only", () => {
 		const rows = [row(), row({ skillName: "other" })];
-		const out = applyReviewResponse(rows, "lag-corr", {
-			ok: false,
-			httpStatus: 409,
-			error: "no confirmed task_success",
-		});
+		const out = applyReviewResponse(rows, row(), { ok: false, httpStatus: 409, error: "no confirmed task_success" });
 		expect(out[0]).toMatchObject({ status: "candidate", message: "409: no confirmed task_success" });
 		expect(out[1]?.message).toBeUndefined();
 	});
 
+	// Greptile PR #919: a skill and a runbook of one name are two rows.
+	test("a response reaches only the row of its kind when names collide", () => {
+		const rows = [row(), row({ kind: "runbook" })];
+		const out = applyReviewResponse(rows, row({ kind: "runbook" }), { ok: true, status: "rejected" });
+		expect(out[0]).toMatchObject({ kind: "skill", status: "candidate" });
+		expect(out[1]).toMatchObject({ kind: "runbook", status: "rejected", message: "now rejected" });
+		expect(rowKey(row())).toBe("skill:lag-corr");
+	});
+
 	test("a success moves the state and reports the PR", () => {
-		const out = applyReviewResponse([row({ taskSuccess: "1" })], "lag-corr", {
+		const out = applyReviewResponse([row({ taskSuccess: "1" })], row(), {
 			ok: true,
 			status: "approved",
 			prStatus: "opened",
 			prUrl: "https://github.com/o/r/pull/9",
 		});
 		expect(out[0]).toMatchObject({ status: "approved", message: "PR opened: https://github.com/o/r/pull/9" });
-		const skipped = applyReviewResponse([row()], "lag-corr", {
+		const skipped = applyReviewResponse([row()], row(), {
 			ok: true,
 			status: "approved",
 			prStatus: "skipped",
 			prReason: "MEMORY_PR_ENABLED is not set",
 		});
 		expect(skipped[0]?.message).toBe("PR skipped (MEMORY_PR_ENABLED is not set)");
-		const rejected = applyReviewResponse([row()], "lag-corr", { ok: true, status: "rejected" });
+		const rejected = applyReviewResponse([row()], row(), { ok: true, status: "rejected" });
 		expect(rejected[0]?.message).toBe("now rejected");
 	});
 });

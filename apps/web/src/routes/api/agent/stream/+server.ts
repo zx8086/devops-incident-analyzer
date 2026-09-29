@@ -119,7 +119,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					}
 				};
 
-				await runWithRequestContext({ threadId, runId, requestId }, async () => {
+				await runWithRequestContext({ threadId, runId, requestId, agentName: body.agentName }, async () => {
 					log.info("agent.request.start");
 					try {
 						await traceSpan(
@@ -243,6 +243,26 @@ export const POST: RequestHandler = async ({ request }) => {
 										responseTime: Date.now() - startTime,
 										toolsUsed,
 										telemetry,
+									});
+									return;
+								}
+
+								// SIO-1888: the fleet console composes one AIMessage at the end instead of
+								// streaming tokens (streamsTokens: false in the registry), so its answer is
+								// read from terminal state like the two graphs above. No interrupts. A name
+								// branch like its two siblings: this block is the graph-specific completion.
+								if (body.agentName === "pi-fleet-console") {
+									const finalText = await getLastAssistantText(threadId, body.agentName);
+									if (finalText) send({ type: "message", content: finalText });
+									await pruneThreadState(threadId, body.agentName);
+									await runPostTurn({ agentName: body.agentName, threadId });
+									send({
+										type: "done",
+										threadId,
+										requestId,
+										runId,
+										responseTime: Date.now() - startTime,
+										toolsUsed,
 									});
 									return;
 								}

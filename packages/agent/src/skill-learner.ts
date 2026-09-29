@@ -457,4 +457,58 @@ export async function learnFromTurn(
 	);
 }
 
+// SIO-1890: thumbs feedback is the human task_success signal (agent-beacon's hard
+// precondition). It is recorded as its own fact and applied to every candidate
+// this thread produced as a state transition: thumbs-up sets task_success=1 from
+// feedback (outranking jev and the turn outcome), thumbs-down rejects. Already
+// rejected or superseded candidates are left alone. Same fact stream, no new store.
+export async function recordTurnFeedback(
+	agentName: string,
+	threadId: string,
+	score: 0 | 1,
+	nowIso: string = new Date().toISOString(),
+): Promise<{ transitions: number }> {
+	if (selectedBackend() !== "agent-memory") return { transitions: 0 };
+	await recordAgentFactNow(agentName, `User feedback ${score === 1 ? "up" : "down"} on thread ${threadId}`, {
+		kind: "feedback",
+		thread_id: threadId,
+		score: String(score),
+	});
+	const hits = latestPerSkill(
+		await searchAgentMemory(agentName, "", { kind: "skill", learned_from: `thread:${threadId}` }, 64, {
+			deterministic: true,
+		}),
+	);
+	let transitions = 0;
+	let eligible = 0;
+	for (const hit of hits) {
+		const status = hit.annotations.status ?? "candidate";
+		// Greptile PR #918: a rejection that came from an earlier thumbs-down is the
+		// human's previous verdict, and the latest verdict replaces it (a changed vote
+		// reopens the candidate). A rejection from the review pane, or a supersession,
+		// stands.
+		const feedbackRejected = status === "rejected" && hit.annotations.task_success_source === "feedback";
+		if (status === "superseded" || (status === "rejected" && !feedbackRejected)) continue;
+		eligible += 1;
+		const next: AnnotationMap = {
+			...hit.annotations,
+			learned_at: nowIso,
+			task_success: String(score),
+			task_success_source: "feedback",
+			status: score === 0 ? "rejected" : feedbackRejected ? "candidate" : status,
+		};
+		if (await recordAgentFactNow(agentName, hit.text, next)) transitions += 1;
+	}
+	// Greptile PR #918: the row says whether the transitions were stored, not
+	// whether they were attempted.
+	recordDecision({
+		seam: "learning-feedback",
+		outcome: transitions === eligible ? "applied" : "failed",
+		itemsIn: hits.length,
+		itemsDropped: score === 0 ? transitions : 0,
+		note: `${score === 1 ? "thumbs-up" : "thumbs-down"}:${transitions}/${eligible}`,
+	});
+	return { transitions };
+}
+
 export type { AnnotationMap };

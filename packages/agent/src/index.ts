@@ -309,6 +309,7 @@ export {
 	lessonQuality,
 	listLearningCandidates,
 	preGateSkip,
+	recordTurnFeedback,
 	type SkillLearnerTurn,
 	type SkillProposal,
 	SkillProposalSchema,
