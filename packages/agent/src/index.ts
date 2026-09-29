@@ -194,6 +194,14 @@ export {
 	transcriptToEvents,
 } from "./learning-gate.ts";
 export {
+	isLearningReviewEnabled,
+	listReviewRows,
+	type ReviewAction,
+	type ReviewResult,
+	type ReviewRow,
+	reviewCandidate,
+} from "./learning-review.ts";
+export {
 	type BootstrapContext,
 	type BootstrapResult,
 	getEvidenceToc,

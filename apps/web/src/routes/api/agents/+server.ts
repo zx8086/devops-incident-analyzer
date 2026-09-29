@@ -5,6 +5,7 @@
 // configured pi-coms hub, both server-side. Same idea as the SIO-1650 pane,
 // which hides until /api/pi/agents reports a configured hub.
 
+import { isLearningReviewEnabled } from "@devops-agent/agent";
 import { json } from "@sveltejs/kit";
 import { listSelectableAgents } from "$lib/server/graph-registry";
 import type { RequestHandler } from "./$types";
@@ -20,5 +21,6 @@ export const GET: RequestHandler = async () => {
 		surface: a.surface,
 		hasTriageGraph: a.hasTriageGraph,
 	}));
-	return json({ agents });
+	// SIO-1891: whether the learning review pane is offered (server-side kill-switch).
+	return json({ agents, learningReview: isLearningReviewEnabled() });
 };
