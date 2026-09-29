@@ -119,7 +119,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					}
 				};
 
-				await runWithRequestContext({ threadId, runId, requestId }, async () => {
+				await runWithRequestContext({ threadId, runId, requestId, agentName: body.agentName }, async () => {
 					log.info("agent.request.start");
 					try {
 						await traceSpan(

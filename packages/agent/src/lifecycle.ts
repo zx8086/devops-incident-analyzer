@@ -15,6 +15,7 @@
 import type { BootstrapStep, TeardownStep } from "@devops-agent/gitagent-bridge";
 import { getLogger, traceSpan } from "@devops-agent/observability";
 import { appendDailyLog, type DailyLogEntry, readLiveMemory } from "./memory-writer.ts";
+import { getAgentsDir } from "./paths.ts";
 import { getAgentByName } from "./prompt-context.ts";
 
 const logger = getLogger("agent:lifecycle");
@@ -134,7 +135,9 @@ export interface TeardownContext {
 async function runBootstrapStep(step: BootstrapStep, result: BootstrapResult, ctx: BootstrapContext): Promise<void> {
 	switch (step) {
 		case "load_live_memory": {
-			const mem = readLiveMemory();
+			// SIO-1887: bootstrap runs outside runWithRequestContext, so name the
+			// agent explicitly rather than relying on the writer's context lookup.
+			const mem = readLiveMemory(getAgentsDir(ctx.agentName));
 			result.liveMemoryContext = mem.context;
 			// SIO-938: when an agent-memory recaller is registered, augment the
 			// file-durable context with semantic recall over past sessions, keyed
@@ -222,7 +225,8 @@ export async function runBootstrap(ctx: BootstrapContext): Promise<BootstrapResu
 async function runTeardownStep(step: TeardownStep, ctx: TeardownContext): Promise<void> {
 	switch (step) {
 		case "flush_daily_log":
-			if (ctx.dailyLogEntry) appendDailyLog(ctx.dailyLogEntry);
+			// SIO-1887: teardown also runs outside a request context (see bootstrap).
+			if (ctx.dailyLogEntry) appendDailyLog(ctx.dailyLogEntry, ctx.agentName ? getAgentsDir(ctx.agentName) : undefined);
 			// SIO-938: drain the agent-memory write-behind queue and end the session.
 			// appendDailyLog above only enqueued; this flushes everything written this
 			// session. Best-effort; failures never abort teardown.
