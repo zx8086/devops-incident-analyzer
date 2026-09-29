@@ -180,7 +180,7 @@ Incident-analyzer only. After a turn, the post-turn learner seam (`skill-learner
 
 ## Lifecycle: when reads and writes happen
 
-Driven by each agent's `hooks/hooks.yaml` lifecycle steps, run per session (keyed by `threadId`) from `apps/web/src/lib/server/agent.ts`. incident-analyzer, elastic-iac and landing-zone-terraform declare the same bootstrap set (`load_live_memory`, `load_wiki_index`, `warm_knowledge_graph`, `emit_session_start`) and teardown set (`flush_daily_log`, `checkpoint_key_decisions`); incident-analyzer additionally declares `open_memory_pr`. pi-fleet-console has no `hooks.yaml` and runs no lifecycle steps. The lifecycle runner resolves hooks for the **invoked** agent via `getAgentByName(ctx.agentName)`, so each agent runs its own steps under its own Agent Memory user.
+Driven by each agent's `hooks/hooks.yaml` lifecycle steps, run per session (keyed by `threadId`) from `apps/web/src/lib/server/agent.ts`. incident-analyzer, elastic-iac and landing-zone-terraform declare the same bootstrap set (`load_live_memory`, `load_wiki_index`, `warm_knowledge_graph`, `emit_session_start`) and the teardown steps `flush_daily_log` and `checkpoint_key_decisions`; incident-analyzer additionally declares `open_memory_pr`, and landing-zone-terraform additionally declares `close_knowledge_graph`. pi-fleet-console has no `hooks.yaml` and runs no lifecycle steps (SIO-1888 adds it the memory subset). The lifecycle runner resolves hooks for the **invoked** agent via `getAgentByName(ctx.agentName)`, so each agent runs its own steps under its own Agent Memory user.
 
 **Bootstrap (session start)** — `load_live_memory` step:
 1. read durable context (file context still loaded for the prompt), then
