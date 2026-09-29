@@ -1,4 +1,5 @@
 // apps/web/src/lib/server/schedules.agent-context.test.ts
+
 // SIO-1887 (Greptile PR #915): scheduled sweeps run outside any HTTP request, so
 // they must open their own request context naming the agent they act for, or
 // their live-memory writes fall to the writer's incident-analyzer default.
