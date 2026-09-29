@@ -143,7 +143,7 @@ describe("aggregate", () => {
 			{ hours: 168 },
 		);
 		expect(analysis.portfolio.length).toBe(1);
-		expect(analysis.portfolio[0]).toMatchObject({ id: "PF1", action: "create", recurrence: 2 });
+		expect(analysis.portfolio[0]).toMatchObject({ id: "PF1", action: "create", recurrence: 2, finding: "F1" });
 	});
 
 	test("a recurring failure that names a datasource is NOT a create candidate", () => {
