@@ -56,9 +56,13 @@ export function parseSkillFactBody(body: string): ParsedSkillBody {
 }
 
 // Pull the text following a "Label:" line up to the next labelled line or end.
+// SIO-1891 (Greptile PR #919): a label counts only at a line START, matching the
+// end-of-section scan below; a reviewer's "Procedure: ..." inside a procedure
+// (stored indented by neutraliseLabels) is body text, not a new section.
 function matchLabel(text: string, label: string): string | undefined {
-	const idx = text.indexOf(label);
-	if (idx === -1) return undefined;
+	const m = new RegExp(`(?:^|\\n)${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).exec(text);
+	if (!m) return undefined;
+	const idx = m.index + (m[0].startsWith("\n") ? 1 : 0);
 	const after = text.slice(idx + label.length);
 	// stop at the next known label so a single-line body splits cleanly
 	const next = after.search(/\n(?:Proposed skill:|When to use:|Procedure:|Evidence:)/);
