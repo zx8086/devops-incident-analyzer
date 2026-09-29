@@ -4,7 +4,8 @@
 import { describe, expect, test } from "bun:test";
 import { LearningCandidateSchema } from "../skill-learner.ts";
 import type { Analysis } from "./aggregate.ts";
-import { reflectCandidates, slug } from "./candidates.ts";
+import { reactedSessions, reflectCandidates, sharedTool, slug } from "./candidates.ts";
+import type { Scan } from "./schema.ts";
 
 const evidence = [
 	{ session: "s1", message: 4, tool: "mcp_probe_unknown", excerpt: "tool mcp_probe_unknown failed: timeout after 30s" },
@@ -66,7 +67,8 @@ describe("reflectCandidates (SIO-1893)", () => {
 		});
 		expect(c?.title.length).toBeLessThanOrEqual(80);
 		expect(c?.applicability.startsWith("When mcp_probe_unknown fails")).toBe(true);
-		expect(c?.body).toContain("Do: add a skill that owns mcp_probe_unknown");
+		expect(c?.body).toContain("Do: before calling mcp_probe_unknown");
+		expect(c?.body).not.toContain("add a skill");
 		expect(c?.evidence[0]).toEqual({
 			ref: "reflect:2026-09-29:F1:s1#4",
 			excerpt: "tool mcp_probe_unknown failed: timeout after 30s",
@@ -91,6 +93,47 @@ describe("reflectCandidates (SIO-1893)", () => {
 		});
 		const c = reflectCandidates(a, "2026-09-29").candidates[0];
 		expect(c).toMatchObject({ status: "rejected", task_success: "0", task_success_source: "reflect" });
+	});
+
+	// Greptile PR #921: a single-session reaction is not a finding, so the scans decide.
+	test("a reaction seen in one session only, present in the scans, still rejects the draft", () => {
+		const scan = {
+			source: { host: "h", id: "s2", threadId: null, created: null, headless: false, datasources: [] },
+			request: null,
+			stats: { userMessages: 2 } as Scan["stats"],
+			signals: [
+				{
+					id: "S1",
+					kind: "user-handoff",
+					severity: "high",
+					summary: "handed off",
+					count: 1,
+					suspects: [],
+					evidence: [],
+				},
+			],
+			notes: [],
+		} as unknown as Scan;
+		expect([...reactedSessions(analysis(), [scan])]).toEqual(["s2"]);
+		const c = reflectCandidates(analysis(), "2026-09-29", { scans: [scan] }).candidates[0];
+		expect(c).toMatchObject({ status: "rejected", task_success: "0" });
+		expect(reflectCandidates(analysis(), "2026-09-29").candidates[0]?.status).toBe("candidate");
+	});
+
+	// Greptile PR #921: two tools pooled into one finding are not one recurring tool.
+	test("a draft names a tool only when every evidence entry shares it", () => {
+		const a = analysis();
+		const item = a.portfolio[0];
+		if (!item) throw new Error("fixture");
+		expect(sharedTool(item)).toBe("mcp_probe_unknown");
+		const [first, second] = evidence;
+		if (!first || !second) throw new Error("fixture");
+		item.evidence = [first, { ...second, tool: "mcp_other_tool" }];
+		expect(sharedTool(item)).toBeNull();
+		const c = reflectCandidates(a, "x").candidates[0];
+		expect(c?.skill_name).toBe("reflect-unattributed-tool-f1");
+		expect(c?.applicability.startsWith("When an unattributed tool fails")).toBe(true);
+		expect(c?.body).not.toContain("mcp_probe_unknown");
 	});
 
 	test("links by evidence when an older analysis carries no finding id; skips unlinked or evidence-less items", () => {

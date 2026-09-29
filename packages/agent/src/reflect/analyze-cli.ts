@@ -11,7 +11,7 @@
 // redactPiiContent deliberately preserves hostnames, IPs and account ids (SIO-861), so a
 // report is not committable in a public repo.
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { getWorkspaceRoot } from "../paths.ts";
 import { listSessions } from "./adapter-langsmith.ts";
 import { aggregate } from "./aggregate.ts";
@@ -79,10 +79,14 @@ async function main(): Promise<void> {
 	writeFileSync(jsonPath, `${JSON.stringify(analysis, null, 2)}\n`);
 	writeFileSync(mdPath, renderMarkdown(analysis));
 	if (emitCandidates) {
-		const drafts = reflectCandidates(analysis, stamp);
-		writeFileSync(emitCandidates, `${JSON.stringify(drafts, null, 2)}\n`);
+		// Greptile PR #921: drafts quote real tool errors, so a relative path lands
+		// in the gitignored report dir, never in the cwd. The scans carry the
+		// single-session reactions the aggregate dropped.
+		const target = isAbsolute(emitCandidates) ? emitCandidates : join(reportDir, emitCandidates);
+		const drafts = reflectCandidates(analysis, stamp, { scans });
+		writeFileSync(target, `${JSON.stringify(drafts, null, 2)}\n`);
 		process.stdout.write(
-			`${JSON.stringify({ candidates: emitCandidates, drafted: drafts.candidates.length, skipped: drafts.skipped.length })}\n`,
+			`${JSON.stringify({ candidates: target, drafted: drafts.candidates.length, skipped: drafts.skipped.length })}\n`,
 		);
 	}
 

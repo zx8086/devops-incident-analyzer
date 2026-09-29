@@ -7,6 +7,7 @@
 // is PII-redacted before it can reach a candidate fact.
 import { redactPiiContent } from "@devops-agent/shared";
 import type { Analysis, Finding, PortfolioItem } from "./aggregate.ts";
+import type { Scan } from "./schema.ts";
 
 // A reaction signal implicates the turn: a create item whose sessions also
 // carry one is filed rejected with task_success 0, never as a live candidate.
@@ -71,14 +72,34 @@ function findingFor(item: PortfolioItem, analysis: Analysis): Finding | undefine
 		: undefined;
 }
 
-function reactedSessions(analysis: Analysis): Set<string> {
+// Greptile PR #921: a reaction seen in ONE session never becomes a finding
+// (findings need recurrence), so the scans are the source of truth when the
+// caller has them; the findings are the fallback for a stored analysis.
+export function reactedSessions(analysis: Analysis, scans: Scan[] = []): Set<string> {
 	const out = new Set<string>();
+	for (const scan of scans) {
+		if (scan.signals.some((sig) => NEGATIVE_REACTIONS.has(sig.kind))) out.add(scan.source.id);
+	}
 	for (const f of analysis.findings) if (NEGATIVE_REACTIONS.has(f.kind)) for (const s of f.sessions) out.add(s);
 	return out;
 }
 
-export function reflectCandidates(analysis: Analysis, stamp: string): ReflectCandidatesOutput {
-	const reacted = reactedSessions(analysis);
+// Greptile PR #921: a create finding pools every unattributed failure, so a
+// tool is named only when every evidence entry agrees on it; otherwise the
+// draft speaks of unattributed tools and never claims recurrence for one.
+export function sharedTool(item: PortfolioItem): string | null {
+	const tools = new Set(item.evidence.map((e) => e.tool ?? ""));
+	if (tools.size !== 1) return null;
+	const only = [...tools][0];
+	return only ? only : null;
+}
+
+export function reflectCandidates(
+	analysis: Analysis,
+	stamp: string,
+	opts: { scans?: Scan[] } = {},
+): ReflectCandidatesOutput {
+	const reacted = reactedSessions(analysis, opts.scans);
 	const out: ReflectCandidatesOutput = {
 		generated_at: analysis.generatedAt,
 		window: analysis.window,
@@ -100,20 +121,22 @@ export function reflectCandidates(analysis: Analysis, stamp: string): ReflectCan
 			continue;
 		}
 		const r = (s: string) => redactPiiContent(s);
-		const tool = item.evidence.find((e) => e.tool)?.tool ?? null;
+		const tool = sharedTool(item);
 		const subject = tool ?? "an unattributed tool";
 		const negative = finding.sessions.some((s) => reacted.has(s));
 		const learnedFrom = `reflect:${stamp}:${finding.id}`;
 		out.candidates.push({
 			kind: "skill",
-			skill_name: slug(["reflect", tool ?? finding.kind, finding.id]),
+			skill_name: slug(["reflect", tool ?? "unattributed-tool", finding.id]),
 			title: cap(r(sentence(finding.summary)), TITLE_MAX),
 			applicability: r(`When ${subject} fails as in: ${sentence(finding.summary)}`),
+			// Greptile PR #921: the body is the PROCEDURE a promoted skill would carry,
+			// so it says how to handle the failing call, never "add a skill".
 			body: r(
 				[
-					`Do: add a skill that owns ${subject}: name the datasource it belongs to, the call that fails, and the check that prevents the failure.`,
-					`Why: ${sentence(item.reason)} Recurred in ${item.recurrence} session(s) (${finding.count} occurrence(s), severity ${finding.severity}).`,
-					`Confirm with: the next reflect window no longer lists ${subject} under tool-failure.`,
+					`Do: before calling ${subject}, confirm its server is connected and the tool is listed for it; if the call still fails, report the failure's category once and move on rather than retrying the same call.`,
+					`Why: ${sentence(item.reason)} Recurred in ${item.recurrence} session(s) (${finding.count} occurrence(s), severity ${finding.severity}); a call nothing owns is a capability gap, not a transient.`,
+					`Confirm with: the next reflect window no longer lists ${tool ? subject : "an unattributed tool failure"} under tool-failure.`,
 				].join("\n"),
 			),
 			evidence: item.evidence.slice(0, 5).map((e) => ({
