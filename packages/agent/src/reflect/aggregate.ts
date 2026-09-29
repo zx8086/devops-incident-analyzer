@@ -64,6 +64,12 @@ export const PortfolioItemSchema = z.object({
 	reason: z.string(),
 	recurrence: z.number(),
 	evidence: z.array(EvidenceSchema.extend({ session: z.string() })).max(3),
+	// SIO-1893: the finding this item was derived from, so a candidate draft can
+	// carry its summary and sessions. Optional: older analyses predate it.
+	finding: z
+		.string()
+		.regex(/^F\d+$/)
+		.optional(),
 });
 export type PortfolioItem = z.infer<typeof PortfolioItemSchema>;
 
@@ -210,6 +216,7 @@ export function aggregate(scans: Scan[], options: { hours: number; now?: Date })
 				reason: `recurring ${group.kind} names no datasource, so nothing owns this gap`,
 				recurrence,
 				evidence: group.evidence.slice(0, 3),
+				finding: `F${findings.length}`,
 			});
 		}
 	}

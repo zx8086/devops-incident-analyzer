@@ -93,7 +93,7 @@ export type SkillProposal = z.infer<typeof SkillProposalSchema>;
 // the same skill_name and a later learned_at; readers keep the latest.
 export const CANDIDATE_STATUSES = ["candidate", "approved", "rejected", "superseded"] as const;
 export const CANDIDATE_SOURCES = ["turn", "hil", "reflect", "fleet"] as const;
-export const TASK_SUCCESS_SOURCES = ["", "jev", "feedback", "hil", "turn-outcome", "fleet-verdict"] as const;
+export const TASK_SUCCESS_SOURCES = ["", "jev", "feedback", "hil", "turn-outcome", "fleet-verdict", "reflect"] as const;
 
 export const LearningCandidateSchema = z.object({
 	kind: z.enum(["skill", "runbook"]),
