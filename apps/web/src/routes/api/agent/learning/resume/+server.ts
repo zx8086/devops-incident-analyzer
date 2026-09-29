@@ -25,6 +25,10 @@ import type { RequestHandler } from "./$types";
 
 const log = getLogger("api.agent.learning.resume");
 
+// SIO-1887: this route serves incident-analyzer only; the name reaches the
+// request context so live-memory writes resolve to its runtime dir.
+const AGENT = "incident-analyzer";
+
 // match answers the incident-match gate (incidentId null = "none of these" ->
 // create a new incident record); review answers the per-item approve/reject gate.
 const ResumeRequestSchema = z
@@ -85,7 +89,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			const runId = crypto.randomUUID();
 			const requestId = crypto.randomUUID();
 
-			await runWithRequestContext({ threadId: body.threadId, runId, requestId }, async () => {
+			await runWithRequestContext({ threadId: body.threadId, runId, requestId, agentName: AGENT }, async () => {
 				log.info("agent.learning.resume.start");
 				const startTime = Date.now();
 				try {
@@ -130,7 +134,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							if (finalText) send({ type: "message", content: finalText });
 
 							await pruneThreadState(body.threadId);
-							await runPostTurn({ agentName: "incident-analyzer", threadId: body.threadId });
+							await runPostTurn({ agentName: AGENT, threadId: body.threadId });
 							const responseTime = Date.now() - startTime;
 							log.info({ responseTime, toolsUsed: toolsUsed.length }, "agent.learning.resume.end");
 							send({ type: "done", threadId: body.threadId, responseTime, toolsUsed });

@@ -13,8 +13,9 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { redactPiiContent, verifyHashChain } from "@devops-agent/shared";
+import { redactPiiContent, runWithRequestContext, verifyHashChain } from "@devops-agent/shared";
 import * as realMemoryBackendNs from "./memory-backend.ts";
+import * as realPathsNs from "./paths.ts";
 
 // SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
 // mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING this
@@ -25,6 +26,16 @@ import * as realMemoryBackendNs from "./memory-backend.ts";
 const realMemoryBackend = { ...realMemoryBackendNs };
 
 mock.module("./memory-backend.ts", () => realMemoryBackend);
+
+// SIO-1887: the writer resolves the per-agent runtime dir through getAgentsDir(name)
+// when no baseDir is passed. Point that at a temp agents root so the request-context
+// tests below never touch the real agents/ tree.
+const realPaths = { ...realPathsNs };
+let agentsRoot = "";
+mock.module("./paths.ts", () => ({
+	...realPaths,
+	getAgentsDir: (name = "incident-analyzer") => join(agentsRoot, name),
+}));
 
 import { appendDailyLog, readLiveMemory, recordKeyDecision } from "./memory-writer.ts";
 
@@ -148,5 +159,62 @@ describe("recordKeyDecision", () => {
 		process.env.LIVE_MEMORY_ENABLED = "false";
 		recordKeyDecision({ requestId: "r9", decision: "x" }, baseDir);
 		expect(readFileSync(join(runtimeDir(), "key-decisions.md"), "utf-8")).toBe("# Key Decisions\n");
+	});
+});
+
+// SIO-1887: with no baseDir, the writer lands in the runtime dir of the agent named on
+// the request context. Before this every elastic-iac / landing-zone write went to
+// incident-analyzer's files on the file backend.
+describe("per-agent runtime dir from the request context (SIO-1887)", () => {
+	function seedAgent(name: string): string {
+		const dir = join(agentsRoot, name, "memory", "runtime");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "key-decisions.md"), "# Key Decisions\n");
+		writeFileSync(join(dir, "dailylog.md"), "# Daily Log\n");
+		return dir;
+	}
+
+	beforeEach(() => {
+		agentsRoot = mkdtempSync(join(tmpdir(), "agents-root-"));
+	});
+
+	afterEach(() => {
+		rmSync(agentsRoot, { recursive: true, force: true });
+	});
+
+	test("recordKeyDecision inside a request context writes to that agent's files", () => {
+		const ia = seedAgent("incident-analyzer");
+		const iac = seedAgent("elastic-iac");
+		runWithRequestContext({ threadId: "t", runId: "r", requestId: "q", agentName: "elastic-iac" }, () => {
+			recordKeyDecision({ requestId: "q", decision: "iac decision" });
+			appendDailyLog({ requestId: "q", services: [], datasources: ["gitlab"] });
+		});
+		expect(readFileSync(join(iac, "key-decisions.md"), "utf-8")).toContain("iac decision");
+		expect(readFileSync(join(iac, "dailylog.md"), "utf-8")).toContain("datasources=[gitlab]");
+		expect(readFileSync(join(ia, "key-decisions.md"), "utf-8")).toBe("# Key Decisions\n");
+		expect(readFileSync(join(ia, "dailylog.md"), "utf-8")).toBe("# Daily Log\n");
+	});
+
+	test("outside a request context the historical incident-analyzer default still applies", () => {
+		const ia = seedAgent("incident-analyzer");
+		seedAgent("elastic-iac");
+		recordKeyDecision({ requestId: "q", decision: "no-context decision" });
+		expect(readFileSync(join(ia, "key-decisions.md"), "utf-8")).toContain("no-context decision");
+	});
+
+	test("a context without agentName also falls back to the default", () => {
+		const ia = seedAgent("incident-analyzer");
+		runWithRequestContext({ threadId: "t", runId: "r", requestId: "q" }, () => {
+			recordKeyDecision({ requestId: "q", decision: "nameless decision" });
+		});
+		expect(readFileSync(join(ia, "key-decisions.md"), "utf-8")).toContain("nameless decision");
+	});
+
+	test("an explicit baseDir still wins over the request context", () => {
+		seedAgent("elastic-iac");
+		runWithRequestContext({ threadId: "t", runId: "r", requestId: "q", agentName: "elastic-iac" }, () => {
+			recordKeyDecision({ requestId: "q", decision: "explicit dir" }, baseDir);
+		});
+		expect(readFileSync(join(runtimeDir(), "key-decisions.md"), "utf-8")).toContain("explicit dir");
 	});
 });

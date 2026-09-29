@@ -98,7 +98,7 @@ On our side, the client method `searchMemory(query)` *is* this embedding-powered
 
 | Agent Memory concept | Our value |
 |---|---|
-| **User** (`user_id`) | the agent: `incident-analyzer` or `elastic-iac` (one user per agent — `resolveUserId()`) |
+| **User** (`user_id`) | the agent: `incident-analyzer`, `elastic-iac`, `landing-zone-terraform` or `pi-fleet-console` (one user per agent; the identity map in `memory-backend.ts` throws for any other name) |
 | **Session** (`session_id`) | the chat `threadId` (one session per conversation thread) |
 | **Memory block** | one fact or one conversational message (below) |
 
@@ -117,7 +117,7 @@ Written once per completed investigation. Maps to Agent Memory **Conversational 
 
 ### 2. Key decision -> durable **fact** (no TTL)
 
-`recordKeyDecision()` -> Agent Memory **Profile / Semantic Memory** fact: `"<decision> (rationale: <rationale>)"`, no TTL (durable across sessions). NOTE: in the file backend, durable learnings are PR-gated (EPIC 1, `memory-pr`); the direct `recordKeyDecision` writer exists for API completeness and is not on the incident-analyzer hot path today.
+`recordKeyDecision()` -> Agent Memory **Profile / Semantic Memory** fact: `"<decision> (rationale: <rationale>)"`, no TTL (durable across sessions). `recordKeyDecision` IS on the hot path (HIL apply, IaC change/reconcile, landing-zone breadcrumbs, pi verdict memory); `memory-pr` is the separate human-reviewed wiki/skill/runbook channel. On the file backend the writer resolves the agent's runtime dir from the request context's `agentName` (SIO-1887); outside a request it falls back to incident-analyzer.
 
 The compiled wiki (`memory/wiki/`) maps conceptually to durable facts too, but is not yet pushed to Agent Memory by this change (see Out of scope).
 
@@ -137,8 +137,8 @@ Beyond the two block types above, the agents read and write memory in a number o
 | W6 | Skill-learning proposal fact | `skill-learner.ts` `buildSkillFactText`/`buildSkillAnnotations` | post-turn learner seam, incident-analyzer only | durable **fact** `kind:skill` with `skill_name`, `task_category`, seeded `confidence="0.5"`, `learned_from`, usage/success/failure counters (SIO-1015) |
 | W7 | Session annotations | `memory-backend.ts` `setSessionDatasources` / `setSessionOutcome` (SIO-952) | session create / teardown | session-level annotations: `datasources` span at first write, `outcome` at end |
 | W8 | Investigation telemetry binding | `record-bindings.ts` `recordConfirmedBindings` -> `recordKeyDecision` (SIO-1100) | end of turn, per confirmed binding (incident-analyzer); `KG_BINDINGS_WRITE_ENABLED` defaults on, set =false to disable | durable **fact** `kind:kg-binding` with annotations `service`, `service_normalized`, `binding_kind`, `resource_id`, `locator`, `datasource`, `discovered_by`, `incident_id`, `confidence`, `alias_raw`. Dedup key `(service, binding_kind, resource_id)` (same idiom as `config_change_id ?? mr_url`); the graph `hasBinding` check gates the write so a re-confirmation is graph-only. System of record for the KG's `OBSERVED_IN` projection — the `knowledge-graph:rebuild` CLI replays these facts. The graph write is independent (SIO-970): it happens even on the `file` backend, only the fact needs `agent-memory`. |
-| W9 | KG incident mirror fact | `graph-knowledge.ts` `recordGraphEntities` -> `recordKeyDecision` (SIO-1103) | after `entityExtractor` (incident-analyzer), when KG enabled | durable **fact** `kind:kg-incident` with annotations `incident_id`, `services`, `severity`, `summary`. P1 forward-fill: makes the graph's `Incident` + `AFFECTED_BY` rebuildable from the system of record (embeddings are NOT mirrored — re-embed is a Bedrock cost). Graph write is independent of the fact (SIO-970). |
-| W10 | KG root-cause mirror fact | `graph-knowledge.ts` `recordRootCauseData` -> `recordKeyDecision` (SIO-1103) | after `aggregateMitigation`, when a cross-domain correlation held | durable **fact** `kind:kg-root-cause` with annotations `incident_id`, `root_cause_id`, `rule_name`, `description`, `confidence`. Makes the `RootCause` + `HAS_ROOT_CAUSE` edge rebuildable. |
+| W9 | KG incident mirror fact | (removed, SIO-1135) | -- | no longer written per run: only curated investigations become durable memory and facts are immutable, so a per-run mirror would resurrect every uncurated incident on rebuild. The graph MERGE still records the `Incident` row for the session; the mirror fact is written at curation time (`learn/apply.ts`). |
+| W10 | KG root-cause mirror fact | (removed, SIO-1135) | -- | same reasoning as W9: the graph MERGE links `HAS_ROOT_CAUSE` for the session, and the durable `kind:kg-root-cause` fact is written at curation time from `rootCauseForIncident`, so a rebuild reconstructs only curated root causes. |
 | W11 | HIL-learning applied items | `learn/apply.ts` `applyLearnings` (SIO-1126/1127) | `applyLearnings`, per human-approved item in the learning lane | durable **fact(s)** from a resolved ticket: human-corrected root cause + resolution (`kind:root-cause`, via `recordRootCause` + `linkResolution`), transferable diagnostic heuristics (`kind:skill`), corrected telemetry bindings (`kind:binding`), and free-form memory facts (`kind:memory-fact`) — each grounded in verbatim ticket-comment quotes. Applying also **curates** the matched KG `Incident` (writes its `ticketKey`); SIO-1135's retention sweep purges uncurated incidents and mirrors the curated facts. See the [HIL learning lane](agent-pipeline.md#hil-learning-lane). |
 
 ### Reads (recall)
@@ -180,7 +180,7 @@ Incident-analyzer only. After a turn, the post-turn learner seam (`skill-learner
 
 ## Lifecycle: when reads and writes happen
 
-Driven by each agent's `hooks/hooks.yaml` lifecycle steps, run per session (keyed by `threadId`) from `apps/web/src/lib/server/agent.ts`. Both agents have a `hooks.yaml`: incident-analyzer declares the full set (`load_live_memory`, `load_wiki_index`, `warm_knowledge_graph`, `emit_session_start` / `flush_daily_log`, `checkpoint_key_decisions`, `open_memory_pr`); elastic-iac declares the memory subset (`load_live_memory`, `emit_session_start` / `flush_daily_log`) — it has no wiki, knowledge-graph, or memory-pr trees. The lifecycle runner resolves hooks for the **invoked** agent via `getAgentByName(ctx.agentName)`, so each agent runs its own steps under its own Agent Memory user.
+Driven by each agent's `hooks/hooks.yaml` lifecycle steps, run per session (keyed by `threadId`) from `apps/web/src/lib/server/agent.ts`. incident-analyzer, elastic-iac and landing-zone-terraform declare the same bootstrap set (`load_live_memory`, `load_wiki_index`, `warm_knowledge_graph`, `emit_session_start`) and the teardown steps `flush_daily_log` and `checkpoint_key_decisions`; incident-analyzer additionally declares `open_memory_pr`, and landing-zone-terraform additionally declares `close_knowledge_graph`. pi-fleet-console has no `hooks.yaml` and runs no lifecycle steps (SIO-1888 adds it the memory subset). The lifecycle runner resolves hooks for the **invoked** agent via `getAgentByName(ctx.agentName)`, so each agent runs its own steps under its own Agent Memory user.
 
 **Bootstrap (session start)** — `load_live_memory` step:
 1. read durable context (file context still loaded for the prompt), then
