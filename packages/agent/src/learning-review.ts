@@ -73,12 +73,17 @@ function promotionKey(kind: string, skillName: string): string {
 // retry decision needs), keyed by the candidate's own kind and name. No bulk
 // read: a bounded bulk result could go stale or miss a row once history is
 // long, and the fallback it needed was where the last two defects lived.
+// Codex SIO-1896: deterministic retrieval ignores `limit` (memory-backend omits
+// relevant_k), so an agent can have far more approved candidates than 64 per
+// kind; the reads run in bounded batches rather than one request per row at once.
+const OUTCOME_READ_CONCURRENCY = 8;
+
 async function latestPromotions(agent: string, candidates: MemorySearchHit[]): Promise<Map<string, PromotionOutcome>> {
 	const out = new Map<string, PromotionOutcome>();
-	await Promise.all(
-		candidates
-			.filter((h) => h.annotations.status === "approved" && h.annotations.skill_name)
-			.map(async (h) => {
+	const approved = candidates.filter((h) => h.annotations.status === "approved" && h.annotations.skill_name);
+	for (let i = 0; i < approved.length; i += OUTCOME_READ_CONCURRENCY) {
+		await Promise.all(
+			approved.slice(i, i + OUTCOME_READ_CONCURRENCY).map(async (h) => {
 				const target_kind = h.annotations.kind ?? "skill";
 				const skill_name = h.annotations.skill_name ?? "";
 				const hits = await searchAgentMemory(agent, "", { kind: "promotion", target_kind, skill_name }, 8, {
@@ -95,7 +100,8 @@ async function latestPromotions(agent: string, candidates: MemorySearchHit[]): P
 					...(best.annotations.pr_url ? { prUrl: best.annotations.pr_url } : {}),
 				});
 			}),
-	);
+		);
+	}
 	return out;
 }
 
@@ -463,10 +469,12 @@ export async function reviewCandidate(action: ReviewAction, deps: ReviewDeps = {
 				body: text,
 			});
 			if (!built.ok) {
-				// Codex SIO-1896: a manifest that already lists the skill, or one the
-				// edit cannot parse, fails the same way on every retry: terminal, so
-				// "blocked" (not retryable) rather than "skipped".
-				return { prStatus: "blocked", reason: built.reason, note: "approved-blocked" };
+				// Codex SIO-1896: a manifest that already lists the skill fails the same
+				// way on every retry ("blocked", not retryable); one the edit cannot
+				// parse may be repaired on the base branch later ("skipped", retryable).
+				return built.terminal
+					? { prStatus: "blocked", reason: built.reason, note: "approved-blocked" }
+					: { prStatus: "skipped", reason: built.reason, note: "approved-no-pr" };
 			}
 			const result = await promote({
 				kind: "new-skill",

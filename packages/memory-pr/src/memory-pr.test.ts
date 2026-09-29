@@ -165,21 +165,30 @@ describe("openMemoryPr happy path", () => {
 			return { url: "https://github.com/o/r/pull/7", number: 7, state: "open" };
 		};
 		const result = await openMemoryPr(validProposal, { env: enabledEnv, client });
-		expect(result).toMatchObject({ status: "blocked", reason: expect.stringContaining("pull/7, open") });
+		expect(result).toMatchObject({
+			status: "blocked",
+			url: "https://github.com/o/r/pull/7",
+			number: 7,
+			reason: expect.stringContaining("open PR #7"),
+		});
 		expect(calls).toEqual(["findPullRequest:agent/learn/kafka-lag->main"]);
 	});
 
-	test("an existing branch: with a PR it blocks, without one it is a retryable skip", async () => {
+	test("an existing branch: with a PR into ANY base it blocks, without one it is a retryable skip", async () => {
 		const withPr = makeFakeClient();
-		let looked = 0;
-		withPr.client.findPullRequest = async () =>
-			++looked === 1 ? null : { url: "https://github.com/o/r/pull/9", number: 9, state: "open" };
+		const lookups: Array<string | undefined> = [];
+		withPr.client.findPullRequest = async (_head, base) => {
+			lookups.push(base);
+			// Greptile #924: a PR into another base is found only by the base-less lookup
+			return base === undefined ? { url: "https://github.com/o/r/pull/9", number: 9, state: "open" } : null;
+		};
 		withPr.client.createBranch = async () => "exists";
 		expect(await openMemoryPr(validProposal, { env: enabledEnv, client: withPr.client })).toMatchObject({
 			status: "blocked",
 			reason: expect.stringContaining("pull/9"),
 		});
 		expect(withPr.calls.some((c) => c.startsWith("createPR"))).toBe(false);
+		expect(lookups).toEqual(["main", undefined]);
 
 		const { client, calls } = makeFakeClient();
 		client.createBranch = async () => "exists";
@@ -215,7 +224,10 @@ describe("openMemoryPr happy path", () => {
 			return { url: "https://github.com/o/r/pull/6", number: 6, state: "closed" };
 		};
 		const result = await openMemoryPr(validProposal, { env: enabledEnv, client });
-		expect(result).toMatchObject({ status: "blocked", reason: expect.stringContaining("pull/6, closed") });
+		expect(result).toMatchObject({
+			status: "blocked",
+			reason: expect.stringContaining("now closed; a reviewed proposal is not re-proposed automatically"),
+		});
 		expect(calls).toEqual(["findPullRequest:agent/learn/kafka-lag->main"]);
 	});
 

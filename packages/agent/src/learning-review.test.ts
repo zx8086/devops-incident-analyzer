@@ -281,6 +281,51 @@ describe("reviewCandidate", () => {
 		expect(writes).toBe(2);
 	});
 
+	// Codex SIO-1896: outcome reads run in bounded batches, never all at once.
+	test("outcome reads for many approved rows never exceed the concurrency bound", async () => {
+		const many = Array.from({ length: 20 }, (_, i) => candidate({ status: "approved", skill_name: `skill-${i}` }));
+		const s = await install(many);
+		let inFlight = 0;
+		let peak = 0;
+		const base = s.client.searchMemory;
+		s.client.searchMemory = async (ref: unknown, q: string, opts?: { annotations?: Record<string, string> }) => {
+			if (opts?.annotations?.kind !== "promotion") return base(ref, q, opts);
+			inFlight += 1;
+			peak = Math.max(peak, inFlight);
+			await new Promise((r) => setTimeout(r, 2));
+			inFlight -= 1;
+			return [];
+		};
+		const rows = await listReviewRows("incident-analyzer");
+		expect(rows).toHaveLength(20);
+		expect(peak).toBeLessThanOrEqual(8);
+		expect(peak).toBeGreaterThan(1);
+	});
+
+	// Codex SIO-1896: a manifest the edit cannot parse may be repaired later on the
+	// base branch, so that failure stays a retryable skip, unlike "already listed".
+	test("a malformed base manifest is approved and skipped, still retryable", async () => {
+		const s = await install([candidate()]);
+		const out = await reviewCandidate(
+			{ agent: "incident-analyzer", skillName: "lag-corr", action: "approve" },
+			{
+				promote: async () => {
+					throw new Error("must not be called");
+				},
+				fetchBase: async () => ({ status: "ok" as const, content: "skills: [unclosed\n" }),
+				now: () => NOW,
+			},
+		);
+		expect(out).toMatchObject({
+			ok: true,
+			status: "approved",
+			prStatus: "skipped",
+			prReason: expect.stringContaining("agent.yaml edit failed"),
+			promotionStored: true,
+		});
+		expect(s.added[1]?.annotations).toMatchObject({ kind: "promotion", promotion: "skipped" });
+	});
+
 	// Codex SIO-1896: a skill already listed in agent.yaml fails identically on
 	// every retry, so the outcome is terminal and the pane offers no retry.
 	test("a skill already listed in the manifest is approved but blocked, not retryable", async () => {

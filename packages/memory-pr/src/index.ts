@@ -133,9 +133,18 @@ export async function openMemoryPr(
 	// a retryable skip that names it, so an operator can delete it and retry.
 	// SIO-1357 keeps its guarantee: a repeated closure of the same thread finds
 	// its PR and blocks instead of opening a duplicate.
+	// Greptile #924: the advice depends on the state. A closed or merged PR means
+	// this proposal was reviewed already and is never re-proposed automatically.
 	const taken = (pr: CreatedPullRequest & { state: "open" | "closed" }): OpenMemoryPrResult => ({
 		status: "blocked",
-		reason: `branch "${parsed.branch}" already has PR #${pr.number} (${pr.url}, ${pr.state}); close or merge it before proposing again`,
+		// Codex SIO-1896: callers read the structured fields (runIncidentClose
+		// returns opened.url), so the existing PR is there, not only in the reason.
+		url: pr.url,
+		number: pr.number,
+		reason:
+			pr.state === "open"
+				? `branch "${parsed.branch}" already has open PR #${pr.number} (${pr.url}); review that PR instead`
+				: `branch "${parsed.branch}" already had PR #${pr.number} (${pr.url}), now closed; a reviewed proposal is not re-proposed automatically`,
 	});
 	const existing = await client.findPullRequest(parsed.branch, config.base);
 	if (existing) return taken(existing);
@@ -147,7 +156,9 @@ export async function openMemoryPr(
 		message: `${proposal.title}\n\nAutomated durable-memory proposal (${proposal.kind}). Review before merge.`,
 	});
 	if ((await client.createBranch(parsed.branch, commitSha)) === "exists") {
-		const pr = await client.findPullRequest(parsed.branch, config.base);
+		// Greptile #924: any base here. A PR into another base still backs the
+		// branch, and the "delete it" advice below must never point at a live PR.
+		const pr = await client.findPullRequest(parsed.branch);
 		if (pr) return taken(pr);
 		return {
 			status: "skipped",
