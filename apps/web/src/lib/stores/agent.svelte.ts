@@ -510,6 +510,9 @@ function createAgentStore() {
 					body: JSON.stringify({
 						runId: msg.runId,
 						score: current === "up" ? 1 : 0,
+						// SIO-1890: lets the server apply the verdict to this thread's learning candidates.
+						threadId: threadId || undefined,
+						agentName: currentAgent,
 					}),
 				});
 			} catch {
