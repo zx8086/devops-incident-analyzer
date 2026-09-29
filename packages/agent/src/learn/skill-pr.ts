@@ -13,13 +13,18 @@ import { addSkillToManifest } from "../skill-manifest.ts";
 import { renderSkillMarkdown } from "../skill-promote.ts";
 import { buildPrBody, buildPrTitle } from "../skill-promote-git.ts";
 
-// The HIL learn lane only runs for the orchestrator (LEARNER_AGENT in
-// skill-learner.ts), so the target agent is fixed.
-export const SKILL_PR_AGENT = "incident-analyzer";
-export const AGENT_MANIFEST_PATH = `agents/${SKILL_PR_AGENT}/agent.yaml`;
-export const SKILL_DIR = `agents/${SKILL_PR_AGENT}/skills`;
+// SIO-1889: the target agent is a parameter -- the learner now runs for every
+// top-level agent, and the review pane (SIO-1891) promotes for whichever agent
+// owns the candidate.
+export function agentManifestPath(agent: string): string {
+	return `agents/${agent}/agent.yaml`;
+}
+export function agentSkillDir(agent: string): string {
+	return `agents/${agent}/skills`;
+}
 
 export interface SkillPrInput {
+	agent: string;
 	skillName: string;
 	annotations: AnnotationMap;
 	body: string;
@@ -47,16 +52,16 @@ export function buildSkillPrFiles(baseManifestYaml: string, input: SkillPrInput)
 	return {
 		ok: true,
 		files: [
-			{ path: `${SKILL_DIR}/${input.skillName}/SKILL.md`, contents: markdown },
-			{ path: AGENT_MANIFEST_PATH, contents: edit.content },
+			{ path: `${agentSkillDir(input.agent)}/${input.skillName}/SKILL.md`, contents: markdown },
+			{ path: agentManifestPath(input.agent), contents: edit.content },
 		],
 	};
 }
 
-export function buildSkillPrTitle(skillName: string): string {
-	return buildPrTitle(SKILL_PR_AGENT, skillName);
+export function buildSkillPrTitle(agent: string, skillName: string): string {
+	return buildPrTitle(agent, skillName);
 }
 
-export function buildSkillPrBody(skillName: string, annotations: AnnotationMap): string {
-	return buildPrBody({ agent: SKILL_PR_AGENT, skill: skillName, annotations });
+export function buildSkillPrBody(agent: string, skillName: string, annotations: AnnotationMap): string {
+	return buildPrBody({ agent, skill: skillName, annotations });
 }

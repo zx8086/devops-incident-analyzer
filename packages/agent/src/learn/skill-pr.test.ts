@@ -2,7 +2,9 @@
 import { describe, expect, test } from "bun:test";
 import { validateSkillFile } from "@devops-agent/gitagent-bridge";
 import type { AnnotationMap } from "@devops-agent/shared";
-import { AGENT_MANIFEST_PATH, buildSkillPrBody, buildSkillPrFiles, buildSkillPrTitle, SKILL_DIR } from "./skill-pr.ts";
+import { agentManifestPath, agentSkillDir, buildSkillPrBody, buildSkillPrFiles, buildSkillPrTitle } from "./skill-pr.ts";
+
+const AGENT = "incident-analyzer";
 
 const ANNOTATIONS: AnnotationMap = {
 	kind: "skill",
@@ -26,12 +28,16 @@ const BASE_MANIFEST = ["name: incident-analyzer", "skills:", "  - existing-skill
 describe("buildSkillPrFiles (SIO-1346)", () => {
 	test("stages SKILL.md (pr banner) and the edited agent.yaml", () => {
 		const result = buildSkillPrFiles(BASE_MANIFEST, {
+			agent: AGENT,
 			skillName: "lag-correlation",
 			annotations: ANNOTATIONS,
 			body: BODY,
 		});
 		if (!result.ok) throw new Error(`expected ok, got: ${result.reason}`);
-		expect(result.files.map((f) => f.path)).toEqual([`${SKILL_DIR}/lag-correlation/SKILL.md`, AGENT_MANIFEST_PATH]);
+		expect(result.files.map((f) => f.path)).toEqual([
+			`${agentSkillDir(AGENT)}/lag-correlation/SKILL.md`,
+			agentManifestPath(AGENT),
+		]);
 		const [skill, manifest] = result.files;
 		expect(skill?.contents).toContain("activates on merge");
 		expect(skill?.contents).toContain("## Procedure");
@@ -52,7 +58,7 @@ describe("buildSkillPrFiles (SIO-1346)", () => {
 			"  - concurrently-merged-skill",
 			"",
 		].join("\n");
-		const input = { skillName: "lag-correlation", annotations: ANNOTATIONS, body: BODY };
+		const input = { agent: AGENT, skillName: "lag-correlation", annotations: ANNOTATIONS, body: BODY };
 
 		const fromStale = buildSkillPrFiles(staleSnapshot, input);
 		const fromLive = buildSkillPrFiles(liveBase, input);
@@ -68,6 +74,7 @@ describe("buildSkillPrFiles (SIO-1346)", () => {
 
 	test("a manifest without a skills: list is a soft failure, not a throw", () => {
 		const result = buildSkillPrFiles("name: incident-analyzer\n", {
+			agent: AGENT,
 			skillName: "lag-correlation",
 			annotations: ANNOTATIONS,
 			body: BODY,
@@ -78,7 +85,12 @@ describe("buildSkillPrFiles (SIO-1346)", () => {
 
 	test("a skill already listed in the manifest is a soft skip (second dedup layer)", () => {
 		const already = ["name: incident-analyzer", "skills:", "  - lag-correlation", ""].join("\n");
-		const result = buildSkillPrFiles(already, { skillName: "lag-correlation", annotations: ANNOTATIONS, body: BODY });
+		const result = buildSkillPrFiles(already, {
+			agent: AGENT,
+			skillName: "lag-correlation",
+			annotations: ANNOTATIONS,
+			body: BODY,
+		});
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.reason).toContain("already listed in agent.yaml");
 	});
@@ -89,6 +101,7 @@ describe("buildSkillPrFiles (SIO-1346)", () => {
 	// that the spec gate would redden.
 	test("the generated SKILL.md passes the agentskills.io spec validator", () => {
 		const result = buildSkillPrFiles(BASE_MANIFEST, {
+			agent: AGENT,
 			skillName: "lag-correlation",
 			annotations: ANNOTATIONS,
 			body: BODY,
@@ -100,12 +113,28 @@ describe("buildSkillPrFiles (SIO-1346)", () => {
 });
 
 describe("buildSkillPrTitle / buildSkillPrBody (SIO-1346)", () => {
-	test("title names the skill and the fixed learner agent", () => {
-		expect(buildSkillPrTitle("lag-correlation")).toBe("Promote learned skill: lag-correlation (incident-analyzer)");
+	test("title names the skill and the owning agent", () => {
+		expect(buildSkillPrTitle(AGENT, "lag-correlation")).toBe("Promote learned skill: lag-correlation (incident-analyzer)");
+		expect(buildSkillPrTitle("elastic-iac", "lag-correlation")).toBe("Promote learned skill: lag-correlation (elastic-iac)");
+	});
+
+	// SIO-1889: another agent's candidate lands under ITS tree, never the orchestrator's.
+	test("files are staged under the owning agent's tree", () => {
+		const result = buildSkillPrFiles(["name: elastic-iac", "skills:", "  - existing", ""].join("\n"), {
+			agent: "elastic-iac",
+			skillName: "ilm-tier-check",
+			annotations: ANNOTATIONS,
+			body: BODY,
+		});
+		if (!result.ok) throw new Error(`expected ok, got: ${result.reason}`);
+		expect(result.files.map((f) => f.path)).toEqual([
+			"agents/elastic-iac/skills/ilm-tier-check/SKILL.md",
+			"agents/elastic-iac/agent.yaml",
+		]);
 	});
 
 	test("body carries provenance, the review checklist, and the merge-activation note", () => {
-		const body = buildSkillPrBody("lag-correlation", ANNOTATIONS);
+		const body = buildSkillPrBody(AGENT, "lag-correlation", ANNOTATIONS);
 		expect(body).toContain("learned_from: ticket:OPS-123");
 		expect(body).toContain("learned_at: 2026-08-01T10:00:00Z");
 		expect(body).toContain("Review checklist:");

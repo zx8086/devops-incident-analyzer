@@ -570,16 +570,16 @@ export async function pruneThreadState(threadId: string, agentName: string = DEF
 	}
 }
 
-// SIO-1015: read the just-completed orchestrator turn into the skill-learner's
-// input. Scoped to incident-analyzer (elastic-iac has no confidence/datasource
-// signal) -> returns null for any other agent. Best-effort: null on any failure.
+// SIO-1015: read the just-completed turn into the skill-learner's input.
+// SIO-1889: for EVERY agent. A confidence-bearing agent (the orchestrator) passes
+// its confidence + datasource signal; the others pass the graph's own terminal
+// outcome from the registry's turnOutcome. Best-effort: null on any failure.
 // Builds a compact transcript (latest user ask + assistant report) for the judge;
 // the learner core PII-redacts before any write.
 async function readCompletedTurn(ctx: { agentName: string; threadId: string }): Promise<SkillLearnerTurn | null> {
-	// SIO-1655: the capability this site actually depends on, not the agent's name.
-	if (!describeAgent(ctx.agentName).hasConfidence) return null;
+	const descriptor = describeAgent(ctx.agentName);
 	try {
-		const graph = await getGraph();
+		const graph = await graphFor(ctx.agentName);
 		const snapshot = await graph.getState({ configurable: { thread_id: ctx.threadId } });
 		const values = snapshot.values ?? {};
 		const messages = (values.messages ?? []) as BaseMessage[];
@@ -605,6 +605,17 @@ async function readCompletedTurn(ctx: { agentName: string; threadId: string }): 
 			.filter(Boolean)
 			.join("\n\n");
 
+		if (!descriptor.hasConfidence) {
+			return {
+				agentName: ctx.agentName,
+				threadId: ctx.threadId,
+				// No classifier on these graphs; the Jev gate is the cheap filter instead.
+				queryComplexity: "complex",
+				datasourcesUsed: [],
+				outcome: descriptor.turnOutcome(values as Record<string, unknown>),
+				transcript,
+			};
+		}
 		return {
 			agentName: ctx.agentName,
 			threadId: ctx.threadId,

@@ -139,3 +139,33 @@ describe("renderSkillMarkdown pr mode (SIO-1345)", () => {
 		expect(fm(renderSkillMarkdown(input, { mode: "pr" }))).toBe(fm(renderSkillMarkdown(input)));
 	});
 });
+
+// SIO-1889: the Evidence section round-trips from the fact body into the markdown
+// and the frontmatter, alongside the candidate state fields.
+describe("evidence and provenance (SIO-1889)", () => {
+	const body = `${LABELLED_BODY}\nEvidence:\n- consumer lag 12k on orders-cg\n- error rate 4% at 10:02`;
+	const annotations: AnnotationMap = { ...ANNOTATIONS, status: "approved", source: "hil" };
+
+	test("parseSkillFactBody recovers the evidence list without disturbing the other sections", () => {
+		const parsed = parseSkillFactBody(body);
+		expect(parsed.evidence).toEqual(["consumer lag 12k on orders-cg", "error rate 4% at 10:02"]);
+		expect(parsed.procedure).toContain("Pull consumer-group lag from Kafka");
+		expect(parsed.procedure).not.toContain("Evidence");
+	});
+
+	test("frontmatter carries status, source and evidence and still passes the loader schema", () => {
+		const fm = buildSkillFrontmatter(annotations, { description: "d", evidence: ["q1"] });
+		expect(fm.status).toBe("approved");
+		expect(fm.source).toBe("hil");
+		expect(fm.evidence).toEqual(["q1"]);
+		expect(() => SkillFrontmatterSchema.parse(fm)).not.toThrow();
+	});
+
+	test("rendered markdown has an Evidence section and the provenance in its frontmatter", () => {
+		const md = renderSkillMarkdown({ annotations, body }, { mode: "pr" });
+		const fm = parse(md.split("---")[1] ?? "") as Record<string, unknown>;
+		expect(fm.status).toBe("approved");
+		expect(fm.evidence).toEqual(["consumer lag 12k on orders-cg", "error rate 4% at 10:02"]);
+		expect(md).toContain("## Evidence\n\n- consumer lag 12k on orders-cg\n- error rate 4% at 10:02");
+	});
+});

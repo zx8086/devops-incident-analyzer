@@ -43,7 +43,11 @@ import { writeCurationMirrorFacts } from "./curation-facts.ts";
 import { applyEdits } from "./edits.ts";
 import { draftRunbookFilename, RUNBOOK_DIR, renderRunbookMarkdown } from "./runbook.ts";
 import type { RootCauseCorrection } from "./schema.ts";
-import { AGENT_MANIFEST_PATH, buildSkillPrBody, buildSkillPrFiles, buildSkillPrTitle } from "./skill-pr.ts";
+import { agentManifestPath, buildSkillPrBody, buildSkillPrFiles, buildSkillPrTitle } from "./skill-pr.ts";
+
+// The HIL learn lane runs for the orchestrator only (it is routed off the incident
+// graph's classify node), so its promotion PRs target that agent.
+const HIL_AGENT = "incident-analyzer";
 
 const logger = getLogger("agent:learn:apply");
 
@@ -595,7 +599,14 @@ async function applyHeuristic(
 		task_category: "",
 	};
 	const nowIso = new Date().toISOString();
-	const annotations = buildSkillAnnotations(proposal, requestId, nowIso, `ticket:${ticketKey}`);
+	// SIO-1889: the chat approval IS the human review, so an HIL candidate is born
+	// approved with task_success from the resolved ticket (the beacon state model).
+	const annotations = buildSkillAnnotations(proposal, requestId, nowIso, `ticket:${ticketKey}`, {
+		status: "approved",
+		source: "hil",
+		task_success: "1",
+		task_success_source: "hil",
+	});
 	const body = buildSkillFactText(proposal);
 	recordKeyDecision({ requestId, decision: body, annotations });
 	report.heuristicsProposed += 1;
@@ -624,7 +635,7 @@ async function draftSkillPr(
 	report: HilApplyReport,
 ): Promise<void> {
 	try {
-		const base = await fetchBaseFileContent(AGENT_MANIFEST_PATH);
+		const base = await fetchBaseFileContent(agentManifestPath(HIL_AGENT));
 		if (base.status === "skipped") {
 			report.skipped.push({ id: heuristic.id, reason: `skill PR not opened (${base.reason})` });
 			return;
@@ -633,7 +644,7 @@ async function draftSkillPr(
 			report.skipped.push({ id: heuristic.id, reason: "skill PR not opened (agent.yaml not found on base branch)" });
 			return;
 		}
-		const built = buildSkillPrFiles(base.content, { skillName: heuristic.name, annotations, body });
+		const built = buildSkillPrFiles(base.content, { agent: HIL_AGENT, skillName: heuristic.name, annotations, body });
 		if (!built.ok) {
 			report.skipped.push({ id: heuristic.id, reason: `skill PR not opened (${built.reason})` });
 			return;
@@ -641,8 +652,8 @@ async function draftSkillPr(
 		const result = await promoteToMemory({
 			kind: "new-skill",
 			branch: `agent/learn/skill-${heuristic.name}`,
-			title: buildSkillPrTitle(heuristic.name),
-			body: buildSkillPrBody(heuristic.name, annotations),
+			title: buildSkillPrTitle(HIL_AGENT, heuristic.name),
+			body: buildSkillPrBody(HIL_AGENT, heuristic.name, annotations),
 			files: built.files,
 			labels: ["hil-learning", "skill-promotion"],
 		});

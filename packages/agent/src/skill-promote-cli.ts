@@ -32,7 +32,7 @@ export interface PromoteArgs {
 	ticket?: string;
 }
 
-// The learner only runs for incident-analyzer today, so that is the default agent.
+// SIO-1889: the learner runs for every top-level agent; the orchestrator stays the default.
 const DEFAULT_AGENT = "incident-analyzer";
 
 export function parsePromoteArgs(argv: string[]): PromoteArgs {
@@ -78,9 +78,9 @@ async function main(): Promise<void> {
 	}
 
 	if (args.list) {
-		const { listSkillProposals } = await import("./skill-learner.ts");
+		const { listLearningCandidates } = await import("./skill-learner.ts");
 		const { manifestHasSkill } = await import("./skill-manifest.ts");
-		const proposals = await listSkillProposals(args.agent);
+		const proposals = await listLearningCandidates(args.agent);
 		if (proposals.length === 0) {
 			console.log(`No kind:skill proposals found for agent ${args.agent}.`);
 			return;
@@ -97,7 +97,11 @@ async function main(): Promise<void> {
 			const fileExists = existsSync(skillFilePath(getWorkspaceRoot(), args.agent, p.name));
 			const inManifest = manifestHasSkill(manifestText, p.name);
 			const status = fileExists && inManifest ? "promoted" : fileExists ? "drafted" : inManifest ? "broken" : "pending";
-			console.log(`${status.padEnd(9)} ${p.name}  [${p.category}]  learned ${p.learnedAt} from ${p.learnedFrom}`);
+			// SIO-1889: the candidate's review state (beacon model) beside the file state.
+			const success = p.taskSuccess === "" ? "?" : p.taskSuccess;
+			console.log(
+				`${status.padEnd(9)} ${p.status.padEnd(10)} ${p.name}  [${p.category}]  success=${success}/${p.taskSuccessSource || "none"}  learned ${p.learnedAt} from ${p.learnedFrom}`,
+			);
 		}
 		console.log("\nPromote one with: --skill <name> --pr");
 		return;

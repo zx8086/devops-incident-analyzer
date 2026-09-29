@@ -18,6 +18,8 @@ const graphEnabled = { value: true };
 mock.module("@devops-agent/agent", () => ({
 	isPiFleetGraphEnabled: () => graphEnabled.value,
 	isPiComsConfigured: () => hubConfigured.value,
+	// SIO-1889: the registry reads the IaC turn outcome through this export.
+	iacTurnOutcome: () => "completed",
 }));
 
 mock.module("./agent.ts", () => ({
@@ -94,5 +96,19 @@ describe("SIO-1657 listModeAgents", () => {
 		const { describeAgent } = await load();
 		expect(describeAgent("pi-fleet-console").label).toBe("Fleet Console");
 		expect(() => describeAgent("pi-fleet")).toThrow('unknown agent "pi-fleet"');
+	});
+});
+
+// SIO-1889: every agent declares how the post-turn learner reads its terminal outcome.
+describe("SIO-1889 turnOutcome", () => {
+	test("each agent maps its graph state to a learner outcome", async () => {
+		const { listAgents, describeAgent } = await load();
+		for (const a of listAgents()) expect(typeof a.turnOutcome).toBe("function");
+		expect(describeAgent("landing-zone-terraform").turnOutcome({ outcome: "answered" })).toBe("completed");
+		expect(describeAgent("landing-zone-terraform").turnOutcome({ outcome: "blocked" })).toBe("blocked");
+		expect(describeAgent("incident-analyzer").turnOutcome({ validationResult: "fail" })).toBe("failed");
+		expect(describeAgent("incident-analyzer").turnOutcome({})).toBe("completed");
+		expect(describeAgent("pi-fleet-console").turnOutcome({})).toBe("completed");
+		expect(describeAgent("elastic-iac").turnOutcome({})).toBe("completed");
 	});
 });

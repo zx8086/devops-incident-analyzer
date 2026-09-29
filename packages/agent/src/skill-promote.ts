@@ -19,6 +19,8 @@ export interface ParsedSkillBody {
 	description?: string;
 	whenToUse?: string;
 	procedure: string;
+	// SIO-1889: verbatim transcript quotes the judge grounded the lesson in.
+	evidence?: string[];
 }
 
 export interface SkillScaffoldInput {
@@ -40,10 +42,16 @@ export function parseSkillFactBody(body: string): ParsedSkillBody {
 	const description = proposedLine?.replace(/^.*?\s-\s/, "") ?? firstSentence(text);
 	const whenToUse = matchLabel(text, "When to use:");
 	const procedure = matchLabel(text, "Procedure:") ?? text;
+	const evidenceBlock = matchLabel(text, "Evidence:");
+	const evidence = evidenceBlock
+		?.split("\n")
+		.map((l) => l.replace(/^-\s*/, "").trim())
+		.filter((l) => l.length > 0);
 	return {
 		...(description ? { description } : {}),
 		...(whenToUse ? { whenToUse } : {}),
 		procedure,
+		...(evidence && evidence.length > 0 ? { evidence } : {}),
 	};
 }
 
@@ -53,7 +61,7 @@ function matchLabel(text: string, label: string): string | undefined {
 	if (idx === -1) return undefined;
 	const after = text.slice(idx + label.length);
 	// stop at the next known label so a single-line body splits cleanly
-	const next = after.search(/\n(?:Proposed skill:|When to use:|Procedure:)/);
+	const next = after.search(/\n(?:Proposed skill:|When to use:|Procedure:|Evidence:)/);
 	const slice = next === -1 ? after : after.slice(0, next);
 	return slice.trim() || undefined;
 }
@@ -68,7 +76,10 @@ function firstSentence(text: string): string | undefined {
 // blank/absent keys are dropped (not emitted as empty strings). Throws (via
 // SkillFrontmatterSchema.parse) when an annotation is malformed (e.g. confidence
 // out of [0,1]) so a bad proposal never yields an invalid draft.
-export function buildSkillFrontmatter(annotations: AnnotationMap, prose: { description?: string }): SkillFrontmatter {
+export function buildSkillFrontmatter(
+	annotations: AnnotationMap,
+	prose: { description?: string; evidence?: string[] },
+): SkillFrontmatter {
 	const draft: Record<string, unknown> = {};
 	const name = annotations.skill_name?.trim();
 	if (name) draft.name = name;
@@ -76,6 +87,10 @@ export function buildSkillFrontmatter(annotations: AnnotationMap, prose: { descr
 	addString(draft, "task_category", annotations.task_category);
 	addString(draft, "learned_from", annotations.learned_from);
 	addString(draft, "learned_at", annotations.learned_at);
+	// SIO-1889: beacon-style provenance travels with the exported markdown.
+	addString(draft, "status", annotations.status);
+	addString(draft, "source", annotations.source);
+	if (prose.evidence && prose.evidence.length > 0) draft.evidence = prose.evidence;
 	addNumber(draft, "confidence", annotations.confidence);
 	addNumber(draft, "usage_count", annotations.usage_count);
 	addNumber(draft, "success_count", annotations.success_count);
@@ -119,11 +134,16 @@ export function renderSkillMarkdown(input: SkillScaffoldInput, opts?: { mode?: P
 	const parsed = parseSkillFactBody(input.body);
 	const frontmatter = buildSkillFrontmatter(input.annotations, {
 		...(parsed.description ? { description: parsed.description } : {}),
+		...(parsed.evidence ? { evidence: parsed.evidence } : {}),
 	});
 	const yaml = stringify(frontmatter).trimEnd();
 	const banner = (opts?.mode ?? "draft") === "pr" ? PR_BANNER : DRAFT_BANNER;
 	const sections = [`---\n${yaml}\n---`, "", banner];
 	if (parsed.whenToUse) sections.push("", "## When to use", "", parsed.whenToUse);
-	sections.push("", "## Procedure", "", parsed.procedure, "");
+	sections.push("", "## Procedure", "", parsed.procedure);
+	if (parsed.evidence && parsed.evidence.length > 0) {
+		sections.push("", "## Evidence", "", ...parsed.evidence.map((q) => `- ${q}`));
+	}
+	sections.push("");
 	return sections.join("\n");
 }

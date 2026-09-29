@@ -44,13 +44,17 @@ mock.module("@langchain/aws", () => ({
 import {
 	buildSkillAnnotations,
 	buildSkillFactText,
+	initialTaskSuccess,
 	isSkillLearningEnabled,
+	latestPerSkill,
 	learnFromTurn,
+	lessonQuality,
 	preGateSkip,
 	redactForJudge,
 	type SkillLearnerTurn,
 	SkillProposalSchema,
 	summarizeSkillProposalHits,
+	verifyEvidence,
 } from "./skill-learner.ts";
 
 const NOW = "2026-06-25T12:00:00Z";
@@ -90,44 +94,71 @@ afterEach(async () => {
 	mock.module("./memory-backend.ts", () => realMemoryBackend);
 });
 
-describe("summarizeSkillProposalHits (SIO-1345)", () => {
-	test("maps annotations to summaries and drops nameless hits", () => {
-		const hits = [
+describe("summarizeSkillProposalHits (SIO-1345 / SIO-1889)", () => {
+	test("maps annotations to summaries, defaulting pre-SIO-1889 facts to candidate/turn, and drops nameless hits", () => {
+		const out = summarizeSkillProposalHits([
 			{
-				text: "Proposed skill: lag-correlation - correlate lag with errors",
+				text: "Proposed skill: lag-corr - d",
 				annotations: {
 					kind: "skill",
-					skill_name: "lag-correlation",
-					task_category: "lag-correlation",
-					learned_at: "2026-07-30T10:00:00Z",
+					skill_name: "lag-corr",
+					task_category: "lag",
+					learned_at: NOW,
 					learned_from: "thread:t1",
 				},
 			},
-			{ text: "malformed, no name", annotations: { kind: "skill" } },
-		];
-		const out = summarizeSkillProposalHits(hits);
-		expect(out).toHaveLength(1);
-		expect(out[0]).toEqual({
-			name: "lag-correlation",
-			category: "lag-correlation",
-			learnedAt: "2026-07-30T10:00:00Z",
+			{
+				text: "approved one",
+				annotations: {
+					kind: "skill",
+					skill_name: "resolver-check",
+					status: "approved",
+					source: "hil",
+					task_success: "1",
+					task_success_source: "hil",
+				},
+			},
+			{ text: "nameless", annotations: { kind: "skill" } },
+		]);
+		expect(out).toHaveLength(2);
+		expect(out[0]).toMatchObject({
+			name: "lag-corr",
+			category: "lag",
+			learnedAt: NOW,
 			learnedFrom: "thread:t1",
-			text: "Proposed skill: lag-correlation - correlate lag with errors",
+			status: "candidate",
+			source: "turn",
+			taskSuccess: "",
+			taskSuccessSource: "",
+			kind: "skill",
 		});
+		expect(out[1]).toMatchObject({ name: "resolver-check", status: "approved", source: "hil", taskSuccess: "1" });
 	});
+});
 
-	test("tolerates absent optional annotations", () => {
-		const out = summarizeSkillProposalHits([{ text: "body", annotations: { skill_name: "thin" } }]);
-		expect(out[0]).toEqual({ name: "thin", category: "", learnedAt: "", learnedFrom: "", text: "body" });
+describe("latestPerSkill (SIO-1889)", () => {
+	test("a state transition is a newer fact with the same name; the latest wins regardless of order", () => {
+		const older = {
+			text: "c",
+			annotations: { kind: "skill", skill_name: "x", status: "candidate", learned_at: "2026-09-01T00:00:00Z" },
+		};
+		const newer = {
+			text: "r",
+			annotations: { kind: "skill", skill_name: "x", status: "rejected", learned_at: "2026-09-02T00:00:00Z" },
+		};
+		const other = { text: "o", annotations: { kind: "skill", skill_name: "y", learned_at: "2026-08-01T00:00:00Z" } };
+		expect(latestPerSkill([newer, older, other]).map((h) => h.text)).toEqual(["r", "o"]);
+		expect(latestPerSkill([older, newer, other]).map((h) => h.text)).toEqual(["r", "o"]);
 	});
 });
 
 describe("isSkillLearningEnabled", () => {
-	test("true only for 'true'/'1'", () => {
+	// SIO-1889: kill-switch semantics (default ON), matching every other capability flag.
+	test("on unless explicitly false or 0", () => {
+		expect(isSkillLearningEnabled({} as NodeJS.ProcessEnv)).toBe(true);
 		expect(isSkillLearningEnabled({ SKILL_LEARNING_ENABLED: "true" } as NodeJS.ProcessEnv)).toBe(true);
-		expect(isSkillLearningEnabled({ SKILL_LEARNING_ENABLED: "1" } as NodeJS.ProcessEnv)).toBe(true);
-		expect(isSkillLearningEnabled({ SKILL_LEARNING_ENABLED: "yes" } as NodeJS.ProcessEnv)).toBe(false);
-		expect(isSkillLearningEnabled({} as NodeJS.ProcessEnv)).toBe(false);
+		expect(isSkillLearningEnabled({ SKILL_LEARNING_ENABLED: "false" } as NodeJS.ProcessEnv)).toBe(false);
+		expect(isSkillLearningEnabled({ SKILL_LEARNING_ENABLED: "0" } as NodeJS.ProcessEnv)).toBe(false);
 	});
 });
 
@@ -135,8 +166,12 @@ describe("preGateSkip", () => {
 	test("passes a worthy-looking complex multi-tool turn", () => {
 		expect(preGateSkip(turn())).toBeNull();
 	});
-	test("skips non-orchestrator agents", () => {
-		expect(preGateSkip(turn({ agentName: "elastic-iac" }))).toContain("not eligible");
+	// SIO-1889: an agent without a confidence score is gated on its graph's own outcome.
+	test("an outcome-bearing agent passes only on a completed turn", () => {
+		const iac = { agentName: "elastic-iac", confidenceScore: undefined, datasourcesUsed: [] };
+		expect(preGateSkip(turn({ ...iac, outcome: "completed" }))).toBeNull();
+		expect(preGateSkip(turn({ ...iac, outcome: "rejected" }))).toBe("turn outcome rejected");
+		expect(preGateSkip(turn({ ...iac }))).toBe("turn outcome unknown");
 	});
 	test("skips simple turns", () => {
 		expect(preGateSkip(turn({ queryComplexity: "simple" }))).toBe("simple turn");
@@ -184,6 +219,30 @@ describe("buildSkillAnnotations", () => {
 			usage_count: "0",
 			success_count: "0",
 			failure_count: "0",
+			status: "candidate",
+			source: "turn",
+			task_success: "",
+			task_success_source: "",
+			evidence_count: "0",
+		});
+	});
+
+	// SIO-1889: the beacon state fields are set through overrides (HIL: born approved).
+	test("overrides set the candidate state fields on top of the defaults", () => {
+		const a = buildSkillAnnotations(
+			{ worthy: true, name: "resolver-check", description: "d", evidence: ["q1", "q2"] },
+			"t9",
+			NOW,
+			"ticket:DEVOPS-1355",
+			{ status: "approved", source: "hil", task_success: "1", task_success_source: "hil" },
+		);
+		expect(a).toMatchObject({
+			status: "approved",
+			source: "hil",
+			task_success: "1",
+			task_success_source: "hil",
+			evidence_count: "2",
+			learned_from: "ticket:DEVOPS-1355",
 		});
 	});
 
@@ -211,6 +270,70 @@ describe("buildSkillFactText", () => {
 		expect(text).toContain("Proposed skill: lag-corr - Correlate lag with errors.");
 		expect(text).toContain("When to use: consumer lag rising");
 		expect(text).toContain("Procedure:");
+		expect(text).not.toContain("Evidence:");
+	});
+
+	test("renders verified evidence quotes as a bulleted Evidence section", () => {
+		const text = buildSkillFactText({
+			worthy: true,
+			name: "lag-corr",
+			description: "d",
+			evidence: ["consumer lag 12k", "errors spiked\nat 10:02"],
+		});
+		expect(text).toContain("Evidence:\n- consumer lag 12k\n- errors spiked at 10:02");
+	});
+});
+
+describe("verifyEvidence (SIO-1889)", () => {
+	test("keeps only quotes actually present in the transcript, whitespace-insensitive", () => {
+		const transcript = "User: lag spike?\n\nAssistant: correlated  kafka lag\nwith elastic errors.";
+		expect(
+			verifyEvidence(["correlated kafka lag with elastic errors", "invented claim here", "short"], transcript),
+		).toEqual(["correlated kafka lag with elastic errors"]);
+		expect(verifyEvidence(undefined, transcript)).toEqual([]);
+	});
+});
+
+describe("lessonQuality (SIO-1889 rubric)", () => {
+	const good = {
+		worthy: true,
+		name: "lag-corr",
+		description: "Correlate consumer lag with downstream error spikes.",
+		when_to_use: "When a lag alert coincides with an error-rate rise.",
+		procedure_summary: "Pull lag and error rate over the same window, align timestamps, confirm the overlap.",
+		evidence: ["correlated kafka lag with elastic errors"],
+	};
+	test("passes a well-formed proposal", () => {
+		expect(lessonQuality(good)).toEqual({ ok: true });
+	});
+	test("names the failing rubric item", () => {
+		expect(lessonQuality({ ...good, description: "x".repeat(81) })).toEqual({ ok: false, reason: "title" });
+		expect(lessonQuality({ ...good, when_to_use: "Consumer lag rising" })).toEqual({
+			ok: false,
+			reason: "applicability",
+		});
+		expect(lessonQuality({ ...good, procedure_summary: "too short" })).toEqual({ ok: false, reason: "body" });
+		expect(lessonQuality({ ...good, evidence: [] })).toEqual({ ok: false, reason: "evidence" });
+	});
+});
+
+describe("initialTaskSuccess (SIO-1889)", () => {
+	const applied = (taskSuccess: number) => ({
+		outcome: "applied" as const,
+		model: "jev",
+		verdict: { qualifies: true, score: 0.9, taskSuccess, reason: "qualifies" },
+	});
+	test("a completed outcome outranks the Jev estimate", () => {
+		const t = turn({ agentName: "elastic-iac", confidenceScore: undefined, outcome: "completed" });
+		expect(initialTaskSuccess(t, applied(0.1))).toEqual({ task_success: "1", task_success_source: "turn-outcome" });
+	});
+	test("a confidence agent takes Jev when it applied, else nothing", () => {
+		expect(initialTaskSuccess(turn(), applied(0.8))).toEqual({ task_success: "1", task_success_source: "jev" });
+		expect(initialTaskSuccess(turn(), applied(0.3))).toEqual({ task_success: "0", task_success_source: "jev" });
+		expect(initialTaskSuccess(turn(), { outcome: "skipped", reason: "no-key" })).toEqual({
+			task_success: "",
+			task_success_source: "",
+		});
 	});
 });
 
@@ -256,8 +379,8 @@ describe("learnFromTurn", () => {
 		return { client, added };
 	}
 
-	test("no-op when SKILL_LEARNING_ENABLED is unset", async () => {
-		delete process.env.SKILL_LEARNING_ENABLED;
+	test("no-op when SKILL_LEARNING_ENABLED is switched off", async () => {
+		process.env.SKILL_LEARNING_ENABLED = "false";
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
 		llmContent = '{"worthy":true,"name":"lag-corr","description":"d"}';
 		await learnFromTurn(turn(), NOW);
@@ -286,7 +409,8 @@ describe("learnFromTurn", () => {
 		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
 		__setAgentMemoryClient(client as any);
 		setActiveMemorySession("incident-analyzer", "t1");
-		llmContent = '{"worthy":true,"name":"lag-corr","description":"Correlate lag with errors.","task_category":"lag"}';
+		llmContent =
+			'{"worthy":true,"name":"lag-corr","description":"Correlate lag with errors.","when_to_use":"When lag and errors rise together.","procedure_summary":"Pull consumer lag and elastic error rate over one window, then align the timestamps to confirm.","task_category":"lag","evidence":["correlated kafka lag with elastic errors"]}';
 
 		await learnFromTurn(turn(), NOW);
 		await flushAgentMemory(); // drain the write-behind queue
@@ -295,7 +419,90 @@ describe("learnFromTurn", () => {
 		expect(added[0]?.annotations?.kind).toBe("skill");
 		expect(added[0]?.annotations?.skill_name).toBe("lag-corr");
 		expect(added[0]?.annotations?.confidence).toBe("0.5");
+		// SIO-1889: born a candidate; no Jev key under test and a confidence agent -> no task_success yet.
+		expect(added[0]?.annotations?.status).toBe("candidate");
+		expect(added[0]?.annotations?.source).toBe("turn");
+		expect(added[0]?.annotations?.task_success).toBe("");
+		expect(added[0]?.annotations?.evidence_count).toBe("1");
 		expect(added[0]?.facts[0]).toContain("Proposed skill: lag-corr");
+		expect(added[0]?.facts[0]).toContain("Evidence:\n- correlated kafka lag with elastic errors");
+	});
+
+	// SIO-1889: the learner runs for every agent; an IaC turn with a completed outcome
+	// crystallizes under ITS identity with task_success from the outcome.
+	test("an outcome-bearing agent's completed turn crystallizes with task_success from the outcome", async () => {
+		process.env.SKILL_LEARNING_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient, flushAgentMemory, setActiveMemorySession } = await import("./memory-backend.ts");
+		const { client, added } = memStub();
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(client as any);
+		setActiveMemorySession("elastic-iac", "t2");
+		llmContent =
+			'{"worthy":true,"name":"lag-corr","description":"Correlate lag with errors.","when_to_use":"When lag and errors rise together.","procedure_summary":"Pull consumer lag and elastic error rate over one window, then align the timestamps to confirm.","task_category":"lag","evidence":["correlated kafka lag with elastic errors"]}';
+
+		await learnFromTurn(
+			turn({ agentName: "elastic-iac", confidenceScore: undefined, datasourcesUsed: [], outcome: "completed" }),
+			NOW,
+		);
+		await flushAgentMemory();
+
+		expect(invokeCalls).toBe(1);
+		expect(added.length).toBe(1);
+		expect(added[0]?.annotations?.task_success).toBe("1");
+		expect(added[0]?.annotations?.task_success_source).toBe("turn-outcome");
+	});
+
+	test("a Jev verdict that does not qualify ends the turn before the judge", async () => {
+		process.env.SKILL_LEARNING_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		llmContent =
+			'{"worthy":true,"name":"lag-corr","description":"Correlate lag with errors.","when_to_use":"When lag and errors rise together.","procedure_summary":"Pull consumer lag and elastic error rate over one window, then align the timestamps to confirm.","task_category":"lag","evidence":["correlated kafka lag with elastic errors"]}';
+		await learnFromTurn(turn(), NOW, {
+			gate: async () => ({
+				outcome: "applied",
+				model: "jev",
+				verdict: { qualifies: false, score: 0.3, taskSuccess: 0.2, reason: "task_success" },
+			}),
+		});
+		expect(invokeCalls).toBe(0);
+	});
+
+	test("a qualifying Jev verdict seeds task_success from jev for a confidence agent", async () => {
+		process.env.SKILL_LEARNING_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient, flushAgentMemory } = await import("./memory-backend.ts");
+		const { client, added } = memStub();
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(client as any);
+		llmContent =
+			'{"worthy":true,"name":"lag-corr","description":"Correlate lag with errors.","when_to_use":"When lag and errors rise together.","procedure_summary":"Pull consumer lag and elastic error rate over one window, then align the timestamps to confirm.","task_category":"lag","evidence":["correlated kafka lag with elastic errors"]}';
+		await learnFromTurn(turn(), NOW, {
+			gate: async () => ({
+				outcome: "applied",
+				model: "jev",
+				verdict: { qualifies: true, score: 0.9, taskSuccess: 0.95, reason: "qualifies" },
+			}),
+		});
+		await flushAgentMemory();
+		expect(added[0]?.annotations?.task_success).toBe("1");
+		expect(added[0]?.annotations?.task_success_source).toBe("jev");
+	});
+
+	test("a proposal that fails the lesson rubric is not stored", async () => {
+		process.env.SKILL_LEARNING_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient, flushAgentMemory } = await import("./memory-backend.ts");
+		const { client, added } = memStub();
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(client as any);
+		// Evidence the judge did not copy from the transcript is dropped, leaving none.
+		llmContent =
+			'{"worthy":true,"name":"lag-corr","description":"Correlate lag with errors.","when_to_use":"When lag rises.","procedure_summary":"Pull consumer lag and elastic error rate over one window, then align the timestamps.","evidence":["a claim not in the transcript"]}';
+		await learnFromTurn(turn(), NOW);
+		await flushAgentMemory();
+		expect(invokeCalls).toBe(1);
+		expect(added.length).toBe(0);
 	});
 
 	test("dedup: skips when a kind:skill fact with the same name already exists", async () => {
@@ -308,11 +515,14 @@ describe("learnFromTurn", () => {
 		]);
 		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
 		__setAgentMemoryClient(client as any);
-		llmContent = '{"worthy":true,"name":"lag-corr","description":"d"}';
+		// A rubric-valid proposal, so the dedup (not the rubric) is what stops the write.
+		llmContent =
+			'{"worthy":true,"name":"lag-corr","description":"Correlate lag with errors.","when_to_use":"When lag and errors rise together.","procedure_summary":"Pull consumer lag and elastic error rate over one window, then align the timestamps to confirm.","task_category":"lag","evidence":["correlated kafka lag with elastic errors"]}';
 
 		await learnFromTurn(turn(), NOW);
 		await flushAgentMemory();
 
+		expect(invokeCalls).toBe(1);
 		expect(added.length).toBe(0);
 	});
 

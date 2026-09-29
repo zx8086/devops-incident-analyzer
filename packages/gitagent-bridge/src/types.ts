@@ -331,6 +331,10 @@ export const SkillFrontmatterSchema = z
 		success_count: z.number().int().nonnegative().optional(),
 		failure_count: z.number().int().nonnegative().optional(),
 		negative_examples: z.array(z.string()).optional(),
+		// SIO-1889: candidate-record provenance carried into the exported markdown.
+		status: z.enum(["candidate", "approved", "rejected", "superseded"]).optional(),
+		source: z.enum(["turn", "hil", "reflect", "fleet"]).optional(),
+		evidence: z.array(z.string()).optional(),
 	})
 	.passthrough();
 
