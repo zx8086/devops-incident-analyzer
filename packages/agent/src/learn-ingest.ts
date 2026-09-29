@@ -38,8 +38,11 @@ export function redactDraft(d: CandidateDraft): CandidateDraft {
 		title: redactAwsIdentifiers(d.title),
 		applicability: redactAwsIdentifiers(d.applicability),
 		body: redactAwsIdentifiers(d.body),
-		evidence: d.evidence.map((e) => ({ ref: e.ref, excerpt: redactAwsIdentifiers(e.excerpt) })),
+		evidence: d.evidence.map((e) => ({ ref: redactAwsIdentifiers(e.ref), excerpt: redactAwsIdentifiers(e.excerpt) })),
 		learned_from: redactAwsIdentifiers(d.learned_from),
+		// Greptile PR #920 round 2: the annotation fields are stored too.
+		...(d.supersedes ? { supersedes: redactAwsIdentifiers(d.supersedes) } : {}),
+		...(d.target_dir ? { target_dir: redactAwsIdentifiers(d.target_dir) } : {}),
 	};
 }
 

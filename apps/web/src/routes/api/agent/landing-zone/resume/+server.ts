@@ -79,7 +79,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			};
 			const runId = crypto.randomUUID();
 			const requestId = crypto.randomUUID();
-			await runWithRequestContext({ threadId: body.threadId, runId, requestId }, async () => {
+			await runWithRequestContext({ threadId: body.threadId, runId, requestId, agentName: AGENT }, async () => {
 				const startedAt = Date.now();
 				try {
 					await traceSpan(

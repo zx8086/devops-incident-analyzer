@@ -153,6 +153,21 @@ describe("ingestCandidates", () => {
 		expect(h.writes[0]?.text).not.toMatch(/arn:aws|\b\d{12}\b|AKIA/);
 		expect(h.writes[0]?.text).toContain("[ARN_REDACTED]");
 		expect(redactAwsIdentifiers("acct 111122223333")).toBe("acct [ACCOUNT_REDACTED]");
+		// Greptile PR #920 round 2: the stored annotation fields are covered as well.
+		const ann = harness();
+		await ingestCandidates(
+			[
+				draft({
+					supersedes: "old-111122223333",
+					target_dir: "agents/incident-analyzer/knowledge/444455556666/runbooks",
+					evidence: [{ ref: "journal:111122223333/x#0", excerpt: "ok" }],
+				}),
+			],
+			"incident-analyzer",
+			{ ...ann.deps, gate: applied(0.9) },
+		);
+		expect(JSON.stringify(ann.writes[0]?.annotations)).not.toMatch(/\b\d{12}\b/);
+		expect(ann.writes[0]?.text).not.toMatch(/\b\d{12}\b/);
 	});
 
 	test("skips invalid drafts, rubric failures, Jev rejections, duplicates and refused writes with the reason", async () => {

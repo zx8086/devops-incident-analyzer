@@ -13,7 +13,12 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getLogger } from "@devops-agent/observability";
-import { type AnnotationMap, createHashChainDestination, redactPiiContent } from "@devops-agent/shared";
+import {
+	type AnnotationMap,
+	createHashChainDestination,
+	getCurrentRequestContext,
+	redactPiiContent,
+} from "@devops-agent/shared";
 import {
 	dailyLogTtlSeconds,
 	enqueueFact,
@@ -61,10 +66,13 @@ export interface KeyDecision {
 	ttlSeconds?: number;
 }
 
-// Base agent dir is overridable for hermetic tests; production callers use the
-// resolved agents dir.
+// Base agent dir is overridable for hermetic tests; production callers get the
+// dir of the agent named on the current request context (SIO-1887). Before that
+// every no-baseDir write from elastic-iac, landing-zone and the pi verdicts landed
+// in incident-analyzer's runtime files. Outside a request (CLI, tests) the
+// historical incident-analyzer default still applies.
 function runtimeDir(baseDir?: string): string {
-	return join(baseDir ?? getAgentsDir(), "memory", "runtime");
+	return join(baseDir ?? getAgentsDir(getCurrentRequestContext()?.agentName), "memory", "runtime");
 }
 
 function isEnabled(): boolean {
@@ -186,10 +194,11 @@ export function appendDailyLog(entry: DailyLogEntry, baseDir?: string): void {
 	logger.info({ requestId: entry.requestId }, "Appended dailylog entry");
 }
 
-// Appends a durable decision to key-decisions.md. NOTE: per the plan, durable
-// learnings are PR-gated (EPIC 1). This direct appender exists for the writer's
-// API completeness and for tests; the runtime path routes promotions through
-// the memory-pr package once EPIC 1 lands.
+// Appends a durable decision to key-decisions.md (file backend) or enqueues a
+// durable fact (agent-memory backend). This IS on the hot path: the HIL apply
+// step, the IaC change/reconcile nodes, landing-zone breadcrumbs and the pi
+// verdict memory all call it directly. Human-reviewed promotion (memory-pr) is
+// the separate wiki/skill/runbook channel, not a gate on this writer.
 export function recordKeyDecision(decision: KeyDecision, baseDir?: string): void {
 	if (!isEnabled()) return;
 
