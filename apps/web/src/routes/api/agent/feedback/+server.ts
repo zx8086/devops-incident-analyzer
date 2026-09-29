@@ -3,9 +3,34 @@ import { recordTurnFeedback } from "@devops-agent/agent";
 import { getLogger } from "@devops-agent/observability";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
+import { getLastAssistantText } from "$lib/server/agent";
 import type { RequestHandler } from "./$types";
 
 const log = getLogger("api.agent.feedback");
+
+// Greptile PR #918: the learning write is best-effort and must not block the
+// provider write, so it gets a hard deadline. Overridable so a test can prove
+// the bound without waiting the full default.
+function feedbackMemoryDeadlineMs(env: NodeJS.ProcessEnv = process.env): number {
+	const raw = Number(env.LEARNING_FEEDBACK_DEADLINE_MS);
+	return Number.isFinite(raw) && raw > 0 ? raw : 5_000;
+}
+
+function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(`learning feedback exceeded ${ms}ms`)), ms);
+		work.then(
+			(v) => {
+				clearTimeout(timer);
+				resolve(v);
+			},
+			(e) => {
+				clearTimeout(timer);
+				reject(e);
+			},
+		);
+	});
+}
 
 const FeedbackSchema = z.object({
 	runId: z.string(),
@@ -26,11 +51,24 @@ export const POST: RequestHandler = async ({ request }) => {
 		// request. Only a whole score is a verdict; a fractional one is not.
 		if (body.threadId && body.agentName && (body.score === 0 || body.score === 1)) {
 			try {
-				const { transitions } = await recordTurnFeedback(body.agentName, body.threadId, body.score);
-				log.info(
-					{ threadId: body.threadId, agentName: body.agentName, score: body.score, transitions },
-					"learning feedback",
-				);
+				// Greptile PR #918: the body names the thread, so bind the verdict to a
+				// thread that has an assistant turn for that agent in the checkpointer
+				// before any candidate state changes; and bound the memory work so a
+				// stalled backend can never hold up the LangSmith write below.
+				const deadlineMs = feedbackMemoryDeadlineMs();
+				const known = await withDeadline(getLastAssistantText(body.threadId, body.agentName), deadlineMs);
+				if (!known) {
+					log.warn({ threadId: body.threadId, agentName: body.agentName }, "learning feedback ignored: unknown thread");
+				} else {
+					const { transitions } = await withDeadline(
+						recordTurnFeedback(body.agentName, body.threadId, body.score),
+						deadlineMs,
+					);
+					log.info(
+						{ threadId: body.threadId, agentName: body.agentName, score: body.score, transitions },
+						"learning feedback",
+					);
+				}
 			} catch (error) {
 				log.warn(
 					{ threadId: body.threadId, error: error instanceof Error ? error.message : String(error) },

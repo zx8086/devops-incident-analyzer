@@ -465,24 +465,33 @@ export async function recordTurnFeedback(
 		}),
 	);
 	let transitions = 0;
+	let eligible = 0;
 	for (const hit of hits) {
 		const status = hit.annotations.status ?? "candidate";
-		if (status === "rejected" || status === "superseded") continue;
+		// Greptile PR #918: a rejection that came from an earlier thumbs-down is the
+		// human's previous verdict, and the latest verdict replaces it (a changed vote
+		// reopens the candidate). A rejection from the review pane, or a supersession,
+		// stands.
+		const feedbackRejected = status === "rejected" && hit.annotations.task_success_source === "feedback";
+		if (status === "superseded" || (status === "rejected" && !feedbackRejected)) continue;
+		eligible += 1;
 		const next: AnnotationMap = {
 			...hit.annotations,
 			learned_at: nowIso,
 			task_success: String(score),
 			task_success_source: "feedback",
-			...(score === 0 ? { status: "rejected" } : {}),
+			status: score === 0 ? "rejected" : feedbackRejected ? "candidate" : status,
 		};
 		if (await recordAgentFactNow(agentName, hit.text, next)) transitions += 1;
 	}
+	// Greptile PR #918: the row says whether the transitions were stored, not
+	// whether they were attempted.
 	recordDecision({
 		seam: "learning-feedback",
-		outcome: "applied",
+		outcome: transitions === eligible ? "applied" : "failed",
 		itemsIn: hits.length,
 		itemsDropped: score === 0 ? transitions : 0,
-		note: score === 1 ? "thumbs-up" : "thumbs-down",
+		note: `${score === 1 ? "thumbs-up" : "thumbs-down"}:${transitions}/${eligible}`,
 	});
 	return { transitions };
 }

@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 const recordTurnFeedback = mock(async (_agent: string, _thread: string, _score: number) => ({ transitions: 1 }));
 mock.module("@devops-agent/agent", () => ({ recordTurnFeedback }));
+// Greptile PR #918: the route binds the verdict to a thread the agent has answered on.
+const getLastAssistantText = mock(async (thread: string, _agent: string) => (thread === "t1" ? "an answer" : ""));
+mock.module("$lib/server/agent", () => ({ getLastAssistantText }));
 
 const { POST } = await import("./+server.ts");
 
@@ -52,6 +55,28 @@ describe("POST /api/agent/feedback (SIO-1890)", () => {
 		expect(res.status).toBe(200);
 		expect(recordTurnFeedback).not.toHaveBeenCalled();
 		expect(langsmithCalls).toBe(1);
+	});
+
+	test("a thread with no assistant turn for that agent changes no candidate", async () => {
+		const res = await post({ runId: "r1", score: 0, threadId: "someone-elses-thread", agentName: "elastic-iac" });
+		expect(res.status).toBe(200);
+		expect(recordTurnFeedback).not.toHaveBeenCalled();
+		expect(langsmithCalls).toBe(1);
+	});
+
+	test("a stalled memory write is abandoned and LangSmith still receives the score", async () => {
+		recordTurnFeedback.mockImplementationOnce(() => new Promise<{ transitions: number }>(() => {}));
+		process.env.LEARNING_FEEDBACK_DEADLINE_MS = "50";
+		try {
+			const started = Date.now();
+			const res = await post({ runId: "r1", score: 1, threadId: "t1", agentName: "incident-analyzer" });
+			expect(res.status).toBe(200);
+			expect(langsmithCalls).toBe(1);
+			// Bounded by the deadline, not forever; generous ceiling for a slow CI box.
+			expect(Date.now() - started).toBeLessThan(2_000);
+		} finally {
+			delete process.env.LEARNING_FEEDBACK_DEADLINE_MS;
+		}
 	});
 
 	test("a memory failure never fails the request", async () => {

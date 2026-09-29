@@ -627,6 +627,25 @@ describe("recordTurnFeedback", () => {
 		});
 	});
 
+	// Greptile PR #918: a changed vote. A rejection that came from thumbs-down is
+	// reopened by a later thumbs-up; a pane rejection or a supersession stands.
+	test("a later thumbs-up reopens a feedback-rejected candidate but not a pane rejection", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient } = await import("./memory-backend.ts");
+		const byFeedback = feedbackStub([
+			candidate({ status: "rejected", task_success: "0", task_success_source: "feedback" }),
+		]);
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(byFeedback.client as any);
+		expect((await recordTurnFeedback("incident-analyzer", "t1", 1, NOW)).transitions).toBe(1);
+		expect(byFeedback.added[1]?.annotations).toMatchObject({ status: "candidate", task_success: "1" });
+		const byPane = feedbackStub([candidate({ status: "rejected", task_success: "1", task_success_source: "jev" })]);
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(byPane.client as any);
+		expect((await recordTurnFeedback("incident-analyzer", "t1", 1, NOW)).transitions).toBe(0);
+		expect(byPane.added).toHaveLength(1);
+	});
+
 	test("a rejected or superseded candidate is left alone; no candidates means only the feedback fact", async () => {
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
 		const { __setAgentMemoryClient } = await import("./memory-backend.ts");
