@@ -51,6 +51,7 @@ import {
 	learnFromTurn,
 	lessonQuality,
 	preGateSkip,
+	recordTurnFeedback,
 	redactForJudge,
 	type SkillLearnerTurn,
 	SkillProposalSchema,
@@ -550,5 +551,99 @@ describe("learnFromTurn", () => {
 
 		expect(invokeCalls).toBe(1); // judge ran
 		expect(added.length).toBe(0); // but nothing crystallized
+	});
+});
+
+// SIO-1890: thumbs feedback becomes the task_success precondition on this thread's candidates.
+describe("recordTurnFeedback", () => {
+	function feedbackStub(hits: Array<{ text: string; annotations: Record<string, string> }>) {
+		const added: Array<{ facts: string[]; annotations?: Record<string, string> }> = [];
+		const client = {
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts(_ref: unknown, facts: string[], opts?: { annotations?: Record<string, string> }) {
+				added.push({ facts, annotations: opts?.annotations });
+				return { blockIds: ["b"], acceptedCount: facts.length, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				return hits;
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		};
+		return { client, added };
+	}
+	const candidate = (over: Record<string, string> = {}) => ({
+		text: "Proposed skill: lag-corr - d",
+		annotations: {
+			kind: "skill",
+			skill_name: "lag-corr",
+			status: "candidate",
+			learned_from: "thread:t1",
+			learned_at: "2026-09-01T00:00:00Z",
+			task_success: "",
+			task_success_source: "",
+			...over,
+		},
+	});
+
+	test("thumbs-down rejects the thread's candidate with task_success 0 from feedback", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient } = await import("./memory-backend.ts");
+		const { client, added } = feedbackStub([candidate()]);
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(client as any);
+		const out = await recordTurnFeedback("incident-analyzer", "t1", 0, NOW);
+		expect(out.transitions).toBe(1);
+		expect(added).toHaveLength(2);
+		expect(added[0]?.annotations).toMatchObject({ kind: "feedback", thread_id: "t1", score: "0" });
+		expect(added[1]?.annotations).toMatchObject({
+			skill_name: "lag-corr",
+			status: "rejected",
+			task_success: "0",
+			task_success_source: "feedback",
+			learned_at: NOW,
+		});
+		expect(added[1]?.facts[0]).toBe("Proposed skill: lag-corr - d");
+	});
+
+	test("thumbs-up keeps the status and sets task_success 1 from feedback, outranking jev", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient } = await import("./memory-backend.ts");
+		const { client, added } = feedbackStub([candidate({ task_success: "0", task_success_source: "jev" })]);
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(client as any);
+		await recordTurnFeedback("incident-analyzer", "t1", 1, NOW);
+		expect(added[1]?.annotations).toMatchObject({
+			status: "candidate",
+			task_success: "1",
+			task_success_source: "feedback",
+		});
+	});
+
+	test("a rejected or superseded candidate is left alone; no candidates means only the feedback fact", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient } = await import("./memory-backend.ts");
+		const done = feedbackStub([candidate({ status: "superseded" })]);
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(done.client as any);
+		expect((await recordTurnFeedback("incident-analyzer", "t1", 1, NOW)).transitions).toBe(0);
+		expect(done.added).toHaveLength(1);
+		const none = feedbackStub([]);
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(none.client as any);
+		expect((await recordTurnFeedback("incident-analyzer", "t1", 0, NOW)).transitions).toBe(0);
+		expect(none.added).toHaveLength(1);
+	});
+
+	test("no-op on the file backend", async () => {
+		delete process.env.LIVE_MEMORY_BACKEND;
+		expect(await recordTurnFeedback("incident-analyzer", "t1", 1, NOW)).toEqual({ transitions: 0 });
 	});
 });

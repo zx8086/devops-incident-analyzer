@@ -1,4 +1,5 @@
 // apps/web/src/routes/api/agent/feedback/+server.ts
+import { recordTurnFeedback } from "@devops-agent/agent";
 import { getLogger } from "@devops-agent/observability";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
@@ -10,11 +11,34 @@ const FeedbackSchema = z.object({
 	runId: z.string(),
 	score: z.number().min(0).max(1),
 	comment: z.string().optional(),
+	// SIO-1890: which thread and agent the feedback belongs to, so it can reach the
+	// learning candidates that thread produced. Optional: older clients omit them.
+	threadId: z.string().min(1).optional(),
+	agentName: z.string().min(1).optional(),
 });
 
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = FeedbackSchema.parse(await request.json());
+
+		// SIO-1890: the learning signal first, independent of LangSmith being
+		// configured or reachable. Best-effort: a memory failure never fails the
+		// request. Only a whole score is a verdict; a fractional one is not.
+		if (body.threadId && body.agentName && (body.score === 0 || body.score === 1)) {
+			try {
+				const { transitions } = await recordTurnFeedback(body.agentName, body.threadId, body.score);
+				log.info(
+					{ threadId: body.threadId, agentName: body.agentName, score: body.score, transitions },
+					"learning feedback",
+				);
+			} catch (error) {
+				log.warn(
+					{ threadId: body.threadId, error: error instanceof Error ? error.message : String(error) },
+					"learning feedback failed; LangSmith feedback continues",
+				);
+			}
+		}
+
 		const apiKey = process.env.LANGSMITH_API_KEY;
 
 		if (!apiKey) {

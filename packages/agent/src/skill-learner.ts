@@ -442,4 +442,49 @@ export async function learnFromTurn(
 	);
 }
 
+// SIO-1890: thumbs feedback is the human task_success signal (agent-beacon's hard
+// precondition). It is recorded as its own fact and applied to every candidate
+// this thread produced as a state transition: thumbs-up sets task_success=1 from
+// feedback (outranking jev and the turn outcome), thumbs-down rejects. Already
+// rejected or superseded candidates are left alone. Same fact stream, no new store.
+export async function recordTurnFeedback(
+	agentName: string,
+	threadId: string,
+	score: 0 | 1,
+	nowIso: string = new Date().toISOString(),
+): Promise<{ transitions: number }> {
+	if (selectedBackend() !== "agent-memory") return { transitions: 0 };
+	await recordAgentFactNow(agentName, `User feedback ${score === 1 ? "up" : "down"} on thread ${threadId}`, {
+		kind: "feedback",
+		thread_id: threadId,
+		score: String(score),
+	});
+	const hits = latestPerSkill(
+		await searchAgentMemory(agentName, "", { kind: "skill", learned_from: `thread:${threadId}` }, 64, {
+			deterministic: true,
+		}),
+	);
+	let transitions = 0;
+	for (const hit of hits) {
+		const status = hit.annotations.status ?? "candidate";
+		if (status === "rejected" || status === "superseded") continue;
+		const next: AnnotationMap = {
+			...hit.annotations,
+			learned_at: nowIso,
+			task_success: String(score),
+			task_success_source: "feedback",
+			...(score === 0 ? { status: "rejected" } : {}),
+		};
+		if (await recordAgentFactNow(agentName, hit.text, next)) transitions += 1;
+	}
+	recordDecision({
+		seam: "learning-feedback",
+		outcome: "applied",
+		itemsIn: hits.length,
+		itemsDropped: score === 0 ? transitions : 0,
+		note: score === 1 ? "thumbs-up" : "thumbs-down",
+	});
+	return { transitions };
+}
+
 export type { AnnotationMap };
