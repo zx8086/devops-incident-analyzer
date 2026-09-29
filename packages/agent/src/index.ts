@@ -177,6 +177,14 @@ export {
 	writeCurationMirrorFacts,
 } from "./learn/curation-facts.ts";
 export {
+	type CandidateDraft,
+	CandidateDraftSchema,
+	HarvestFileSchema,
+	type IngestReport,
+	ingestCandidates,
+	isLearningIngestEnabled,
+} from "./learn-ingest.ts";
+export {
 	gateLearning,
 	isLearningJevGateEnabled,
 	judgeLearning,
