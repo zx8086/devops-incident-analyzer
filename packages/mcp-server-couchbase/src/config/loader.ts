@@ -13,16 +13,30 @@ function parseEnvVar(value: string | undefined, type: "string" | "number" | "boo
 	return value;
 }
 
-function loadConfigFromEnv(): Partial<Config> {
+// SIO-1898: the read-only gate is a safety control, so it parses as a kill-switch:
+// only an explicit false/0 turns it off. parseEnvVar's `=== "true"` read "1", "yes",
+// an empty value or a typo as false and silently allowed writes.
+function parseReadOnlyMode(value: string | undefined): boolean {
+	if (value === undefined) return defaultConfig.server.readOnlyQueryMode;
+	const normalized = value.trim().toLowerCase();
+	if (normalized === "false" || normalized === "0") return false;
+	if (normalized !== "true" && normalized !== "1") {
+		logger.warn(
+			{ envVar: envVarMapping.server.readOnlyQueryMode },
+			"Unrecognised read-only mode value; keeping read-only mode on",
+		);
+	}
+	return true;
+}
+
+export function loadConfigFromEnv(): Partial<Config> {
 	const config: Partial<Config> = {};
 
 	// Load server config
 	config.server = {
 		name: (parseEnvVar(Bun.env[envVarMapping.server.name], "string") as string) || defaultConfig.server.name,
 		version: (parseEnvVar(Bun.env[envVarMapping.server.version], "string") as string) || defaultConfig.server.version,
-		readOnlyQueryMode:
-			(parseEnvVar(Bun.env[envVarMapping.server.readOnlyQueryMode], "boolean") as boolean) ??
-			defaultConfig.server.readOnlyQueryMode,
+		readOnlyQueryMode: parseReadOnlyMode(Bun.env[envVarMapping.server.readOnlyQueryMode]),
 		maxQueryTimeout:
 			(parseEnvVar(Bun.env[envVarMapping.server.maxQueryTimeout], "number") as number) ||
 			defaultConfig.server.maxQueryTimeout,
