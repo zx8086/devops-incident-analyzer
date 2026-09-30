@@ -14,6 +14,14 @@ The hub is a single Bun HTTP server. Bind address and port come from the environ
 | `PI_COMS_NET_PORT` | `0` | `0` lets the OS claim a port; the claimed port lands in `server.json` |
 | `PI_COMS_NET_PUBLIC_URL` | local URL | Advertised to clients via `server.json` |
 
+Three more hub settings are read at startup:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `PI_COMS_NET_REPLY_CAP_BYTES` | `65536` | Largest stored reply body (SIO-1687). A string reply over the cap is truncated on a UTF-8 boundary with a `[truncated by hub]` marker; a structured (JSON) reply over it is rejected with `reply_too_large` (413), since a cut object no longer parses. `0` disables the cap |
+| `PI_COMS_NET_TTL_SCAN_MS` | `10000` | How often the hub sweeps for expired messages |
+| `PI_COMS_NET_LOG_HEARTBEAT` | unset | `1` also logs every heartbeat to stdout (very chatty). Its counterpart `PI_COMS_NET_LOG_QUIET=1` suppresses everything except startup and shutdown |
+
 In the corp deployment the hub is a private EC2 host in shared-services (systemd unit `coms-hub`, pinned private IP, `http://10.34.89.51:8787`). It binds non-loopback with an explicit auth token; the security group admits TCP 8787 from allow-listed CIDRs only (the fleet VPCs, optionally a VPN range), and there is no public IP and no internet-gateway path -- the hub is unreachable from outside the corporate network.
 
 ```
@@ -105,8 +113,9 @@ This channel is why every host only needs **outbound** connectivity. The hub nev
 | Heartbeat interval (advertised to clients) | 10 s | `PI_COMS_NET_HEARTBEAT_MS` |
 | Marked stale after | 30 s | `PI_COMS_NET_STALE_AFTER_MS` |
 | Evicted after | 60 s | `PI_COMS_NET_OFFLINE_AFTER_MS` |
-| Stale scan cadence | 5 s | `scripts/coms-net-server.ts:45` |
-| SSE keepalive | 15 s | `scripts/coms-net-server.ts:47` |
+| Stale scan cadence | 5 s | `STALE_SCAN_INTERVAL_MS` in `scripts/coms-net-server.ts` |
+| Message TTL scan cadence | 10 s | `PI_COMS_NET_TTL_SCAN_MS` |
+| SSE keepalive | 15 s | `SSE_KEEPALIVE_MS` in `scripts/coms-net-server.ts` |
 
 ---
 
