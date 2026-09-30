@@ -36,6 +36,36 @@ export type ReviewResponse =
 	  }
 	| { ok: false; httpStatus: number; error: string };
 
+// SIO-1900: the request the pane sends for an action. Only what the reviewer
+// CHANGED is sent as an edit; an untouched title or body is left to the stored
+// text. Sending the pre-filled values back made a candidate whose stored title
+// is longer than the route's edit cap impossible to approve (400), though the
+// reviewer had changed nothing. kind disambiguates a skill and a runbook of one
+// name; expectedStatus is the status the row showed, so a decision stored since
+// is refused, not stacked.
+export function buildReviewPayload(
+	agent: string,
+	row: Pick<ReviewRowView, "skillName" | "kind" | "status" | "title" | "body">,
+	action: "approve" | "reject" | "supersede",
+	input: { title: string; body: string; supersedes: string },
+): Record<string, unknown> {
+	const payload: Record<string, unknown> = {
+		agent,
+		skillName: row.skillName,
+		kind: row.kind === "runbook" ? "runbook" : "skill",
+		expectedStatus: row.status,
+		action,
+	};
+	if (action === "approve") {
+		const edits: { title?: string; body?: string } = {};
+		if (input.title !== row.title) edits.title = input.title;
+		if (input.body !== row.body) edits.body = input.body;
+		if (Object.keys(edits).length > 0) payload.edits = edits;
+	}
+	if (action === "supersede") payload.supersedes = input.supersedes.trim();
+	return payload;
+}
+
 export function describeTaskSuccess(row: Pick<ReviewRowView, "taskSuccess" | "taskSuccessSource">): string {
 	if (row.taskSuccess === "1") return `success confirmed (${row.taskSuccessSource || "unknown"})`;
 	if (row.taskSuccess === "0") return `did not succeed (${row.taskSuccessSource || "unknown"})`;

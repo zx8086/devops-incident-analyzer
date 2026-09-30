@@ -138,7 +138,11 @@ export function rowFromHit(agent: string, hit: MemorySearchHit, outcome?: Promot
 async function latestHits(agent: string): Promise<MemorySearchHit[]> {
 	const hits: MemorySearchHit[] = [];
 	for (const kind of ["skill", "runbook"]) {
-		hits.push(...latestPerSkill(await searchAgentMemory(agent, "", { kind }, 64, { deterministic: true })));
+		// SIO-1900: verbatim, because rowFromHit parses the labelled fact and every
+		// transition re-stores it.
+		hits.push(
+			...latestPerSkill(await searchAgentMemory(agent, "", { kind }, 64, { deterministic: true, verbatim: true })),
+		);
 	}
 	return hits;
 }

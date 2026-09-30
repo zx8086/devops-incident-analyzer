@@ -22,7 +22,7 @@ import { parseSkillFactBody } from "./skill-promote.ts";
 const NOW = "2026-09-29T12:00:00Z";
 const prevBackend = process.env.LIVE_MEMORY_BACKEND;
 
-type Hit = { text: string; annotations: Record<string, string> };
+type Hit = { text: string; fact?: string; annotations: Record<string, string> };
 
 function stub(hits: Hit[]) {
 	const added: Array<{ facts: string[]; annotations?: Record<string, string> }> = [];
@@ -279,6 +279,27 @@ describe("reviewCandidate", () => {
 			promotionStored: false,
 		});
 		expect(writes).toBe(2);
+	});
+
+	// SIO-1900: the live service returns its own paraphrase as the hit text and the
+	// stored fact beside it. Rows must parse the fact, and a transition must
+	// re-store the fact, or the labelled sections are lost one step at a time.
+	test("rows parse the stored fact, not the service's paraphrase, and transitions keep it", async () => {
+		const paraphrase = "The proposed skill 'lag-corr' is designed to correlate consumer lag with error spikes.";
+		const { added } = await install([{ ...candidate(), text: paraphrase, fact: TEXT }]);
+		const rows = await listReviewRows("incident-analyzer");
+		expect(rows[0]).toMatchObject({
+			title: "Correlate consumer lag with error spikes.",
+			whenToUse: "When a lag alert coincides with an error-rate rise.",
+			evidence: ["correlated kafka lag with elastic errors"],
+		});
+		expect(
+			await reviewCandidate(
+				{ agent: "incident-analyzer", skillName: "lag-corr", action: "reject" },
+				{ now: () => NOW },
+			),
+		).toEqual({ ok: true, status: "rejected" });
+		expect(added[0]?.facts[0]).toBe(TEXT);
 	});
 
 	// Codex SIO-1896: outcome reads run in bounded batches, never all at once.

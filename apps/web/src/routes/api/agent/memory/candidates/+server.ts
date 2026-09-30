@@ -44,7 +44,12 @@ export const GET: RequestHandler = async ({ url }) => {
 export const POST: RequestHandler = async ({ request }) => {
 	if (!isLearningReviewEnabled()) return json({ error: "learning review is disabled" }, { status: 404 });
 	const parsed = ReviewActionSchema.safeParse(await request.json().catch(() => null));
-	if (!parsed.success) return json({ error: "Invalid review action", issues: parsed.error.issues }, { status: 400 });
+	if (!parsed.success) {
+		// SIO-1900: name the field, since the pane shows only this string.
+		const first = parsed.error.issues[0];
+		const where = first ? `: ${first.path.join(".") || "body"} ${first.message}` : "";
+		return json({ error: `Invalid review action${where}`, issues: parsed.error.issues }, { status: 400 });
+	}
 	try {
 		const result = await reviewCandidate(parsed.data);
 		if (!result.ok) return json({ error: result.reason }, { status: result.code });

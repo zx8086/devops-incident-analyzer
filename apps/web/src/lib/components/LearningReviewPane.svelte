@@ -9,6 +9,7 @@ import type { AgentId } from "$lib/agent-ids";
 import {
 	applyReviewResponse,
 	approveLabel,
+	buildReviewPayload,
 	canApprove,
 	describeTaskSuccess,
 	isTerminal,
@@ -78,17 +79,11 @@ function toggle(row: ReviewRowView) {
 async function act(row: ReviewRowView, action: "approve" | "reject" | "supersede") {
 	busy = rowKey(row);
 	try {
-		// kind disambiguates a skill and a runbook of one name; expectedStatus is the
-		// status this row showed, so a decision stored since is refused, not stacked.
-		const payload: Record<string, unknown> = {
-			agent,
-			skillName: row.skillName,
-			kind: row.kind === "runbook" ? "runbook" : "skill",
-			expectedStatus: row.status,
-			action,
-		};
-		if (action === "approve") payload.edits = { title: editTitle, body: editBody };
-		if (action === "supersede") payload.supersedes = supersedeBy.trim();
+		const payload = buildReviewPayload(agent, row, action, {
+			title: editTitle,
+			body: editBody,
+			supersedes: supersedeBy,
+		});
 		const res = await fetch("/api/agent/memory/candidates", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },

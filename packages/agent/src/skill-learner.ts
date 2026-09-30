@@ -310,7 +310,7 @@ export async function listLearningCandidates(
 ): Promise<SkillProposalSummary[]> {
 	const hits: MemorySearchHit[] = [];
 	for (const kind of opts.kind ? [opts.kind] : ["skill", "runbook"]) {
-		hits.push(...(await searchAgentMemory(agentName, "", { kind }, 64, { deterministic: true })));
+		hits.push(...(await searchAgentMemory(agentName, "", { kind }, 64, { deterministic: true, verbatim: true })));
 	}
 	const summaries = summarizeSkillProposalHits(latestPerSkill(hits));
 	return opts.status ? summaries.filter((s) => s.status === opts.status) : summaries;
@@ -483,8 +483,10 @@ export async function recordTurnFeedback(
 		score: String(score),
 	});
 	const hits = latestPerSkill(
+		// SIO-1900: verbatim, because the transition below re-stores hit.text.
 		await searchAgentMemory(agentName, "", { kind: "skill", learned_from: `thread:${threadId}` }, 64, {
 			deterministic: true,
+			verbatim: true,
 		}),
 	);
 	let transitions = 0;

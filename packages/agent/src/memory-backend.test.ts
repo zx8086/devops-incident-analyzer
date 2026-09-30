@@ -404,6 +404,25 @@ describe("recall + endSession", () => {
 		expect(rec.searches).not.toContain("ignored query");
 	});
 
+	// SIO-1900: verbatim returns the stored fact; the default keeps the summary; a
+	// hit the service gave no fact for falls back to its text.
+	test("searchAgentMemory(verbatim) returns the stored fact instead of the summary", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client } = makeFakeClient([]);
+		client.searchMemory = async () => [
+			{ text: "The proposed skill is designed to...", fact: "Proposed skill: x - y", annotations: { kind: "skill" } },
+			{ text: "summary only", annotations: { kind: "skill" } },
+		];
+		__setAgentMemoryClient(client);
+		const verbatim = await searchAgentMemory("incident-analyzer", "", { kind: "skill" }, 8, {
+			deterministic: true,
+			verbatim: true,
+		});
+		expect(verbatim.map((h) => h.text)).toEqual(["Proposed skill: x - y", "summary only"]);
+		const summarised = await searchAgentMemory("incident-analyzer", "", { kind: "skill" }, 8, { deterministic: true });
+		expect(summarised.map((h) => h.text)).toEqual(["The proposed skill is designed to...", "summary only"]);
+	});
+
 	test("searchAgentMemory without deterministic forwards the query (semantic)", async () => {
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
 		const { client, rec } = makeFakeClient(["a fact"]);

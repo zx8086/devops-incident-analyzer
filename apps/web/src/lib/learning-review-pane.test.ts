@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	applyReviewResponse,
 	approveLabel,
+	buildReviewPayload,
 	canApprove,
 	describeTaskSuccess,
 	isTerminal,
@@ -26,6 +27,47 @@ const row = (over: Partial<ReviewRowView> = {}): ReviewRowView => ({
 	body: "Pull both series and align them.",
 	evidence: ["q1"],
 	...over,
+});
+
+// SIO-1900: the pane sends only what the reviewer changed, so a stored title
+// longer than the route's 200-character edit cap no longer blocks an approval.
+describe("buildReviewPayload (SIO-1900)", () => {
+	const long = "x".repeat(246);
+	const stored = row({ title: long, body: "Pull both series and align them.", taskSuccess: "1" });
+
+	test("an untouched approval carries no edits, whatever the stored title's length", () => {
+		expect(
+			buildReviewPayload("incident-analyzer", stored, "approve", { title: long, body: stored.body, supersedes: "" }),
+		).toEqual({
+			agent: "incident-analyzer",
+			skillName: "lag-corr",
+			kind: "skill",
+			expectedStatus: "candidate",
+			action: "approve",
+		});
+	});
+
+	test("only the changed field is sent", () => {
+		const p = buildReviewPayload("incident-analyzer", stored, "approve", {
+			title: "Correlate lag with errors",
+			body: stored.body,
+			supersedes: "",
+		});
+		expect(p.edits).toEqual({ title: "Correlate lag with errors" });
+	});
+
+	test("reject sends no edits; supersede sends the trimmed replacement; a runbook keeps its kind", () => {
+		const input = { title: "changed", body: "changed", supersedes: "  lag-corr-v2 " };
+		expect(buildReviewPayload("incident-analyzer", stored, "reject", input).edits).toBeUndefined();
+		const sup = buildReviewPayload(
+			"incident-analyzer",
+			row({ kind: "runbook", status: "approved" }),
+			"supersede",
+			input,
+		);
+		expect(sup).toMatchObject({ kind: "runbook", expectedStatus: "approved", supersedes: "lag-corr-v2" });
+		expect(sup.edits).toBeUndefined();
+	});
 });
 
 describe("learning review pane rules (SIO-1891)", () => {
