@@ -2,9 +2,13 @@
 
 Multi-datasource incident analysis agent powered by LangGraph and 7 datasource MCP servers. A supervisor orchestrates specialist sub-agents that query Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian (Jira/Confluence), and AWS in parallel, then correlates findings into actionable incident reports.
 
-The repo also ships a second top-level agent, **elastic-iac** -- a GitOps proposer for Elastic Cloud infrastructure changes (served by an 8th MCP server on port 9086). Selected by the UI agent toggle, it answers "change it" requests by editing deployment/policy JSON and opening a GitLab merge request; CI plans and humans merge/apply (agent proposes, GitOps disposes). See [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
+The web app runs four top-level agents, resolved through one registry (`apps/web/src/lib/server/graph-registry.ts`): the incident analyzer above, and the three below.
+
+**elastic-iac** is a GitOps proposer for Elastic Cloud infrastructure changes (served by its own MCP server on port 9086). Selected by the header agent control, it answers "change it" requests by editing deployment/policy JSON and opening a GitLab merge request; CI plans and humans merge/apply (agent proposes, GitOps disposes). See [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
 
 The **landing-zone-terraform** mode is an evidence-first learning, review, topology, and governed GitOps proposal agent for the private PVH AWS Landing Zone estate. It automatically routes account, workload-network, core-network, post-vending, GitLab-project, and runner questions to their repository-owned authoring surfaces. Read mode is the default; optional write mode can only open a human-reviewed branch and merge request and has no merge, apply, state, or pipeline-trigger capability. See [the Landing Zone architecture](docs/architecture/landing-zone-terraform-agent.md) and [operations runbook](docs/operations/landing-zone-agent-runbook.md).
+
+The **pi-fleet-console** agent asks several live AWS account agents (pi-coms spokes) one question and synthesizes one attributed answer. It is available only when a pi-coms hub is configured. In the web app the operator-facing surface is the fleet pane beside the incident chat, which addresses spokes directly; the header agent control does not cycle to the console agent, which runs for a request that names it. The hub, the spoke extension, the fleet monitor and their deployment live in `packages/pi-coms`; see [the console graph](docs/architecture/pi-fleet-third-graph.md), [the fleet pane](docs/architecture/pi-fleet-pane.md) and [the pi-coms docs](packages/pi-coms/docs/README.md).
 
 ## Architecture
 
@@ -39,7 +43,7 @@ Incident Report
 
 An explicit `learn from TICKET-123` turn routes into the human-in-the-loop **learning lane** (`classify -> learnFetchTicket -> ... -> applyLearnings`, gated by `HIL_LEARNING_ENABLED`), which distills confirmed root causes and diagnostic knowledge from a resolved ticket back into the knowledge graph and durable memory. See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md#hil-learning-lane).
 
-See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 31-node StateGraph (21 base nodes + 4 gated knowledge-graph nodes + 6 gated HIL-learning nodes; `grep -c addNode packages/agent/src/graph.ts` = 31) including retry loops, conditional edges, the SIO-828 AWS estate router, the SIO-681 cross-agent correlation enforcement detour, and the SIO-1126 human-in-the-loop learning lane. The separate 31-node elastic-iac proposer graph is documented in [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
+See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 32-node StateGraph (22 base nodes + 4 gated knowledge-graph nodes + 6 gated HIL-learning nodes; `grep -c addNode packages/agent/src/graph.ts` = 32) including retry loops, conditional edges, the SIO-828 AWS estate router, the SIO-681 cross-agent correlation enforcement detour, the SIO-1652 `fetchFleetInbox` enrichment node, and the SIO-1126 human-in-the-loop learning lane. The separate 38-node elastic-iac proposer graph is documented in [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md), and the 31-node Landing Zone graph in [docs/architecture/landing-zone-terraform-agent.md](docs/architecture/landing-zone-terraform-agent.md).
 
 ## Quick Start
 
@@ -58,7 +62,7 @@ MCP_TRANSPORT=http MCP_PORT=9081 bun packages/mcp-server-kafka/src/index.ts
 bun run --filter @devops-agent/web dev
 ```
 
-Open http://localhost:5173. For all eight MCP servers see [docs/deployment/local-development.md](docs/deployment/local-development.md).
+Open http://localhost:5173. For the full set of MCP servers see [docs/deployment/local-development.md](docs/deployment/local-development.md).
 
 ## Project Structure
 
@@ -72,16 +76,21 @@ agents/                          Gitagent declarative definitions (YAML/Markdown
     skills/                      Procedural knowledge (normalize, aggregate, mitigate)
   elastic-iac/                   Second agent: GitOps proposer for Elastic Cloud infra changes
   landing-zone-terraform/        PVH Landing Zone evidence, topology, and reviewed proposal agent
+  pi-fleet-console/              In-process fleet console persona (asks the live account spokes)
+  pi-fleet/                      Console and aws-spoke personas exported as a Pi package into the fleet bundle
+  shared/                        Context and skills shared across agents
 
 packages/
-  gitagent-bridge/               YAML-to-LangGraph adapter
-  agent/                         LangGraph 31-node pipeline (21 base + 4 gated knowledge-graph + 6 gated HIL-learning nodes) plus a separate 31-node elastic-iac proposer graph
+  gitagent-bridge/               YAML-to-LangGraph adapter; pi-fleet persona exporter
+  agent/                         LangGraph 32-node pipeline (22 base + 4 gated knowledge-graph + 6 gated HIL-learning nodes), plus the 38-node elastic-iac proposer, the 31-node Landing Zone graph and the pi-fleet console graph
   shared/                        Cross-package types, Zod schemas, Agent Memory REST client (SIO-938)
   checkpointer/                  Transient per-thread LangGraph state (memory / bun:sqlite)
   observability/                 Pino logging, OpenTelemetry, LangSmith
   knowledge-graph/               Embedded entity + correlation graph (lbug/LadybugDB; SIO-850/954/965; gated on KNOWLEDGE_GRAPH_ENABLED)
-  memory-pr/                     PR-based human-in-the-loop for durable agent learnings (SIO-849)
+  memory-pr/                     PR-based human-in-the-loop for durable agent learnings (SIO-849); opens the promotion PR for an approved learning candidate (SIO-1896)
   skillflow/                     Declarative workflow (DAG) loader + executor (SIO-848)
+  tools-verify/                  Static checks over tool definitions (action-tool-map coverage, elastic registry drift, no sugar registration)
+  pi-coms/                       pi-coms hub, Pi spoke extension, fleet monitor, Terraform and deploy scripts (own docs index)
   mcp-server-elastic/            Elasticsearch MCP (multi-deployment)
   mcp-server-kafka/              Kafka MCP (local/MSK/Confluent)
   mcp-server-couchbase/          Couchbase Capella MCP (query analysis)
@@ -94,7 +103,7 @@ packages/
   mcp-server-knowledge-graph/    In-process Knowledge Graph MCP (curated kg_* + read-only Cypher, port 9087)
 
 apps/
-  web/                           SvelteKit frontend (Svelte 5, Tailwind, SSE streaming; 34 components)
+  web/                           SvelteKit frontend (Svelte 5, Tailwind, SSE streaming; 42 components)
 ```
 
 ## MCP Servers
@@ -119,15 +128,15 @@ The incident analyzer, Elastic IaC agent, and Landing Zone agent keep separate d
 The storage behind that writer is swappable via `LIVE_MEMORY_BACKEND` (SIO-938):
 
 - **`file`** (default) -- git-tracked markdown under `agents/<agent>/memory/runtime/{context,key-decisions,dailylog}.md` + `memory/wiki/`. Human-readable, PR-reviewable.
-- **`agent-memory`** -- the [Couchbase Agent Memory](https://docs.couchbase.com/) REST service. Adds semantic recall and TTL decay. Mapping: `context` + `key-decisions` + wiki pages -> durable **facts** (no TTL); `dailylog` turns -> conversational **messages** (short TTL); on bootstrap the agent semantic-searches its past sessions for relevant context. One Agent Memory user per agent (`incident-analyzer`, `elastic-iac`); each chat thread is a session.
+- **`agent-memory`** -- the [Couchbase Agent Memory](https://docs.couchbase.com/) REST service. Adds semantic recall and TTL decay. Mapping: `context` + `key-decisions` + wiki pages -> durable **facts** (no TTL); `dailylog` turns -> conversational **messages** (short TTL); on bootstrap the agent semantic-searches its past sessions for relevant context. One Agent Memory user per agent (`incident-analyzer`, `elastic-iac`, `landing-zone-terraform`, `pi-fleet-console`); each chat thread is a session.
 
-The backend is a direct REST client in `packages/shared` (no MCP server, no LLM tool surface) wired through the lifecycle bootstrap/teardown seams. Writes are queued behind the synchronous writer and drained at session teardown, so the default file path is unchanged when `LIVE_MEMORY_BACKEND` is unset. See [the design spec](docs/superpowers/specs/2026-06-17-couchbase-agent-memory-backend-design.md).
+The backend is a direct REST client in `packages/shared` (no MCP server; one LLM-callable tool, `search_memory`, bound into the elastic-iac read tool set) wired through the lifecycle bootstrap/teardown seams. Writes are queued behind the synchronous writer and drained at session teardown, so the default file path is unchanged when `LIVE_MEMORY_BACKEND` is unset. See [the design spec](docs/superpowers/specs/2026-06-17-couchbase-agent-memory-backend-design.md).
 
 Beyond the bootstrap recall + dailylog breadcrumb, the agents use memory in several specific scenarios — IaC-change proposal facts + "check my MR" recall, in-flight fleet-upgrade recovery across sessions, post-turn skill-learning proposals (`kind:skill`), lifecycle reconciliation of proposed -> applied/failed changes, and annotation-keyed dedup. The full read/write catalog is in [docs/architecture/agent-memory.md](docs/architecture/agent-memory.md#scenario-catalog).
 
 ## Knowledge Graph (lbug)
 
-An optional embedded entity-and-correlation graph (lbug/LadybugDB), gated on `KNOWLEDGE_GRAPH_ENABLED`. It records the services, incidents, deployments, and config changes a turn touches, so a later turn can recall service dependencies, vector-similar past incidents, and a deployment's change history. The graph is exposed to the elastic-iac agent through an **in-process MCP server on :9087** (it must run in-process because embedded lbug takes an exclusive file lock) with curated `kg_*` readers plus a read-only-guarded `kg_run_cypher`. Eight pipeline nodes write/enrich it across the two agents (`recordEntities`/`graphEnrich`/`recordRootCause`/`recordBindings`; `recordIacPrompt`/`graphEnrichIac`/`recordIacEntities`/`recordIacOutcome`), plus a scheduled cron topology sweep (SIO-1104). `recordBindings` (SIO-1100 W8) writes the turn's confirmed telemetry-to-service bindings, which `resolveIdentifiers` reads back on later turns (SIO-1101 R7). It joins to Agent Memory by shared annotation keys. Full deep-dive: [docs/architecture/knowledge-graph.md](docs/architecture/knowledge-graph.md).
+An optional embedded entity-and-correlation graph (lbug/LadybugDB), gated on `KNOWLEDGE_GRAPH_ENABLED`. It records the services, incidents, deployments, and config changes a turn touches, so a later turn can recall service dependencies, vector-similar past incidents, and a deployment's change history. The graph is exposed to the elastic-iac agent through an **in-process MCP server on :9087** (it must run in-process because embedded lbug takes an exclusive file lock) with curated `kg_*` readers plus a read-only-guarded `kg_run_cypher`. Eight pipeline nodes write/enrich it across the incident analyzer and elastic-iac (`recordEntities`/`graphEnrich`/`recordRootCause`/`recordBindings`; `recordIacPrompt`/`graphEnrichIac`/`recordIacEntities`/`recordIacOutcome`), plus a scheduled cron topology sweep (SIO-1104). `recordBindings` (SIO-1100 W8) writes the turn's confirmed telemetry-to-service bindings, which `resolveIdentifiers` reads back on later turns (SIO-1101 R7). The Landing Zone agent reads the graph through eleven `kg_lz_*` tools, and its GitLab history import records Landing Zone repositories and changes into it. It joins to Agent Memory by shared annotation keys. Full deep-dive: [docs/architecture/knowledge-graph.md](docs/architecture/knowledge-graph.md).
 
 ## Commands
 
@@ -138,9 +147,11 @@ bun run typecheck               # TypeScript check all packages
 bun run lint                    # Biome lint check
 bun run lint:fix                # Biome auto-fix
 
-# Run specific package tests
-bun test packages/gitagent-bridge/src/index.test.ts
-bun test packages/agent/src/validation.test.ts
+# Run one package, or one file. Use the package's script, not bare `bun test`:
+# packages/agent and apps/web pass --isolate, and dropping it leaks mock.module()
+# stubs between test files (SIO-1795).
+cd packages/gitagent-bridge && bun run test src/index.test.ts
+cd packages/agent && bun run test src/validation.test.ts
 ```
 
 ### Evals & audits

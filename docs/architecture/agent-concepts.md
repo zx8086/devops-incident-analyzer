@@ -243,7 +243,7 @@ Sub-agents (`elastic-agent`, `kafka-agent`, â€¦) don't copy the parent's tools â
 
 ### Package-level: the monorepo
 
-Cross-cutting packages are workspace dependencies of everything: `shared` (types, Zod schemas, `createMcpApplication` bootstrap, the Agent Memory REST client), `observability` (Pino + OpenTelemetry + LangSmith), `checkpointer`, and `gitagent-bridge`. All eight MCP servers depend on `shared`; `agent` depends on `gitagent-bridge` + `checkpointer` + `observability` + `shared`; `web` depends on `agent`. The dependency graph and package map are in [monorepo-structure.md](../development/monorepo-structure.md).
+Cross-cutting packages are workspace dependencies of everything: `shared` (types, Zod schemas, `createMcpApplication` bootstrap, the Agent Memory REST client), `observability` (Pino + OpenTelemetry + LangSmith), `checkpointer`, and `gitagent-bridge`. All ten MCP server packages depend on `shared`; `agent` depends on `gitagent-bridge` + `checkpointer` + `observability` + `shared`; `web` depends on `agent`. The dependency graph and package map are in [monorepo-structure.md](../development/monorepo-structure.md).
 
 ---
 
