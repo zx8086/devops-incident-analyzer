@@ -250,7 +250,7 @@ Key parameters:
 |--------|-------------------|-------|
 | Kafka | `KAFKA_PROVIDER`, `MSK_CLUSTER_ARN` and/or `MSK_BOOTSTRAP_BROKERS` (for MSK), `AWS_REGION`, `MSK_AUTH_MODE` (optional) | `KAFKA_PROVIDER=msk` for AWS MSK clusters. `MSK_AUTH_MODE=none\|tls\|iam` selects the auth path; defaults to `none` (unauthenticated PLAINTEXT). Set `MSK_AUTH_MODE=iam` explicitly to opt into the IAM-authenticated path. |
 | Elastic | `ELASTICSEARCH_URL`, `ELASTICSEARCH_API_KEY` or `ELASTICSEARCH_USERNAME` + `ELASTICSEARCH_PASSWORD` | Authenticates directly to ES cluster, no AWS-specific IAM needed |
-| Couchbase | `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD`, `CB_BUCKET` | Authenticates via Capella SDK credentials |
+| Couchbase | `COUCHBASE_URL`, `COUCHBASE_USERNAME`, `COUCHBASE_PASSWORD`, `COUCHBASE_BUCKET` | Authenticates via Capella SDK credentials |
 | Konnect | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION` | Uses Kong Konnect API token, region: `us\|eu\|au\|me\|in` |
 | GitLab | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` | Proxy to GitLab native MCP + custom REST tools |
 | Atlassian | `ATLASSIAN_SITE_NAME`, `ATLASSIAN_MCP_URL`, `ATLASSIAN_OAUTH_CALLBACK_PORT`, `ATLASSIAN_READ_ONLY` | OAuth 2.0 flow to Atlassian Cloud; read-only enforced by default |
@@ -447,7 +447,7 @@ docker run --rm -p 8000:8000 -e ELASTICSEARCH_URL=http://host.docker.internal:92
 **Couchbase:**
 ```bash
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-couchbase -t couchbase-mcp-agentcore .
-docker run --rm -p 8000:8000 -e CB_HOSTNAME=host.docker.internal -e CB_USERNAME=admin -e CB_PASSWORD=password -e CB_BUCKET=default couchbase-mcp-agentcore
+docker run --rm -p 8000:8000 -e COUCHBASE_URL=couchbase://host.docker.internal -e COUCHBASE_USERNAME=admin -e COUCHBASE_PASSWORD=password -e COUCHBASE_BUCKET=default couchbase-mcp-agentcore
 ```
 
 **Konnect:**
@@ -473,7 +473,7 @@ Or test without Docker by running with `MCP_TRANSPORT=agentcore`:
 ```bash
 MCP_TRANSPORT=agentcore MCP_PORT=8000 KAFKA_PROVIDER=local bun run packages/mcp-server-kafka/src/index.ts
 MCP_TRANSPORT=agentcore MCP_PORT=8000 ELASTICSEARCH_URL=http://localhost:9200 bun run packages/mcp-server-elastic/src/index.ts
-MCP_TRANSPORT=agentcore MCP_PORT=8000 CB_HOSTNAME=localhost bun run packages/mcp-server-couchbase/src/index.ts
+MCP_TRANSPORT=agentcore MCP_PORT=8000 COUCHBASE_URL=couchbase://localhost bun run packages/mcp-server-couchbase/src/index.ts
 MCP_TRANSPORT=agentcore MCP_PORT=8000 KONNECT_ACCESS_TOKEN=test bun run packages/mcp-server-konnect/src/index.ts
 MCP_TRANSPORT=agentcore MCP_PORT=8000 GITLAB_PERSONAL_ACCESS_TOKEN=glpat-xxx bun run packages/mcp-server-gitlab/src/index.ts
 MCP_TRANSPORT=agentcore MCP_PORT=8000 ATLASSIAN_SITE_NAME=your-site bun run packages/mcp-server-atlassian/src/index.ts

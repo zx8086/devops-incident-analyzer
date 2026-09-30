@@ -1,7 +1,7 @@
 # Local Development Setup
 
 > **Targets:** Bun 1.3.9+ | Docker 24.0+ | TypeScript 5.x
-> **Last updated:** 2026-04-23
+> **Last updated:** 2026-09-30
 
 Instructions for running the full DevOps Incident Analyzer stack locally. Covers two approaches: Docker Compose (single command, all services) and bare-metal (individual Bun processes). Includes port assignments, health verification, and common startup issues.
 
@@ -104,7 +104,7 @@ docker exec kafka /opt/kafka/bin/kafka-topics.sh \
 
 ## Option 1: Docker Compose
 
-Docker Compose starts all eight services (seven MCP servers + web frontend) with a single command. Health checks ensure the web frontend waits for all MCP servers to be ready before starting.
+Docker Compose starts five services with a single command: four MCP servers (Elasticsearch, Kafka, Couchbase, Konnect) and the web frontend. Health checks ensure the web frontend waits for those four to be ready before starting. `docker-compose.yml` does not define the GitLab, Atlassian, AWS, Elastic IaC or Landing Zone IaC servers; run those bare-metal (Option 2) and point the matching `*_MCP_URL` at them when you need them.
 
 ### Starting
 
@@ -124,14 +124,13 @@ docker compose up -d
 |---------|---------------|------|------------|
 | Elasticsearch MCP | `elastic-mcp` | 9080 | `http://localhost:9080/health` |
 | Kafka MCP | `kafka-mcp` | 9081 | `http://localhost:9081/health` |
-| Couchbase MCP | `couchbase-mcp` | 9082 | `http://localhost:9082/health` |
-| Konnect MCP | `konnect-mcp` | 9083 | `http://localhost:9083/health` |
-| GitLab MCP | `gitlab-mcp` | 9084 | `http://localhost:9084/health` |
-| Atlassian MCP | `atlassian-mcp` | 9085 | `http://localhost:9085/health` |
-| AWS MCP (SigV4 proxy) | `aws-mcp` | 3001 | `http://localhost:3001/health` (proxy to AgentCore in non-local environments) |
+| Couchbase MCP | `couchbase-mcp` | 8082 | `http://localhost:8082/health` |
+| Konnect MCP | `konnect-mcp` | 8083 | `http://localhost:8083/health` |
 | Web Frontend | `agent-web` | 5173 | `http://localhost:5173` |
 
-All MCP servers expose health checks. The `agent-web` service has `depends_on` conditions that wait for all seven MCP servers to report healthy before starting. Health checks use:
+These are the ports `docker-compose.yml` publishes. Note that the file sets `agent-web`'s `COUCHBASE_MCP_URL` and `KONNECT_MCP_URL` to ports 9082 and 9083 while those two containers listen on 8082 and 8083, so check those two values if the Couchbase or Konnect datasource shows as not connected under Compose.
+
+All four MCP services expose health checks. The `agent-web` service has `depends_on` conditions that wait for all four to report healthy before starting. Health checks use:
 
 ```bash
 bun --eval "fetch('http://localhost:PORT/health').then(r => { if (!r.ok) process.exit(1) })"
@@ -195,6 +194,18 @@ MCP_TRANSPORT=http MCP_PORT=9084 bun packages/mcp-server-gitlab/src/index.ts
 MCP_TRANSPORT=http MCP_PORT=9085 bun packages/mcp-server-atlassian/src/index.ts
 ```
 
+The two IaC servers are only needed for their own agents. They default to HTTP on their own ports and read prefixed variables, not `MCP_TRANSPORT` / `MCP_PORT`:
+
+```bash
+# Elastic IaC MCP (port 9086, ELASTIC_IAC_MCP_PORT) -- for the elastic-iac agent
+bun packages/mcp-server-elastic-iac/src/index.ts
+
+# Landing Zone IaC MCP (port 9088, LANDING_ZONE_IAC_MCP_PORT) -- for the landing-zone-terraform agent
+bun packages/mcp-server-landing-zone-iac/src/index.ts
+```
+
+The knowledge-graph MCP server (port 9087) is not started by hand: the web app mounts it in-process when `KNOWLEDGE_GRAPH_ENABLED` is set. See [Landing Zone agent runbook](../operations/landing-zone-agent-runbook.md) for the Landing Zone agent's rollout steps.
+
 Each server logs its transport type, port, and tool count on startup:
 
 ```
@@ -203,7 +214,7 @@ Each server logs its transport type, port, and tool count on startup:
 
 ### Starting the Web Frontend
 
-In a seventh terminal:
+In another terminal:
 
 ```bash
 bun run --filter @devops-agent/web dev
@@ -223,6 +234,8 @@ curl -s http://localhost:9082/health
 curl -s http://localhost:9083/health
 curl -s http://localhost:9084/health
 curl -s http://localhost:9085/health
+curl -s http://localhost:9086/health   # Elastic IaC, if started
+curl -s http://localhost:9088/health   # Landing Zone IaC, if started
 ```
 
 Each should return a 200 status with a JSON body containing the server name and tool count.
@@ -237,7 +250,12 @@ KONNECT_MCP_URL=http://localhost:9083
 GITLAB_MCP_URL=http://localhost:9084
 ATLASSIAN_MCP_URL=http://localhost:9085
 ATLASSIAN_UPSTREAM_MCP_URL=https://mcp.atlassian.com/v1/mcp
+AWS_MCP_URL=http://localhost:3001
+ELASTIC_IAC_MCP_URL=http://localhost:9086
+LANDING_ZONE_IAC_MCP_URL=http://localhost:9088
 ```
+
+A URL that is unset leaves that server out: the agent connects only to the servers whose URL is configured.
 
 `ATLASSIAN_MCP_URL` is the local proxy the agent connects to (consistent with every other datasource). `ATLASSIAN_UPSTREAM_MCP_URL` is the Atlassian Cloud Rovo endpoint the local proxy forwards to — set in the mcp-server-atlassian package's config.
 
@@ -249,14 +267,20 @@ Port numbers differ between local bare-metal, Docker Compose, and AgentCore depl
 
 | Service | Bare-Metal | Docker Compose | AgentCore |
 |---------|-----------|----------------|-----------|
-| Elasticsearch MCP | 9080 | 8080 | 8000 |
-| Kafka MCP | 9081 | 3000 | 8000 |
+| Elasticsearch MCP | 9080 | 9080 | 8000 |
+| Kafka MCP | 9081 | 9081 | 8000 |
 | Couchbase MCP | 9082 | 8082 | 8000 |
 | Konnect MCP | 9083 | 8083 | 8000 |
-| GitLab MCP | 9084 | 8084 | 8000 |
-| Atlassian MCP | 9085 | 8085 | 8000 |
-| Atlassian OAuth callback | 9185 | 9185 | -- |
+| GitLab MCP | 9084 | not in the Compose file | 8000 |
+| Atlassian MCP | 9085 | not in the Compose file | 8000 |
+| Atlassian OAuth callback | 9185 | -- | -- |
+| AWS MCP (local SigV4 proxy) | 3001 | not in the Compose file | 8000 |
+| Elastic IaC MCP | 9086 | not in the Compose file | -- |
+| Knowledge Graph MCP (in-process in the web app) | 9087 | -- | -- |
+| Landing Zone IaC MCP | 9088 | not in the Compose file | -- |
 | Web Frontend | 5173 | 5173 | -- |
+
+The Docker Compose column is what `docker-compose.yml` publishes today.
 
 In AgentCore, each MCP server runs in its own isolated microVM, so they all use port 8000 without conflict. The AgentCore Gateway handles routing.
 
@@ -293,7 +317,7 @@ If the web frontend starts but the agent cannot reach MCP servers:
 1. Verify MCP servers are running and healthy using the `curl` commands above.
 2. Confirm the `*_MCP_URL` variables in `.env` match the actual running addresses.
 3. Check that `CORS_ORIGINS` includes `http://localhost:5173`.
-4. In Docker Compose, ensure services use container names (e.g., `http://elastic-mcp:8080`), not `localhost`.
+4. In Docker Compose, ensure services use container names (e.g., `http://elastic-mcp:9080`), not `localhost`.
 
 ### AWS Credential Errors
 
@@ -329,3 +353,4 @@ If a server exits immediately with a Zod validation error:
 |------|--------|
 | 2026-04-04 | Initial local development setup guide created (Phase 3: Configuration + Deployment) |
 | 2026-04-23 | Added Atlassian MCP server (port 9085, OAuth callback 9185) to all startup commands, health checks, and port tables |
+| 2026-09-30 | SIO-1897 docs sync (SIO-1635..1896 window): added the Landing Zone IaC MCP (9088), Elastic IaC MCP (9086), in-process Knowledge Graph MCP (9087) and AWS proxy (3001) to the bare-metal commands, health checks, URL list and port table; corrected the Docker Compose section and column to the five services and ports `docker-compose.yml` actually defines (it starts no GitLab, Atlassian, AWS or IaC server). |
