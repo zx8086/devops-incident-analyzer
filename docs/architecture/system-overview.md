@@ -1,7 +1,7 @@
 # System Overview
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-07-19
+> **Last updated:** 2026-09-30
 
 The DevOps Incident Analyzer is a multi-datasource investigation agent that correlates production signals across Elasticsearch logs, Kafka event streams, Couchbase Capella datastores, Kong Konnect API gateway metrics, GitLab CI/CD pipelines, Atlassian (Jira/Confluence) ticket and runbook metadata, and AWS infrastructure (CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray, etc.) across multiple accounts. A LangGraph supervisor orchestrates seven specialist sub-agents, each backed by a dedicated Model Context Protocol (MCP) server, to gather evidence and synthesize actionable incident reports with confidence scores.
 
@@ -117,15 +117,16 @@ Each MCP server is an independent deployable package with its own entry point, c
 
 ## Top-level agents
 
-Three compiled graphs, resolved through `graphFor(agentName)` (`apps/web/src/lib/server/graph-registry.ts`, SIO-1655). Adding a fourth is one id in `apps/web/src/lib/agent-ids.ts` plus one registry entry, not a new `agentName === ...` branch.
+Four compiled graphs, resolved through `graphFor(agentName)` (`apps/web/src/lib/server/graph-registry.ts`, SIO-1655). Adding another is one id in `apps/web/src/lib/agent-ids.ts` plus one registry entry, not a new `agentName === ...` branch for anything that is a lookup or a capability question.
 
 | Agent | Graph | Role |
 |---|---|---|
 | `incident-analyzer` | the 32-node pipeline below | Default. The only one carrying confidence and datasource signals. |
-| `elastic-iac` | `packages/agent/src/iac/` | GitOps change proposer. Distinct state shape (`IacState`); appends AIMessages rather than streaming tokens. |
-| `pi-fleet-console` | `packages/agent/src/pi-fleet/` | Asks several live account spokes one question and synthesizes one attributed answer. Offered only where a pi-coms hub is configured. |
+| `elastic-iac` | `packages/agent/src/iac/` (38 nodes) | GitOps change proposer. Distinct state shape (`IacState`); appends AIMessages rather than streaming tokens. See [elastic-iac-proposer.md](elastic-iac-proposer.md). |
+| `landing-zone-terraform` | `packages/agent/src/landing-zone/` (31 nodes) | SIO-1867. Evidence-first learning, review and topology agent for the PVH AWS Landing Zone repositories: seven evidence collectors run in parallel, then reconcile, risk assessment and a validated answer; an optional write path drafts a change and stops at a human review gate before opening a merge request. Its own state shape and resume route. See [landing-zone-terraform-agent.md](landing-zone-terraform-agent.md). |
+| `pi-fleet-console` | `packages/agent/src/pi-fleet/` | Asks several live account spokes one question and synthesizes one attributed answer. Selectable only where a pi-coms hub is configured. Its `surface` is `contextual`, so the header control never cycles to it (SIO-1657); the fleet pane is the operator-facing surface, and no UI control currently switches to this agent (see [Frontend](../development/frontend.md#agents-and-the-header-control-sio-1655-sio-1657)). |
 
-Two `agentName === "elastic-iac"` branches remain deliberately in `invokeAgent` and `iacResume`: they select a different code path over a different state shape, not merely a different graph object. The registry descriptor (`hasConfidence`, `hasDataSources`, `streamsTokens`) replaced the name checks that were really capability questions.
+Per-agent `agentName === ...` branches remain deliberately where the name selects a different code path over a different state shape, not merely a different graph object: `invokeAgent` branches for `elastic-iac`, `landing-zone-terraform` and `pi-fleet-console`, the resume path for the first two, and the stream route's per-agent completion handling. The registry descriptor (`hasConfidence`, `hasDataSources`, `streamsTokens`, `hasTriageGraph`, `surface`, `turnOutcome`) replaced the name checks that were really capability questions. `turnOutcome` (SIO-1889) gives the post-turn learner one terminal outcome per agent, read from that graph's own state.
 
 **`wrapUntrusted` (`packages/agent/src/pi-fleet/tools.ts`) is the only place in the system where a hub reply reaches a model.** Everywhere else the PR #682 invariant holds -- hub replies are data, never an LLM input.
 
@@ -134,7 +135,9 @@ Two `agentName === "elastic-iac"` branches remain deliberately in `invokeAgent` 
 | Component | Package | Responsibility |
 |-----------|---------|---------------|
 | Agent Orchestrator | `packages/agent` | 32-node LangGraph StateGraph (22 base + 4 gated KG + 6 gated HIL-learning): classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, resolveIdentifiers, fan-out (queryDataSource), align, fetchFleetInbox (SIO-1652, edged unless `PI_COMS_INBOX_ENABLED` is `"false"`/`"0"`), aggregate, extractFindings, enforceCorrelations (correlationFetch + enforceCorrelationsAggregate), checkConfidence, validate, mitigation split (proposeInvestigate / proposeMonitor / proposeEscalate + aggregateMitigation), followUp, detectTopicShift, + gated KG `recordEntities` / `graphEnrich` / `recordRootCause` / `recordBindings`, + gated HIL-learning `learnFetchTicket` / `learnMatchIncident` / `learnMatchGate` / `learnDistill` / `learnReviewGate` / `applyLearnings` |
-| Fleet Console Agent | `packages/agent/src/pi-fleet` | SIO-1655: the third top-level graph. A `createReactAgent` over five pi-coms hub tools (`fleet_list_agents`, `fleet_send`, `fleet_await_reply`, `fleet_inbox`, `fleet_status`) with a teardown node that releases hub registrations on the failure path too. Asks several account spokes one question and synthesizes one attributed answer. Persona `agents/pi-fleet-console/` (distinct from the exported `agents/pi-fleet/`); offered only where a pi-coms hub is configured. See [pi-fleet-third-graph.md](pi-fleet-third-graph.md) |
+| Landing Zone Terraform Agent | `packages/agent/src/landing-zone` | SIO-1867: the 31-node evidence-first graph for the PVH Landing Zone estate. Reads repository evidence through `landing-zone-iac-mcp`, AWS and Terraform documentation, the AWS API, Agent Memory and the knowledge graph; write mode is off by default. See [landing-zone-terraform-agent.md](landing-zone-terraform-agent.md) |
+| Landing Zone IaC MCP Server | `packages/mcp-server-landing-zone-iac` | 14 `lz_*` tools (:9088): 10 bounded repository, merge-request, pipeline and topology reads, plus 4 governed proposal tools registered only when write mode validates. Serves the Landing Zone agent only |
+| Fleet Console Agent | `packages/agent/src/pi-fleet` | SIO-1655: the fleet console graph. A `createReactAgent` over five pi-coms hub tools (`fleet_list_agents`, `fleet_send`, `fleet_await_reply`, `fleet_inbox`, `fleet_status`) with a teardown node that releases hub registrations on the failure path too. Asks several account spokes one question and synthesizes one attributed answer. Persona `agents/pi-fleet-console/` (distinct from the exported `agents/pi-fleet/`); offered only where a pi-coms hub is configured. See [pi-fleet-third-graph.md](pi-fleet-third-graph.md) |
 | Knowledge Graph MCP Server | `packages/mcp-server-knowledge-graph` | In-process MCP server (:9087, SIO-967) over the embedded lbug graph: curated `kg_*` tools + read-only Cypher; gated on `KNOWLEDGE_GRAPH_ENABLED`. See [knowledge-graph.md](knowledge-graph.md) |
 | Gitagent Bridge | `packages/gitagent-bridge` | Compiles YAML/Markdown agent definitions into runtime config (prompts, models, compliance) |
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
@@ -147,7 +150,9 @@ Two `agentName === "elastic-iac"` branches remain deliberately in `invokeAgent` 
 | GitLab MCP | `packages/mcp-server-gitlab` | Proxy + 5-8 custom tools for CI/CD pipelines, merge requests, code analysis, issues |
 | Atlassian MCP | `packages/mcp-server-atlassian` | Proxy + custom tools for Jira issues, Confluence pages, projects, and ticket metadata |
 | AWS MCP | `packages/mcp-server-aws` | Multi-estate AWS read-only tools — CloudWatch (logs, Logs Insights, metrics, Metrics Insights SQL, alarms), EC2 + network-path tracing (route tables, NAT gateways, NACLs, flow logs, transit gateways, VPC peering), ECS, Lambda, RDS, S3, X-Ray, CloudFormation, DynamoDB, ElastiCache, EventBridge/SNS/SQS, Step Functions, Config, Health, Tags. Cross-account `AssumeRole` per estate; `aws_list_estates` enumerates configured targets. See [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md). |
-| Web Frontend | `apps/web` | SvelteKit app with SSE streaming, 34 components (chat shell, per-datasource findings cards incl. network/application topology + ML-anomaly explainer, IaC/HITL cards, HIL-learning cards, create-ticket), Tailwind CSS |
+| Web Frontend | `apps/web` | SvelteKit app with SSE streaming, 42 components (chat shell, per-datasource findings cards incl. network/application topology with an Archify diagram view + ML-anomaly explainer, IaC and Landing Zone HITL cards, HIL-learning cards and the learning review pane, create-ticket, the graph triage and pi-fleet panes), Tailwind CSS. See [Frontend](../development/frontend.md) |
+| pi-coms | `packages/pi-coms` | The pi-coms hub, the Pi spoke extension, the fleet monitor, and the Terraform and deploy scripts for the account spokes. Documented in its own index, [packages/pi-coms/docs](../../packages/pi-coms/docs/README.md) |
+| Memory PR | `packages/memory-pr` | Opens the pull request that promotes approved learning into the repository (SIO-849, SIO-1896); skipped unless `MEMORY_PR_ENABLED`, a token and a target repo are configured. See [agent-memory.md](agent-memory.md) |
 | Agent Definitions | `agents/incident-analyzer` | YAML/Markdown: SOUL.md, RULES.md, agent.yaml, tools/*.yaml, skills/*.md, compliance/ |
 
 ### Package Dependency Graph
@@ -353,8 +358,10 @@ Verified node count: `grep -c addNode packages/agent/src/graph.ts` = **32** — 
 | Atlassian MCP Server | 9085 | Streamable HTTP (MCP) |
 | Elastic IaC MCP Server | 9086 | Streamable HTTP (MCP) |
 | Knowledge Graph MCP Server | 9087 | Streamable HTTP (MCP), in-process in the web app (SIO-967) |
+| Landing Zone IaC MCP Server | 9088 | Streamable HTTP (MCP) |
 | Atlassian OAuth Callback | 9185 | HTTP (OAuth 2.0 redirect) |
 | AWS MCP (SigV4 proxy) | 3001 | HTTP (SigV4-signed proxy to AgentCore runtime) |
+| pi-coms hub (local, `just coms-net-server`) | 52965 | HTTP + SSE |
 
 Each MCP server exposes two HTTP endpoints:
 - `POST /mcp` -- MCP protocol messages (tool calls, tool results)
@@ -389,3 +396,4 @@ The system enforces several security boundaries:
 | 2026-06-30 | Added the in-process Knowledge Graph MCP server (port 9087, SIO-967) and the [Knowledge Graph](knowledge-graph.md) component; corrected verified node counts (incident 20/22-with-KG; elastic-iac proposer 24→29). Part of the SIO-1025 docs sync. |
 | 2026-07-09 | SIO-1030..1038 docs sync (SIO-1039): re-verified node counts to greps — incident 22→23 with KG (`recordRootCause` from SIO-1026, previously undercounted); elastic-iac proposer 29→30 (`recordIacPrompt`, SIO-1038). New `ilm-delete` workflow (SIO-1037). |
 | 2026-07-19 | SIO-1039..1161 docs sync. Reconciled the incident node count (the two conflicting 22/23 figures here) to the verified grep = **31** (21 base + 4 gated KG incl. `recordBindings` + 6 gated HIL-learning nodes); added `resolveIdentifiers` to the node list. Refreshed component-summary tool counts (elastic ~93→**112** with `EC_API_KEY` — 96 cluster incl. 9 ML anomaly tools SIO-1148 + 16 cloud/billing, a live recount that corrected the prior cluster undercount; couchbase (this doc's prior ~15, README's prior 24+)→~39 SIO-1107; AWS +CloudWatch Metrics Insights + network-path EC2 SIO-1161/1120). Frontend 9→30 components. Noted the two user-initiated Atlassian write paths (create-ticket SIO-1124, HIL Jira comments SIO-1145) alongside the read-only production stance. |
+| 2026-09-30 | SIO-1897 docs sync (SIO-1635..1896 window): top-level agents three -> **four** (`landing-zone-terraform`, SIO-1867) with the full descriptor field list (`hasTriageGraph`, `surface`, `turnOutcome`) and the per-agent branches that remain; elastic-iac proposer count corrected to the verified grep = **38**; added Landing Zone agent, Landing Zone IaC MCP (:9088), pi-coms and memory-pr rows to the component summary; frontend 34 -> **42** components; ports 9088 and the local pi-coms hub (52965) added to Port Assignments. |

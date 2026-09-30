@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-09-23
+> **Last updated:** 2026-09-30
 
 Complete reference for all environment variables used across the DevOps Incident Analyzer monorepo. Variables are grouped by service. Each table lists the variable name, whether it is required, its default value (if any), and a description.
 
@@ -64,7 +64,18 @@ The AWS MCP server runs in AWS Bedrock AgentCore Runtime in production; locally 
 | `AWS_AGENTCORE_REGION` | Yes (production) | -- | Region of the AgentCore runtime (commonly `eu-central-1`). |
 | `AWS_AGENTCORE_PROXY_PORT` | No | `3001` | Local port the SigV4 proxy listens on. Must match `AWS_MCP_URL`. |
 | `AWS_AGENTCORE_AWS_PROFILE` | No | -- | AWS CLI profile used by the local proxy to sign requests. Mutually exclusive with explicit creds below. |
-| `AWS_AGENTCORE_AWS_ACCESS_KEY_ID` / `AWS_AGENTCORE_AWS_SECRET_ACCESS_KEY` | No | -- | Explicit creds for the proxy when no profile is configured. |
+| `AWS_AGENTCORE_AWS_ACCESS_KEY_ID` / `AWS_AGENTCORE_AWS_SECRET_ACCESS_KEY` / `AWS_AGENTCORE_AWS_SESSION_TOKEN` | No | -- | Explicit creds for the proxy when no profile is configured. The session token is needed only for temporary credentials. |
+| `KAFKA_AGENTCORE_RUNTIME_ARN` | No | -- | When set, the Kafka MCP entry point starts as a SigV4 proxy to that AgentCore runtime instead of connecting to brokers itself, using the same `KAFKA_AGENTCORE_*` naming as the AWS variables above. See [Kafka AgentCore SigV4](../deployment/kafka-agentcore-sigv4.md). |
+
+The AWS MCP server's own process reads a small set of variables besides `AWS_REGION` and `AWS_ESTATES`. Its defaults target AgentCore, so a runtime with only those two set boots correctly.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `AWS_MCP_LOG_LEVEL` | No | `info` | `debug`, `info`, `warn` or `error`. |
+| `MCP_TRANSPORT` (or `TRANSPORT_MODE`) | No | `agentcore` | `stdio`, `http`, `both` or `agentcore`. Local CLI use sets `MCP_TRANSPORT=stdio`. |
+| `MCP_PORT` (or `TRANSPORT_PORT`) | No | `8000` | Listen port. |
+| `MCP_HOST` (or `TRANSPORT_HOST`) | No | `0.0.0.0` | Bind host. |
+| `TRANSPORT_PATH` | No | `/mcp` | HTTP path. |
 
 ### AgentCore proxy retry budget (SIO-868)
 
@@ -165,12 +176,36 @@ The config-edit proposers resolve repo file paths from templates. `${cluster}`, 
 | `ELASTIC_IAC_SECURITY_TEMPLATE` | security-edit |
 | `ELASTIC_IAC_FLEET_INTEGRATIONS_TEMPLATE` | fleet-integration |
 | `ELASTIC_IAC_DASHBOARD_TEMPLATE` | dashboard-edit |
+| `ELASTIC_IAC_CLUSTER_SETTINGS_TEMPLATE` | cluster-settings-edit (default `environments/${cluster}/cluster-settings/settings.json`) |
+| `ELASTIC_IAC_INDEX_TEMPLATE_TEMPLATE` | index-template-create (default `environments/${cluster}/index-templates/${template}.json`) |
+| `ELASTIC_IAC_INGEST_PIPELINE_TEMPLATE` | ingest-pipeline-create / ingest-pipeline-edit (default `environments/${cluster}/ingest-pipelines/${name}.json`) |
 | `ELASTIC_IAC_STACK_CONFIG_TEMPLATE` / `ELASTIC_IAC_RECONCILE_MARKER_TEMPLATE` | drift sub-flow |
 | `IAC_PIPELINE_POLL_BUDGET_MS` / `IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED` / `IAC_PIPELINE_POLL_INTERVAL_MS` | `watchPipeline` MR poll loop only (defaults `90000` / `90000` / `10000`; SIO-989 capped the extended budget at 90s — a cold-runner pipeline >90s returns at `running` and the user re-checks) |
 | `IAC_FLEET_APPLY_TICKER_BUDGET_MS` / `IAC_FLEET_APPLY_TICKER_INTERVAL_MS` | `applyFleetUpgrade` live-ticker poll loop (agent-side `gitlab_get_pipeline` polling before the blocking result fetch; defaults `40000` / `10000`. SIO-1307: split from `IAC_PIPELINE_POLL_BUDGET_MS` so this loop tunes independently of the unrelated MR-watch flow) |
 | `ELASTIC_IAC_FLEET_APPLY_POLL_BUDGET_MS` | MCP `gitlab_get_fleet_upgrade_apply_result` poll-to-terminal loop (default `30000`, polls at the shared `ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS` cadence; SIO-1307 cut from `120000` — combined with the `IAC_FLEET_APPLY_TICKER_BUDGET_MS` ticker above, worst-case resume-turn latency for a still-running apply dropped from ~210s to ~70s) |
 | `ELASTIC_IAC_DRIFT_POLL_BUDGET_MS` / `ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS` | MCP drift-check / synthetics poll-to-terminal loop (defaults `90000` / `5000`; SIO-989 dropped the budget 300s -> 90s — also feeds the agent's `elastic-iac-mcp` tool timeout = budget + 30s margin) |
 | `ELASTIC_IAC_DRIFT_CONCURRENCY`, `ELASTIC_IAC_REPORT_STACKS_EXCLUDE`, `ELASTIC_IAC_CONFIG_DEPLOYMENT_STACKS`, `ELASTIC_IAC_CONFIG_ILM_STACKS` | drift / report stack scoping |
+| `ELASTIC_IAC_NESTED_STACKS_EXCLUDE` | SIO-1315: comma list of stacks opted out of the nested-layout families (security, fleet-integrations, agent-policies). An excluded stack falls back to the report-sourced default. Empty by default. |
+| `ELASTIC_IAC_EDIT_DRIFT_CHECK` | SIO-1310: kill-switch for the per-request scoped drift check run before a config edit. Default on; `false` restores the repo-only behaviour with no CI trigger. |
+| `IAC_APPLY_NOT_STARTED_SETTLE_DAYS` | SIO-1074: days a merged change whose apply job never started must age before the reconcile sweep settles it as applied out-of-band (default `7`). |
+| `ELASTIC_IAC_GITLAB_TIMEOUT_MS` | Deadline on every GitLab call the elastic-iac MCP makes (default `30000`). A hung call would otherwise block the server's single event loop and get it marked down. Invalid values fall back to the default and are logged. |
+
+### CI contract (job names, trigger variables, artifacts)
+
+The imperative sub-flows trigger jobs in the IaC repository's pipeline and read their artifacts. These names are the contract with that repository's CI; override one only if the repository renames it.
+
+| Variable | Default | Used by |
+|----------|---------|---------|
+| `ELASTIC_IAC_DRIFT_JOB_NAME` | `drift-check-on-demand` | drift |
+| `ELASTIC_IAC_DRIFT_PIPELINE_REF` | `main` | drift; also the fallback ref for the two below |
+| `ELASTIC_IAC_SYNTH_DRIFT_JOB_NAME` / `ELASTIC_IAC_SYNTH_PUSH_JOB_NAME` | `drift-check-synthetics-on-demand` / `synthetics-push-on-demand` | synthetics-drift |
+| `ELASTIC_IAC_SYNTH_DRIFT_VAR` / `ELASTIC_IAC_SYNTH_PUSH_VAR` | `SYNTH_DRIFT_CHECK` / `SYNTH_PUSH` | synthetics-drift trigger variables |
+| `ELASTIC_IAC_SYNTH_DRIFT_ARTIFACT` | `synthetics-drift-report.json` | synthetics-drift report |
+| `ELASTIC_IAC_SYNTH_PIPELINE_REF` | `ELASTIC_IAC_DRIFT_PIPELINE_REF`, else `main` | synthetics-drift |
+| `ELASTIC_IAC_FLEET_PREVIEW_JOB_NAME` / `ELASTIC_IAC_FLEET_APPLY_JOB_NAME` | `fleet-upgrade-preview-on-demand` / `fleet-upgrade-apply-on-demand` | fleet-upgrade |
+| `ELASTIC_IAC_FLEET_PREVIEW_VAR` / `ELASTIC_IAC_FLEET_APPLY_VAR` | `FLEET_UPGRADE_PREVIEW` / `FLEET_UPGRADE_APPLY` | fleet-upgrade trigger variables |
+| `ELASTIC_IAC_FLEET_REPORT_ARTIFACT` | `fleet-upgrade-report.json` | fleet-upgrade report |
+| `ELASTIC_IAC_FLEET_PIPELINE_REF` | `ELASTIC_IAC_DRIFT_PIPELINE_REF`, else `main` | fleet-upgrade |
 
 ---
 
@@ -183,6 +218,8 @@ LangSmith provides tracing, feedback collection, and evaluation for the agent pi
 | `LANGSMITH_API_KEY` | Yes (for tracing) | -- | LangSmith API key from smith.langchain.com |
 | `LANGSMITH_PROJECT` | No | `devops-incident-analyzer` | LangSmith project name for agent traces |
 | `LANGSMITH_TRACING` | No | `true` | Enable or disable LangSmith tracing globally |
+| `LANGSMITH_ENDPOINT` | No | `https://api.smith.langchain.com` | LangSmith API endpoint; override for a self-hosted or regional instance |
+| `LANGCHAIN_TRACING_V2`, `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT`, `LANGCHAIN_ENDPOINT` | No | -- | Legacy names. `LANGCHAIN_TRACING_V2=true` and `LANGCHAIN_API_KEY` are accepted as fallbacks for their `LANGSMITH_*` equivalents; the tracing initializer also writes all four from the `LANGSMITH_*` values so LangChain libraries that still read the old names agree. Prefer setting only `LANGSMITH_*`. |
 | `ELASTIC_LANGSMITH_PROJECT` | No | `elastic-mcp-server` | LangSmith project for Elasticsearch MCP server traces |
 | `KAFKA_LANGSMITH_PROJECT` | No | `kafka-mcp-server` | LangSmith project for Kafka MCP server traces |
 | `COUCHBASE_LANGSMITH_PROJECT` | No | `couchbase-mcp-server` | LangSmith project for Couchbase MCP server traces |
@@ -246,6 +283,15 @@ The `elasticsearch_search` tool uses a separate per-call timeout from the shared
 |----------|----------|---------|-------------|
 | `ELASTIC_SEARCH_REQUEST_TIMEOUT_MS` | No | `60000` | Per-call transport timeout for `elasticsearch_search`, in ms. Independent of the shared client `requestTimeout` (also raised — schema cap is now 120 000 ms, was 60 000 before). |
 | `ELASTIC_SEARCH_MAX_RETRIES` | No | `0` | Per-call retry count for `elasticsearch_search`. Default `0` so transient transport errors fail fast rather than stacking 30 s timeouts. |
+| `ELASTIC_DISCOVERY_REQUEST_TIMEOUT_MS` | No | `8000` | SIO-690: per-call timeout for discovery and metadata reads (cat indices, cluster health, get mappings). These should fail fast so the model can route around them instead of waiting on the shared client's 30 s timeout with retries. |
+| `ELASTIC_DISCOVERY_MAX_RETRIES` | No | `0` | SIO-690: per-call retry count for the same discovery reads. |
+
+### Read-only mode
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `READ_ONLY_MODE` | No | `false` | `true`/`1` restricts destructive operations on the Elasticsearch MCP server. |
+| `READ_ONLY_STRICT_MODE` | No | `true` | `true` blocks a restricted operation; `false` lets it through with a warning. Only meaningful with `READ_ONLY_MODE` on. |
 
 ### Elastic Cloud Deployment + Billing API
 
@@ -373,12 +419,17 @@ Connection parameters for a single Couchbase Capella cluster.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `CB_HOSTNAME` | Yes | -- | Couchbase Capella cluster hostname |
-| `CB_USERNAME` | Yes | -- | Database user with read access |
-| `CB_PASSWORD` | Yes | -- | Database user password |
-| `CB_BUCKET` | No | -- | Default bucket name for queries (optional, can be specified per-query) |
+| `COUCHBASE_URL` | Yes | `couchbase://localhost` | Connection string for the cluster, for Capella `couchbases://cb.xxxxxxxx.cloud.couchbase.com` |
+| `COUCHBASE_USERNAME` | Yes | `Administrator` | Database user with read access |
+| `COUCHBASE_PASSWORD` | Yes | `password` | Database user password |
+| `COUCHBASE_BUCKET` | No | `default` | Default bucket name for queries (can be specified per query) |
+| `COUCHBASE_SCOPE` | No | `_default` | Default scope |
+| `COUCHBASE_CONNECTION_TIMEOUT` | No | `5000` | Connection timeout in ms |
+| `READ_ONLY_QUERY_MODE` | No | `true` | SIO-1109/1813/1822: read-only gate. When on, the query tools reject a statement that modifies data or structure, and KV document writes are refused too. The gate reads a statement's keywords the way the query service does, so a write cannot be smuggled past it by quoting or escaping. Parsed as a kill-switch (SIO-1898): only an explicit `false` or `0` (any case) turns it off. Unset, `true`, `1`, an empty value and anything unrecognised keep it on, and an unrecognised value is logged as a warning. Set `false` only for a deployment that is meant to write. See [MCP Integration](../architecture/mcp-integration.md). |
 
-The MCP server connects using the Couchbase Node.js SDK. The hostname should be the cluster endpoint provided by the Capella console, typically in the format `cb.xxxxxxxx.cloud.couchbase.com`.
+The variable names are the ones the server reads (`packages/mcp-server-couchbase/src/config/envMapping.ts`). Earlier revisions of this page, and still `docker-compose.yml` and `scripts/agentcore/deploy.sh`, use `CB_HOSTNAME` / `CB_USERNAME` / `CB_PASSWORD` / `CB_BUCKET`; the server does not read those names, and with only them set it falls back to the local defaults above. The "Required" column means required for a real cluster: the code defaults target a local single-node install.
+
+The MCP server connects using the Couchbase Node.js SDK. For Capella the connection string uses the cluster endpoint shown in the Capella console.
 
 ---
 
@@ -455,7 +506,7 @@ Settings for the LangGraph supervisor agent, including model selection and state
 |----------|----------|---------|-------------|
 | `AGENT_LLM_TIER_<ROLE>` | No | per-role default | SIO-1226: flips a role in `TIERABLE_ROLES` between `light` (Haiku) and `standard` (the manifest model) with no code change, e.g. `AGENT_LLM_TIER_FOLLOW_UP=light`. **Caveat:** the light tier borrows the elastic-agent sub-agent manifest, which declares no `fallback:`, so a light-tier role has **no model fallback at all**. |
 | `AGENT_LLM_TIMEOUT_<ROLE>_MS` | No | per-role default | SIO-1226: per-role LLM wall-clock deadline. `0` disables that role's timer; `aggregator`, `subAgent` and `responder` are `0` by design and rely solely on the graph-wide abort signal. |
-| `AGENT_PROMPT_CACHE_ENABLED` | No | `true` | SIO-1226: Bedrock prompt caching for the sub-agent base prompt and the aggregator. Set `false` to kill it on a Bedrock `ValidationException` or a cost regression. Caches are **per model** with a ~5-minute TTL, so any model change invalidates every cached prefix and the sub-agent's up-to-40-iteration amortisation re-primes cold. |
+| `AGENT_PROMPT_CACHE_ENABLED` | No | `true` | SIO-1226: Bedrock prompt caching for the sub-agent base prompt and the aggregator. SIO-1773: the same flag also places two rolling cache points on a sub-agent's tool-result history (the newest message and the one that closed the previous round), so each ReAct turn reads the earlier turns from cache instead of paying for them again. Set `false` to kill it on a Bedrock `ValidationException` or a cost regression. Caches are **per model** with a ~5-minute TTL, so any model change invalidates every cached prefix and the sub-agent's up-to-40-iteration amortisation re-primes cold. |
 | `AGGREGATION_MIN_RUNWAY_MS` | No | `30000` | SIO-1226: minimum wall-clock runway `aggregate()` requires before starting its LLM call. Below it, the node emits a deterministic degraded summary instead of being hard-aborted mid-generation with zero output (SIO-1220). |
 | `AGENT_CHECKPOINTER_TYPE` | No | `memory` | State persistence backend: `memory` or `sqlite` |
 | `GRAPH_TIMEOUT_MS` | No | `900000` | Graph-level abort signal in ms. Overrides the `runtime.timeout` value in `agents/incident-analyzer/agent.yaml` when set. Default `900000` (15 min, SIO-1110; was 12 min) fits pre-fan-out (~30 s) + a 360 s fan-out + a 360 s alignment retry + the 120 s aggregation reserve. |
@@ -486,6 +537,97 @@ The agent uses two model tiers. The primary model handles complex reasoning task
 
 The `memory` checkpointer stores state in-process (lost on restart). The `sqlite` checkpointer uses `bun:sqlite` for persistent state across restarts.
 
+### Sub-agent context, evidence and loop control
+
+Byte caps share one contract unless a row says otherwise: unset, empty, non-numeric or negative falls back to the default, and an explicit `0` disables the cap. The behaviour is described in [Sub-Agent Context Assembly](../architecture/sub-agent-context-assembly.md).
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SUBAGENT_TOOL_RESULT_CAP_BYTES` | No | `131072` | SIO-688: cap on each tool result as the sub-agent's model sees it. Larger results are truncated by a shape-aware strategy. Also read by the AWS MCP server config. |
+| `SUBAGENT_STATE_TOOL_OUTPUT_CAP_BYTES` | No | `65536` | SIO-1043: cap on the copy of each tool output persisted into graph state (`toolOutputs[].rawJson`), separate from the model-facing cap above. |
+| `SUBAGENT_CONTEXT_BUDGET_BYTES` | No | `400000` | SIO-1250: total tool-content budget across a sub-agent's whole message history; older results are elided once it is exceeded. A backstop against context overflow, not a reduction knob: a deliberately harsh 60 000 made a sub-agent lose a live result and flail. |
+| `SUBAGENT_TRUNCATION_SYNTHESIS_ENABLED` | No | on (kill-switch: `false`/`0` disables) | SIO-1260: when a sub-agent's loop is cut off (for example at its recursion limit) before it wrote a report, one non-tool model call writes it from the full pre-cap tool outputs. Every failure path returns nothing rather than turning a salvaged partial success into an error. |
+| `SUBAGENT_SYNTHESIS_EVIDENCE_BYTES` | No | `48000` | Evidence budget for that synthesis pass. Unlike the caps above, `0` and negatives fall back to the default (an uncapped digest could be megabytes); use the flag above to turn the feature off. |
+| `EVIDENCE_INDEX_ENABLED` | No | on (kill-switch: `false`/`0` disables) | SIO-1688: per-run, in-memory full-text index of pre-truncation tool results and the `search_evidence` tool, so a sub-agent can retrieve what truncation or the context budget removed. Results over 8 KB are indexed (SIO-1775). Built only while the tool-result cap is active. |
+| `EVIDENCE_EXEC_ENABLED` | No | on (kill-switch: `false`/`0` disables) | SIO-1776/1775: sandboxed JavaScript over indexed evidence (`run_js_on_evidence`, and the in-call `_transform` argument), executed in QuickJS compiled to WebAssembly so model-authored code never runs in a process that holds datasource credentials. |
+| `EVIDENCE_TOC_ENABLED` | No | on (kill-switch: `false`/`0` disables) | SIO-1687: a provenance table of contents (which datasource ran which tools, how much came back, what failed) stashed per thread and prepended to the next turn's recall block. |
+| `DAILYLOG_TOOL_FAILURES_ENABLED` | No | on (kill-switch: `false`/`0` disables) | SIO-1687: adds a `<datasource>:<category>` tool-failure breadcrumb to the turn's dailylog line. Off changes what the line says, never whether it is written. |
+| `AWS_ABSENCE_EARLY_EXIT_ENABLED` | No | on (kill-switch: `false`/`0` disables) | SIO-1268: lets the AWS sub-agent stop once it has proven the focus service absent from an estate, instead of spending its step budget re-searching. |
+| `AGGREGATE_RESULT_CAP_BYTES` | No | `32768` | SIO-833: per-datasource-result budget in the aggregator prompt. The effective value is the smaller of this and a fair share of the total below, never under 4096. |
+| `AGGREGATE_TOTAL_CAP_BYTES` | No | `262144` | SIO-833: total budget for all results in the aggregator prompt, so an N-estate AWS fan-out stays bounded. |
+
+### Report integrity gates
+
+All default on and are read at call time, so flipping one needs no redeploy. Each `false`/`0` restores the behaviour that preceded the named ticket.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ABSENCE_JUDGE_ENABLED` | on | Model veto over the regex verdict that a report's "not found" claim contradicts the evidence. Off: the regex verdict always stands. |
+| `ABSENCE_ENTITY_MATCH_ENABLED` | on (only `false` disables) | Treats an absence claim as confirmed when an enumeration-shaped result was returned and none of it mentions the entity. |
+| `ABSENCE_UNVERIFIABLE_SPLIT_ENABLED` | on (only `false` disables) | SIO-1266: separates absence claims that could not be verified (every cited tool call failed) from ones the evidence contradicts. |
+| `GAPS_JUDGE_ENABLED` | on | Model veto over the regex verdict on reported coverage gaps. |
+| `COVERAGE_CAP_SCOPING_ENABLED` | on | SIO-1195: coverage cap reasons (degraded sub-agents, gaps, correlation shortfalls) soft-cap above the HITL gate, but only when every coverage signal is attributable to datasources provably disjoint from the root-cause evidence. Off: any cap reason yields the hard cap. |
+| `INTEGRITY_CAP_TIERING_ENABLED` | on | SIO-1198: an integrity cap reason may soft-cap when its per-claim signals show the guard discharged the claim. Off: every integrity reason hard-caps. |
+| `NORMALIZER_SERVICE_RECOVERY_ENABLED` | on | SIO-1233: a deterministic pass (no model call) pulls service-shaped tokens out of the raw query when `normalize` extracted no focus service. Off: an empty focus is accepted. |
+
+### Post-loop baselines
+
+Deterministic calls made after a sub-agent's loop, appended to its tool outputs for the topology cards. Soft-failing: a timeout or error contributes nothing and never affects the answer.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APP_MAP_BASELINE_ENABLED` | on | Application-map baseline (an Elasticsearch APM destination aggregation). Inert for non-elastic datasources. |
+| `APP_MAP_BASELINE_LOOKBACK` | `now-1h` | Lookback for that aggregation; must match `now-<N>[m\|h\|d]`. A fixed recent window, not the incident window. |
+| `APP_MAP_BASELINE_TIMEOUT_MS` | `8000` | Wall-clock budget for it. |
+| `NETWORK_BASELINE_ENABLED` | on | AWS network-topology baseline. Inert for non-aws datasources. |
+| `NETWORK_BASELINE_TIMEOUT_MS` | `8000` | Overall budget across all estates; calls are not started past the deadline. |
+
+### Action tools
+
+An action card is offered only when its provider is fully configured.
+
+| Variable | Description |
+|----------|-------------|
+| `SLACK_BOT_TOKEN`, `SLACK_DEFAULT_CHANNEL` | Both required for the `notify-slack` action. |
+| `LINEAR_API_KEY`, `LINEAR_TEAM_ID`, `LINEAR_PROJECT_ID` | All three required for the Linear ticket provider of `create-ticket`. |
+
+### Other agent settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENT_KILL_SWITCH` | off | `true`/`1` halts agent execution (`KillSwitchError`) and makes memory-pr skip every PR. |
+| `PII_REDACTION_ALLOWED_DOMAINS` | -- (empty) | Comma list of email domains restored after PII redaction, for addresses already public to the user (for example ticket assignees). Other PII stays redacted. |
+| `EMBEDDINGS_MAX_CHARS` | `24000` | Head-truncation cap on text sent to the embedder. `0` disables the cap. |
+| `WORKSPACE_ROOT` | -- | Last-resort workspace root when the agent cannot find `agents/incident-analyzer/agent.yaml` by walking up from its own location or the working directory. |
+| `EVAL_ROOT_MODEL_OVERRIDE` | -- (unset) | Eval-only twin of `EVAL_SUB_AGENT_MODEL_OVERRIDE` for the non-sub-agent roles. Logs a warning whenever it takes effect. Never set it outside an eval run. |
+
+---
+
+## pi-coms integration (web app and agent)
+
+What the incident analyzer needs to reach a pi-coms hub: the action cards, the fleet pane, the `fetchFleetInbox` node and the fleet console. Every capability self-skips when no hub is configured. The hub's own variables, and the monitor's (`PI_MONITOR_*`), are documented with the package: [pi-coms docs](../../packages/pi-coms/docs/README.md). Behaviour: [pi-coms verification](../architecture/pi-coms-verification.md), [pi-fleet pane](../architecture/pi-fleet-pane.md), [fleet inbox enrichment](../architecture/fleet-inbox-enrichment.md), [pi-fleet console graph](../architecture/pi-fleet-third-graph.md).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PI_COMS_HUBS` | -- | JSON map of hubs keyed by AWS account name (SIO-1666). Each entry: `serverUrl`, `authToken`, `environment`, an explicit `estates` list, and optional `project` (default `default`) and `fallbackTarget` (default `ops`). Invalid JSON or an invalid map throws at first use. An estate no hub claims, or two hubs claim, is refused. |
+| `PI_COMS_NET_SERVER_URL`, `PI_COMS_NET_AUTH_TOKEN` | -- | Legacy single-hub form, used only when `PI_COMS_HUBS` is unset. Both are required for the hub to count as configured. |
+| `PI_COMS_NET_ENVIRONMENT` | `dev` | Environment of the legacy single hub, which also becomes its key. |
+| `PI_COMS_NET_ESTATES` | -- (empty) | Comma list of estates the legacy single hub claims. Required for routing even with one hub. |
+| `PI_COMS_NET_PROJECT` | `default` | Project of the legacy single hub. |
+| `PI_COMS_FALLBACK_TARGET` | `ops` | Fallback recipient of the legacy single hub. |
+| `PI_COMS_ESTATE_AGENT_MAP` | -- (empty) | JSON string map from estate to spoke agent name, for estates whose spoke is not named after the estate. Invalid input is logged and ignored. |
+| `PI_COMS_VERIFY_TIMEOUT_MS` | `300000` | Budget for a `verify-with-pi` request. |
+| `PI_COMS_INVESTIGATE_TIMEOUT_MS` | `900000` | Budget for an `investigate-with-pi` request. |
+| `PI_HANDOFF_ENABLED` | on (kill-switch) | SIO-1651: the pi-handoff workflow. |
+| `PI_COMS_INBOX_ENABLED` | on (kill-switch) | SIO-1652: the `fetchFleetInbox` node. |
+| `PI_FLEET_GRAPH_ENABLED` | on (kill-switch) | SIO-1655: the fleet console agent. Also hidden from the selector without a configured hub. |
+| `PI_COMS_INBOX_TIMEOUT_MS` | `5000` | Budget for the inbox read before `aggregate`. |
+| `PI_COMS_INBOX_EXCLUDE_SENDERS` | `incident-analyzer-,pi-fleet-` | Comma list of sender-name prefixes dropped from the inbox digest, so the analyzer does not read its own mail back. |
+| `PI_COMS_PANE_SENDER_PREFIX` | `pi-fleet` | Sender-name prefix the fleet pane registers under. On a directory-mode hub the prefix needs its own principal. |
+| `PI_COMS_PANE_TOKENS` | -- (empty) | JSON map from hub key to the token the pane uses on that hub, when it differs from the hub's `authToken`. Invalid JSON throws. |
+| `PI_COMS_PANE_AWAIT_MS` | `25000` | One await slice per pane request; the browser re-polls by message id. Capped in code. |
+| `PI_COMS_PANE_TIMEOUT_MS` | `300000` | Total budget the pane gives one reply across slices. |
+
 ---
 
 ## Live Memory, Knowledge Graph & Skill Learning
@@ -509,7 +651,15 @@ Optional cross-session subsystems. All are off / file-backed by default; the dee
 | `KG_UNCURATED_RETENTION_DAYS` | No | `30` | SIO-1135: retention window (days) for the scheduled purge of uncurated `Incident` rows; a value <= 0 disables the purge. Requires `KNOWLEDGE_GRAPH_ENABLED` to run at all (a backend precondition). SIO-1358: cadence and on/off live in `schedules/kg-purge-sweep.yaml`, not an env var (`KG_PURGE_CRON_ENABLED`/`KG_PURGE_CRON_SCHEDULE` removed) |
 | `SKILL_LEARNING_ENABLED` | No | on (kill-switch: `false`/`0` disables) | post-turn learning-candidate learner for every top-level agent (writes `kind:skill` candidate facts; agent-memory backend only, SIO-1015 / SIO-1889) |
 | `LEARNING_INGEST_ENABLED` | No | on (kill-switch: `false`/`0` disables) | SIO-1892: `learn:ingest` records harvested candidate drafts (fleet journal lessons, reflect items) as candidate facts after the rubric, the Jev gate and dedupe |
-| `LEARNING_REVIEW_ENABLED` | No | on (kill-switch: `false`/`0` disables) | SIO-1891: the learning review pane and `/api/agent/memory/candidates` (list / approve-with-edits / reject / supersede); approve opens the promotion PR through memory-pr, merge stays the only activation |
+| `LEARNING_REVIEW_ENABLED` | No | on (kill-switch: `false`/`0` disables) | SIO-1891: the learning review pane and `/api/agent/memory/candidates` (list / approve-with-edits / reject / supersede). Approve records the verdict and then asks memory-pr to open the promotion PR; that step is `skipped` unless the `MEMORY_PR_*` variables below are configured, and merge stays the only activation |
+| `MEMORY_PR_ENABLED` | No | off (opt-in: `true`/`1`) | SIO-849/1896: lets `packages/memory-pr` open pull requests that promote approved learning into the repository. Off, every entry point returns `skipped`. Also skipped while `AGENT_KILL_SWITCH` is active |
+| `MEMORY_PR_REPO` | When `MEMORY_PR_ENABLED` | -- | `owner/repo` of the GitHub repository the promotion PR is opened against |
+| `MEMORY_PR_BASE` | No | `main` | Base branch of the promotion PR. A proposal whose branch equals the base is blocked, never written |
+| `GITHUB_TOKEN` | When `MEMORY_PR_ENABLED` | -- | Token memory-pr uses for the GitHub API. Without it (or without `MEMORY_PR_REPO`) the PR step is `skipped` |
+| `LEARNING_FEEDBACK_DEADLINE_MS` | No | `5000` | SIO-1890: hard deadline on the best-effort write that records a thumbs vote against the thread's learning candidates, so it can never hold up the feedback response |
+| `CLOSURE_LEARNING_ENABLED` | No | off (opt-in: `true`/`1`) | SIO-1357: the incident-closure learning workflow. Still opt-in in code, unlike the kill-switch flags around it |
+| `SKILL_OUTCOME_TRACKING_ENABLED` | No | off (opt-in: `true`/`1`) | SIO-1016: after a turn that used a promoted skill, updates the usage, success and failure counters and the recomputed confidence in that skill's `SKILL.md` frontmatter (the file, never the memory fact) |
+| `LIVE_MEMORY_IMMUTABLE` | No | off (opt-in: `true`/`1`) | SIO-845: wraps dailylog appends in the shared hash chain so the file-backed audit log is tamper-evident |
 | `LEARNING_JEV_GATE_ENABLED` | No | on (kill-switch: `false`/`0` disables) | SIO-1889: Jev three-question gate (task_success, reusable_correction, evidence_supported) before the full-model judge and in the fleet harvest; self-skips without `TYPESAFE_API_KEY`, every verdict is a `learning-gate` decision-metrics row |
 | `HIL_LEARNING_ENABLED` | No | on | SIO-1126: master gate for the human-in-the-loop learning lane (learn-from-ticket). Default on (kill-switch semantics — the lane only fires on an explicit `learn from TICKET-123` command, so it never triggers on normal traffic); set `=false` to disable the lane entirely. Requires `KNOWLEDGE_GRAPH_ENABLED`. See the [HIL learning lane](../architecture/agent-pipeline.md#hil-learning-lane). |
 
@@ -528,6 +678,9 @@ Optional cross-session subsystems. All are off / file-backed by default; the dee
 | `KG_BINDINGS_READ_ENABLED` | No | on | SIO-1101 (R7): seed each sub-agent with the service's known coordinates from the graph before it probes (labelled "not probed this turn -- verify"; probes still always run). Requires `KNOWLEDGE_GRAPH_ENABLED`. Set `=false` to disable. |
 | `KG_BINDINGS_READ_DATASOURCES` | No | `elastic,aws` | SIO-1101: comma list of datasources that accept graph seeds (`all` = every datasource). Widen without a code change. |
 | `KG_BINDINGS_STALENESS_ENABLED` | No | on | SIO-1103: when a graph-seeded coordinate's datasource reports not-found this turn, retire the agent-discovered binding (human bindings are only flagged, never auto-invalidated). Set `=false` to disable auto-invalidation. |
+| `KG_NETWORK_WRITE_ENABLED` | No | on | SIO-1204: persist the turn's network topology into the graph. Inert without `KNOWLEDGE_GRAPH_ENABLED` or when the turn produced no network topology. |
+| `KG_APP_MAP_WRITE_ENABLED` | No | on | SIO-1457: persist the turn's application map into the graph. Inert without `KNOWLEDGE_GRAPH_ENABLED`, when the turn produced no application topology, or when the map carried only prior-knowledge edges. |
+| `KNOWLEDGE_GRAPH_MCP_TRANSPORT` | No | `http` | `http` or `stdio`, for running the KG MCP server standalone. The web app mounts it in-process over HTTP. |
 
 #### Scheduled topology sweep (SIO-1104 / SIO-1115 / SIO-1358)
 
@@ -541,6 +694,7 @@ The scheduled topology sweep collects live topology edges (elastic APM `DEPENDS_
 | `KG_TOPOLOGY_SOURCE_TIMEOUT_MS` | No | `60000` | SIO-1115: per-source wall-clock budget for one collector (the losing side of the race is not cancelled — the adapter SDK takes no AbortSignal — it just stops being awaited) |
 | `KG_TOPOLOGY_MAX_PAGES` | No | `10` | SIO-1115: page cap shared by the APM composite aggregation and the ECS `nextToken` pagination. Hitting the cap marks the source incomplete (sweep skipped this round — safe) and warns, rather than reading partial data as authoritative |
 | `KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS` | No | `15000` | SIO-1115: per-`kafka_describe_consumer_group` timeout inside the bounded-concurrency describe pool, well under the source budget so one stuck group cannot eat the wall clock |
+| `KG_TOPOLOGY_AWS_ESTATE_TIMEOUT_MS` | No | `20000` | Per-estate budget inside the AWS collector, so one slow estate settles as rejected instead of discarding the edges the fast estates already collected |
 
 ---
 
@@ -572,8 +726,19 @@ General server configuration for the SvelteKit web frontend.
 | `SERVER_PORT` | No | `5173` | Port for the SvelteKit development server |
 | `LOG_LEVEL` | No | `info` | Pino log level: `trace`, `debug`, `info`, `warn`, `error`, `fatal` |
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated list of allowed CORS origins |
+| `ARCHIFY_DIAGRAMS_ENABLED` | No | on (kill-switch: `false`/`0` disables) | SIO-1876/1877: the Diagram tab on the network and application map cards, and `/api/diagram`. One read point (`apps/web/src/lib/server/archify/flag.ts`) |
+| `ARCHIFY_DIR` | No | -- | Path to the vendored Archify directory. Unset, the renderer walks up from the working directory until it finds `vendor/archify/bin/archify.mjs`, and throws naming this variable if it finds none |
 
 In production, set `CORS_ORIGINS` to the actual frontend domain. For local development, the default value matches the SvelteKit dev server.
+
+### Telemetry and OAuth (shared by the MCP servers)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TELEMETRY_MODE` | No | -- (unset = off) | Setting it at all enables OpenTelemetry export: `console`, `otlp` or `both` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | `http://localhost:4318` | OTLP collector endpoint used when the mode exports over OTLP |
+| `MCP_OAUTH_HEADLESS` | No | -- | `true` makes the GitLab and Atlassian proxies treat the process as headless: no browser flow is started and a missing or expired token is reported instead. A process whose stdout is not a TTY is treated as headless either way. See [OAuth Seeding](../operations/oauth-seeding.md) |
+| `OAUTH_PROACTIVE_REFRESH_INTERVAL_MS` | No | `1800000` | How often the GitLab and Atlassian proxies refresh their OAuth token ahead of expiry, to keep the refresh token inside its inactivity window. Clamped to between 60 000 and 3 600 000 |
 
 ---
 
@@ -602,3 +767,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 | 2026-07-23 | SIO-1184: `ATLASSIAN_INCIDENT_PROJECTS` is now documented as optional-narrowing with an all-projects wildcard default; configured keys are validated against the live site on first custom-tool use (nonexistent keys dropped, wildcard fallback, `configWarning` in tool output). `.env.example` no longer ships the `INC,OPS` example -- those projects did not exist on the connected site and silently zeroed `findLinkedIncidents`/`getIncidentHistory` (SIO-1181 audit finding F1). |
 | 2026-08-01 | SIO-1358: migrated the 3 hand-wired Bun.cron jobs (SIO-1005, SIO-1104, SIO-1135) to a declarative `schedules/*.yaml` layer with a generic scheduler. Removed `IAC_RECONCILE_CRON_SCHEDULE`, `KG_TOPOLOGY_CRON_ENABLED`, `KG_TOPOLOGY_CRON_SCHEDULE`, `KG_PURGE_CRON_ENABLED`, `KG_PURGE_CRON_SCHEDULE` -- cadence and on/off now live in each schedule's YAML file, not env vars. Documented the previously-undocumented `KG_UNCURATED_RETENTION_DAYS`. See `docs/superpowers/specs/2026-08-01-declarative-schedules-design.md`. |
 | 2026-08-08 | SIO-1162..1459 sync. Added five previously-undocumented vars: `RESOLVE_IDENTIFIERS_PRESETS_ENABLED` (SIO-1355 preset-workflow selector, list-valued, default `all`), `SUB_AGENT_MANIFEST_MODEL_ENABLED` (SIO-1235/1404 manifest-model switch, default on), `EVAL_SUB_AGENT_MODEL_OVERRIDE` (SIO-1371 eval-only A/B swap), `EVAL_FIXTURE_MODE` (SIO-1379 sound-freeze record/replay), and `MCP_TOOL_METRICS_DB_PATH` (SIO-1400 MCP tool-call SQLite counters). **Corrected the wrong `schedules/kg-topology-sweep.yaml` default** in the SIO-1358 note: the topology sweep ships `enabled: false` (opt-in), not `enabled: true`. |
+| 2026-09-30 | SIO-1897 docs sync (SIO-1635..1896 window), a code-vs-docs sweep over every `process.env` read outside tests. **Window additions:** `ARCHIFY_DIAGRAMS_ENABLED` / `ARCHIFY_DIR` (SIO-1876/1877); the sub-agent context, evidence and loop-control table (`SUBAGENT_*`, `EVIDENCE_INDEX_ENABLED`, `EVIDENCE_EXEC_ENABLED`, `EVIDENCE_TOC_ENABLED`, `DAILYLOG_TOOL_FAILURES_ENABLED`, `AWS_ABSENCE_EARLY_EXIT_ENABLED`, `AGGREGATE_*_CAP_BYTES`; SIO-1686..1689, 1773..1776); `MEMORY_PR_*` / `GITHUB_TOKEN` and `LEARNING_FEEDBACK_DEADLINE_MS` (SIO-1890/1896); couchbase `READ_ONLY_QUERY_MODE` (SIO-1109/1813/1822); a new pi-coms integration section for the web-app and agent-side `PI_COMS_*` / `PI_*_ENABLED` variables, which this file had never listed. **Corrections:** `LEARNING_REVIEW_ENABLED` (approve is `skipped` without memory-pr configured), `AGENT_PROMPT_CACHE_ENABLED` (also the SIO-1773 rolling history points). **Older drift:** report integrity gates, post-loop baselines, action-tool providers, `AGENT_KILL_SWITCH`, the elastic-iac CI contract and remaining path templates, elastic discovery timeouts and read-only mode, the AWS MCP process variables, `KAFKA_AGENTCORE_RUNTIME_ARN`, legacy `LANGCHAIN_*` aliases, telemetry and OAuth variables, and four knowledge-graph knobs. |

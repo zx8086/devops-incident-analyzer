@@ -1,7 +1,7 @@
 # Troubleshooting
 
 > **Targets:** Bun 1.3.9+ | MCP SDK 1.27+ | TypeScript 5.x
-> **Last updated:** 2026-07-19
+> **Last updated:** 2026-09-30
 
 Symptom-based problem resolution for the DevOps Incident Analyzer. Issues are organized by subsystem: MCP servers, LangGraph agent, SvelteKit frontend, configuration, and AWS/AgentCore deployment.
 
@@ -24,6 +24,8 @@ lsof -i :9084    # GitLab MCP
 lsof -i :9085    # Atlassian MCP
 lsof -i :9086    # Elastic IaC MCP
 lsof -i :9087    # Knowledge Graph MCP (in-process, only when KNOWLEDGE_GRAPH_ENABLED)
+lsof -i :9088    # Landing Zone IaC MCP
+lsof -i :3001    # AWS MCP (local SigV4 proxy)
 lsof -i :9185    # Atlassian OAuth callback
 ```
 
@@ -150,6 +152,14 @@ Increase the tool timeout if the datasource is slow but reachable:
 KAFKA_CONSUME_TIMEOUT_MS=30000     # Default: 5000
 ```
 
+### GitLab Import Keeps Failing With 401 After a Token Rotation (SIO-1647)
+
+**Symptoms:** After rotating `ELASTIC_IAC_GITLAB_TOKEN` in `.env`, the elastic-iac GitLab import still fails. The log shows one warning, then silence: `gitlab-import: GitLab rejected ELASTIC_IAC_GITLAB_TOKEN; sweeps paused until the backoff expires or the token value changes`.
+
+**Cause:** Two things combine. Vite restarts the dev server in place on a `.env` change, and `loadEnv` gives existing `process.env` keys precedence over the re-parsed file, so the running process keeps the STALE token. The importer (`packages/agent/src/iac/gitlab-import.ts`) then backs off for 15 minutes on a 401 or 403 instead of re-failing on every new thread and every hourly tick. The backoff is keyed on a fingerprint of the token value, so a token that actually changes in `process.env` retries immediately, and the same bad token waits out the window.
+
+**Fix:** Fully restart the web dev server (stop the process and start it again). An in-place Vite restart is not enough. No need to wait for the backoff: a new token value clears it.
+
 ---
 
 ## Agent Issues
@@ -160,7 +170,7 @@ KAFKA_CONSUME_TIMEOUT_MS=30000     # Default: 5000
 
 This means MCP servers are not connected or all sub-agents were skipped:
 
-1. Check that MCP servers are running on their expected ports (9080-9086; 9087 only when `KNOWLEDGE_GRAPH_ENABLED`)
+1. Check that MCP servers are running on their expected ports (9080-9086 and 3001 for the AWS proxy; 9087 only when `KNOWLEDGE_GRAPH_ENABLED`; 9088 only for the Landing Zone agent)
 2. Check that the agent's `MultiServerMCPClient` URLs are correct
 3. Check that the user selected at least one datasource in `DataSourceSelector`
 4. Check server logs for connection errors during the supervisor fan-out
@@ -298,6 +308,12 @@ Bun auto-loads `.env` files from the project root. Verify:
 bun -e "console.log(Bun.env.KAFKA_PROVIDER)"
 ```
 
+**The web dev server is different (SIO-1143).** `apps/web/vite.config.ts` does not read `.env` from the directory it runs in. It resolves the REPO root with `findRepoRoot` (`apps/web/src/lib/repo-root.ts`, the parent of `git rev-parse --git-common-dir`) and loads `.env` from there. In a main checkout that is the workspace root. In a git worktree it is the main checkout, not the worktree: the gitignored `.env` exists only there, and before this fix a worktree dev server silently loaded nothing (no `AWS_ESTATES`, so every AWS tool call failed its estate-scope guard). Consequences:
+
+- A `.env` you create inside a worktree is ignored by the web app. Edit the main checkout's file.
+- Where there is no `.git` (a container build, an extracted tarball) the lookup falls back to two directories above `apps/web`.
+- Existing `process.env` keys win over the file, so a value exported in your shell overrides `.env`, and a changed value needs a full process restart (see the GitLab token entry above).
+
 ### Zod Validation Error on Startup
 
 **Symptoms:** Server crashes with `ZodError` showing path and expected type.
@@ -397,6 +413,40 @@ Common causes:
 | `EC2 / S3 / Lambda` tool call returns `UnauthorizedOperation` or bare `AccessDenied` | Target role's inline policy missing the action | Review `scripts/agentcore/policies/devops-agent-readonly-policy.json`; S3 raises bare `AccessDenied` (no Exception suffix) — see reference |
 | `EXECUTION_ROLE_ARN does not exist` from `scripts/agentcore/deploy.sh` | The execution role wasn't pre-provisioned on the runtime account | Provision it per [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md); the deploy script intentionally fails fast |
 
+### A New AgentCore Image Looks Like It Did Not Deploy (SIO-1786)
+
+**Symptoms:** After an `UpdateAgentRuntime`, the runtime reports READY on the new version, but a verification call through the local SigV4 proxy still returns the old behaviour. The toolCount matches, so it reads exactly like a failed deploy.
+
+**Cause:** The proxy keeps one process-wide `mcpSessionId` (`packages/shared/src/agentcore-proxy.ts`) and reuses it for every client. An AgentCore session stays pinned to the microVM, and therefore the image version, it started on. A proxy that was running before the update keeps routing to its pre-update microVM. Separately, the DEFAULT endpoint switches to the new version some seconds after the runtime reports READY, so a call made in that gap also proves nothing.
+
+**Fix:** Make sure the proxy is idle (the reset aborts every request in flight through it), then reset its session and verify again:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE http://localhost:3001/mcp   # 3000 for kafka; expect 200
+```
+
+The full procedure, including how to read which image served a call, is in [MCP AgentCore Image Deployment](../runbooks/mcp-agentcore-image-deployment.md).
+
+---
+
+## Test Issues
+
+### Tests Pass Alone but Fail in the Suite (SIO-1795)
+
+**Symptoms:** A test file passes when run by itself and fails when the whole package runs. The failures differ from machine to machine, and CI is green.
+
+**Cause:** You ran bare `bun test`. In `packages/agent` and `apps/web` the package script is `bun test --isolate`, which gives every test file a fresh global and module registry. Without the flag, a `mock.module()` stub registered by one file leaks into every file that runs after it, and Bun takes the file order from the filesystem, so the damage depends on the machine. There is no polluter to hunt for.
+
+**Fix:** Run the package script, not bare `bun test`:
+
+```bash
+cd packages/agent && bun run test            # bun test --isolate
+cd apps/web && bun run test                  # svelte-kit sync, then bun test --isolate
+cd packages/agent && bun run test src/iac    # a path filter keeps the flag
+```
+
+There is no `bunfig.toml` key for isolation, so it cannot be made the default for bare `bun test`. Run suites per package as well: `bun test` at the repo root can crash the Bun runner mid-suite.
+
 ---
 
 ## Debugging Techniques
@@ -458,8 +508,9 @@ Find and kill processes blocking MCP server ports:
 
 ```bash
 # Check all MCP ports
-for port in 9080 9081 9082 9083 9084 9085 9086 9087 5173; do
-  pid=$(lsof -ti :$port 2>/dev/null)
+for port in 9080 9081 9082 9083 9084 9085 9086 9087 9088 3001 5173; do
+  # -sTCP:LISTEN matters: without it lsof also lists CLIENT connections (a browser tab)
+  pid=$(lsof -nP -tiTCP:$port -sTCP:LISTEN 2>/dev/null)
   if [ -n "$pid" ]; then
     echo "Port $port: PID $pid"
   fi
@@ -490,3 +541,4 @@ kill -9 <pid>
 | 2026-04-04 | Initial version |
 | 2026-04-23 | Added Atlassian MCP port (9085) and OAuth callback port (9185) to port-conflict checklist |
 | 2026-07-19 | Added Elastic IaC MCP (9086) and in-process Knowledge Graph MCP (9087) to the port-conflict checklist and port loop; corrected the "expected ports" range to 9080-9087. |
+| 2026-09-30 | SIO-1897 docs sync (SIO-1635..1896 window): added Landing Zone IaC MCP (9088) and the AWS proxy (3001) to the port checklist and port loop, and made the loop match listeners only; new entries for the GitLab import 401 backoff after a token rotation (SIO-1647), the web dev server resolving `.env` against the repo root (SIO-1143), a new AgentCore image that looks undeployed until the proxy session is reset (SIO-1786), and tests that pass alone but fail in the suite without `--isolate` (SIO-1795). |

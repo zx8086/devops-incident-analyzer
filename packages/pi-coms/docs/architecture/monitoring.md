@@ -36,9 +36,11 @@ The hub (`scripts/coms-net-server.ts`) stores messages in `bun:sqlite` at `~/.pi
 | Send | Target online | Target offline |
 |------|---------------|----------------|
 | Default / short `ttl_ms` | Delivered immediately | `target_not_found` (404), exactly as before |
-| `ttl_ms` beyond the default | Delivered immediately, longer expiry | **Queued by name**: `200 {status: "queued", target_session: null}` |
+| `ttl_ms` beyond the default | Pushed immediately as a passive `mailbox: true` prompt, longer expiry; status `stored` | **Stored by name**: `200 {status: "stored", target_session: null}` |
 
-A name-queued message is claimed by the next session that registers under that name (session ids change per connect, so the queue binds to the name, not a session). Interactive traffic keeps minutes; monitor reports use days.
+A name-stored message is claimed by the next session that registers under that name (session ids change per connect, so the queue binds to the name, not a session). Interactive traffic keeps minutes; monitor reports use days.
+
+A mailbox send is one-way mail, so it is terminal on write (SIO-1738): its status is `stored` from creation and never moves to `delivered` or `complete`, whether or not a session under the target name happened to be open. Only request-reply messages walk `queued` -> `delivered` -> `complete` (`MessageStatus` in `contracts/wire.ts`).
 
 ### Flush on connect
 
@@ -46,7 +48,7 @@ When a session's SSE stream opens, the hub -- after `hello` and `pool_snapshot` 
 
 ### The durable inbox: read-many, on demand
 
-Mailbox-class messages double as history. A terminal (delivered and answered, or expired-in-queue) mailbox message is retained in `messages.db` until its TTL expires, and `GET /v1/mailbox?name=<name>&limit=&since=<msg_id>` reads it back non-destructively — every operator sees the same list whenever they connect, with `since` as a stateless cursor (ULID ids sort by time). The client tool is `coms_net_inbox` (defaults to your own name; pass a shared name like `ops`). Short-TTL interactive messages never enter the inbox. Flush-on-connect still happens, but as quiet mailbox-flagged events -- the inbox is the read path, not the push.
+Mailbox-class messages double as history. A mailbox message is `stored` (terminal) from the moment it is written and is retained in `messages.db` until its TTL expires: expiry alone governs its retention, whatever its status (SIO-1738; the purge used to require `complete`/`error`/`timeout`, which one-way mail never reaches, so reports accumulated forever). `GET /v1/mailbox?name=<name>&limit=&since=<msg_id>` reads it back non-destructively -- every operator sees the same list whenever they connect, with `since` as a stateless cursor (ULID ids sort by time). The client tool is `coms_net_inbox` (defaults to your own name; pass a shared name like `ops`). Short-TTL interactive messages never enter the inbox. Flush-on-connect still happens, but as quiet mailbox-flagged events -- the inbox is the read path, not the push.
 
 ### Conversation history
 
@@ -73,9 +75,9 @@ The hub used to store nothing durable. It now persists **prompt and response bod
 |----------|-------|
 | Peer name | Code default `monitor-aws-<account_id>`; the bootstrap sets `monitor-<alias>` (e.g. `monitor-eu-oit-dev`) on deployed hosts. Registered `--explicit` (hidden from lists and broadcasts unless named) |
 | Scheduling | In-process `Bun.cron()` (requires Bun >= 1.4): `*/15 * * * *` for alarms/logs/drift/health, `7 * * * *` for the ingestion heartbeat plus the Config compliance and GuardDuty scans (minute 7 keeps its guard off the */15 boundary), `@daily` for cost/trail/certs/listener-certs/watchlist + digest. Schedules are read in `PI_MONITOR_TZ` when set, otherwise the host zone -- UTC on deployed spokes, since nothing sets `TZ` |
-| State | `bun:sqlite` at `~/.pi/monitor/state.db`: watermarks, alert fingerprints, resource snapshots (instances, security groups, route tables, RDS, Lambda), cost history, journal, unsent-report queue |
+| State | `bun:sqlite` at `~/.pi/monitor/state.db`: watermarks, alert fingerprints, resource snapshots (instances, security groups, route tables, RDS, Lambda), cost history, journal, unsent-report queue, suppression ledger. Checkpointed to S3 so it survives an instance replacement (see [State checkpoint and restore](#state-checkpoint-and-restore-sio-1745)) |
 | Model usage | None inside the monitor. Zero token spend when no findings |
-| Modules | `scripts/monitor/checks/{alarms,logs,drift,resource-drift,cost,ingestion,trail,certs,watchlist,health,compliance,guardduty}.ts`, `state.ts`, `report.ts`, `coms.ts` (headless coms-net client) |
+| Modules | `scripts/monitor/checks/{alarms,certs,compliance,cost,db-events,drift,guardduty,health,identity,ingestion,logs,nodegroups,queues,quotas,resource-drift,scaling,spoke-health,stacks,targets,tasks,trail,watchlist}.ts` (one per check) plus `checks/churn-tags.ts` (the compliance check's churn classifier), `state.ts`, `report.ts`, `report-email.ts` (SNS fan-out), `checkpoint.ts` (state backup), `suppression-manifest.ts`, `harvest.ts`, `coms.ts` (headless coms-net client) |
 
 ### Checks
 
@@ -83,18 +85,20 @@ All checks are deterministic AWS SDK calls under the instance role, with clients
 
 Every cycle starts with a T0 gate: `sts:GetCallerIdentity` compared against `AWS_ACCOUNT_ID`. A denial or account mismatch is a critical finding and skips the rest of that cycle's checks -- a monitor that silently loses access would otherwise report "all quiet" forever, and broken credentials would turn every check into correlated noise.
 
+**Family ids.** Every finding carries a `family`, and that id (not the row name below) is what `history [family]`, `suppress <family>:%` and `PI_MONITOR_REPORT_ONLY_FAMILIES` take. There are 21: `alarm`, `cert`, `compliance`, `cost`, `db-events`, `drift`, `guardduty`, `health`, `identity`, `ingestion`, `logs`, `nodegroups`, `queues`, `quotas`, `scaling`, `spoke-health`, `stacks`, `targets`, `tasks`, `trail`, `watchlist`. Most rows emit the family of the same lower-case name; the exceptions are Alarms (`alarm`), Log errors (`logs`), Drift/health and Resource drift (both `drift`), Certs and Listener certs (both `cert`), and the Identity gate (`identity`).
+
 | Check | Cadence | Logic | Dedup |
 |-------|---------|-------|-------|
 | Identity (gate) | every cycle, first | `GetCallerIdentity`; mismatch or denial critical, recovery info | 24 h re-alert while broken; the gate skip continues even while deduped |
 | Alarms | 15 min | `DescribeAlarms`, every page (SIO-1754: one 50-alarm page left 48 of 98 shared-services alarms unread); transitions into ALARM (critical) / INSUFFICIENT_DATA (info -- nightly scale-to-zero flaps these by design), recovery to OK (info). SIO-1739: a `LessThan*` alarm on a utilization-class metric (`*Utilization`, `RequestCount`, `Invocations`; `HealthyHostCount` stays critical) is an idle signal and reports warn; a new ALARM entry reads `DescribeAlarmHistory` for the last 24 h and reports warn with `flapping: n` once it has entered ALARM 3 times (a denied history read changes nothing). The finding's evidence carries the metric, dimensions, comparison, threshold and the datapoint parsed from `StateReason`, so the spoke diagnoses from the alarm definition. SIO-1754: an alarm whose every action is a scaling policy (`:scalingPolicy:` ARN) is a scaling trigger, never a finding, and the digest counts it instead of listing it (26 of 26 alarms in ALARM in eu-oit-prd were these); an alarm that also notifies someone stays a finding | Alarm name + state: a still-firing alarm alerts once, and only a state change re-arms it |
-| Log errors | 15 min | `FilterLogEvents` over a window from a per-group watermark to 5 min before now (MSK broker logs arrive up to ~61 s late), every page up to 10 per group (SIO-1753: one ~1 MB page per cycle pinned busy groups up to 9 days behind). Past the page budget the counts read `at least N` with `truncated`; the window closes either way, so the next cycle is current. A watermark more than 1 h behind skips forward, reported as one `logs-skipped` info finding per cycle. The finding's evidence carries the `window` it counted. Pattern `?ERROR ?Exception`, grouped by a normalized message signature (timestamps, UUIDs, hex, digits, and mixed-alphanumeric ids all collapse); capped at 3 signatures/group and 10 warn findings/cycle, overflow journaled as one info finding. A group denied by the name-scoped log IAM is one info scoping finding, and the scan continues | Group + signature hash; re-alerts after 24 h |
+| Log errors | 15 min | `FilterLogEvents` over a window from a per-group watermark to 5 min before now (MSK broker logs arrive up to ~61 s late), every page up to 10 per group (SIO-1753: one ~1 MB page per cycle pinned busy groups up to 9 days behind). Past the page budget the counts read `at least N` with `truncated`; the window closes either way, so the next cycle is current. A watermark more than 1 h behind skips forward, reported as one `logs-skipped` info finding per cycle. The finding's evidence carries the `window` it counted. Pattern `?ERROR ?Exception`, grouped by a normalized message signature (timestamps, UUIDs, hex, digits, and mixed-alphanumeric ids all collapse); capped at 3 signatures/group and 10 warn findings/cycle, overflow journaled as one info finding. A group denied by the name-scoped log IAM is one info scoping finding, and the scan continues. CloudWatch delivers a stack trace as one event per line, so events are folded into incidents per group before they are signed: the leading line, its `at` frames and the `Caused by:` line are one finding, not six (SIO-1820). The summary names the error, `N error-pattern event(s): <excerpt>` (SIO-1729), where the excerpt has its leading timestamp and trace/span ids stripped and runs to the 300-character capture cap (SIO-1874); the evidence keeps the full sample | Group + signature hash; re-alerts after 24 h |
 | Drift/health | 15 min | Instance state changes vs the stored snapshot (stop/terminate = warn), failed status checks. Instances that appear, change state the same way, or disappear together in one cycle collapse into ONE finding (`resource: ec2:batch`, dedup key `drift:batch:<new|state:<to>|gone>:<minute>`, ids in the evidence, SIO-1676), so a node-pool replacement is one report line and one investigation instead of one per instance; suppress a batch family with `drift:batch:gone:%` | Edge-triggered by the snapshot diff; status-check fingerprints clear on recovery |
 | Resource drift | 15 min | Snapshot diffs beyond instances (SIO-1597): security-group ingress+egress rules (change = warn), route-table routes (change = warn), RDS instance settings (public flip = critical, status = warn, class/version = info), Lambda config from one paginated `ListFunctions` (role = warn, rest info). New/deleted resources are info; a failing sub-scan is one fingerprinted info finding and the other scans still run | Edge-triggered by the snapshot diffs; scan-failure fingerprints clear on recovery |
-| Cost | daily | Yesterday vs the trailing 14-day baseline (the median of those days, SIO-1739: a mean let one spike day hide every rise for two weeks); alerts when over by more than `PI_MONITOR_COST_ABS` (fleet default $100; the percentage gate `PI_MONITOR_COST_PCT` is off at 0, SIO-1680) | Once per date |
+| Cost | daily | Yesterday vs the trailing 14-day baseline (the median of those days, SIO-1739: a mean let one spike day hide every rise for two weeks); alerts when over by more than `PI_MONITOR_COST_ABS` (fleet default $100; the percentage gate `PI_MONITOR_COST_PCT` is off at 0, SIO-1680). The summary names the driving service (`; top service <name> $<usd>`) and the evidence carries the per-service breakdown plus `bedrockUsd`, so the fleet's own Bedrock investigation spend is told apart from workload spend (SIO-1819); `resource` stays `account` | Once per date |
 | Ingestion | hourly | Metrics Insights `IncomingLogEvents` per log group; warn when the trailing full hours are all 0 for at least `PI_MONITOR_INGEST_ZERO_HOURS` (3) AND longer than the group's own longest quiet run in the prior 7 days (SIO-1739: an event-driven forwarder with three-hour gaps every day is not stopped after three hours; it is stopped once it outlasts its own history), against a same-hour-of-day 7-day median >= 10 (so the nightly scale-to-zero is silent by construction, and an event-driven function's isolated quiet hour no longer fires -- SIO-1711); recovery info. The finding carries the last 24 hourly values and the 7 same-hour values so the spoke never re-derives a baseline. The inverse of the log-errors check: it finds logging that **stopped** | Per group, alert once until recovery |
 | Trail | daily | `GetTrailStatus` per trail: `IsLogging=false` is critical only when **no** readable trail is logging (the account is dark), otherwise warn -- `DescribeTrails` in a member account also returns the org's trails, owned by the management account, where a stopped one is unactionable locally and routinely a deliberate consolidation (SIO-1713). Delivery error warn, zero trails info; recovery info. Shadow org trails that deny status reads are tolerated and cannot establish coverage | Per trail + condition, 24 h re-alert |
 | Health | 15 min | `health:DescribeEvents` (global endpoint, `open` and `upcoming` events for the host region and `global`); an open issue or investigation is warn, a scheduled change is warn inside 48 h of its start and info beyond, account notifications info. An account without a Business or Enterprise support plan answers `SubscriptionRequiredException`: one info finding a week, never a check error (SIO-1740) | Event ARN + severity, 24 h re-alert, so a scheduled change crossing into the 48 h window warns at once; an event that leaves the open set re-arms |
-| Compliance | hourly | `config:DescribeComplianceByConfigRule` (NON_COMPLIANT rules) plus `GetComplianceDetailsByConfigRule` per rule, snapshot-diffed like resource drift: a resource newly NON_COMPLIANT is one warn finding; a pair that vanishes is info worded as no longer reported NON_COMPLIANT (only NON_COMPLIANT results are ever read, so recovery is never asserted); standing findings stay silent after the first run establishes the snapshot (first run silent). A rule with 4 or more new pairs in one run is one warn finding for that rule (resource `config-rule/<rule>`, count by resource type, a 25-id sample; key `compliance:<rule>:batch`, so churn inside the diagnosis cooldown reuses the last diagnosis), and cleared pairs collapse the same way (SIO-1758: one Karpenter consolidation was 51 findings). Capped at 20 warn findings per run with an info overflow that carries every omitted pair. The Config client runs adaptive retry with 10 attempts (SIO-1755: the listing threw "Rate exceeded" in 6-9 of 24 hourly runs per account). A rule whose details cannot be read keeps its previous entries, or a sentinel when it never had any so its first complete read is a silent baseline, and reports one info scoping finding a day (SIO-1740: the `restricted-rdp` flip that was only visible as a Lambda burst is now the finding itself) | Rule + resource id |
+| Compliance | hourly | `config:DescribeComplianceByConfigRule` (NON_COMPLIANT rules) plus `GetComplianceDetailsByConfigRule` per rule, snapshot-diffed like resource drift: a resource newly NON_COMPLIANT is one warn finding; a pair that vanishes is info worded as no longer reported NON_COMPLIANT (only NON_COMPLIANT results are ever read, so recovery is never asserted); standing findings stay silent after the first run establishes the snapshot (first run silent). A rule with 4 or more new pairs in one run is one warn finding for that rule (resource `config-rule/<rule>`, count by resource type, a 25-id sample; key `compliance:<rule>:batch`, so churn inside the diagnosis cooldown reuses the last diagnosis), and cleared pairs collapse the same way (SIO-1758: one Karpenter consolidation was 51 findings). Capped at 20 warn findings per run with an info overflow that carries every omitted pair. The Config client runs adaptive retry with 10 attempts (SIO-1755: the listing threw "Rate exceeded" in 6-9 of 24 hourly runs per account). A rule whose details cannot be read keeps its previous entries, or a sentinel when it never had any so its first complete read is a silent baseline, and reports one info scoping finding a day (SIO-1740: the `restricted-rdp` flip that was only visible as a Lambda burst is now the finding itself). Newly flagged resources an autoscaler owns are classified as churn and held out of the report (SIO-1868, see [Churn classification](#churn-classification-sio-1868)) | Rule + resource id |
 | GuardDuty | hourly | `ListDetectors`, then `ListFindings` at severity >= 4 updated since the per-detector watermark (first lookback 24 h) and `GetFindings` for titles; GuardDuty 7+ is critical, else warn. No detector means GuardDuty is not enabled here: silent, not an error (SIO-1740) | Finding id, 24 h re-alert; fingerprints are marked and the watermark advances (bounded by the scan's start) only after every batch succeeded |
 | Certs | daily | ACM `NotAfter` across the host region and `us-east-1` (CloudFront certs live there; list configurable): < 30 d warn, < 7 d critical (managed renewal happens ~60 d out, so < 30 d means renewal is failing). A cert whose domain is covered by another valid cert in the same region (exact or single-label wildcard, DomainName or SANs) reports `info` as superseded -- a rotated-out cert is cleanup noise, not risk. A cert with an empty `InUseBy` reports `info` whatever its expiry (SIO-1724): an expiry only breaks TLS when something serves the cert, so an unattached one is cleanup, not an outage -- and an already-expired cert reads as "expired N day(s) ago", never "expires in -N days". An unreadable region is one info scoping finding; the other regions still scan | Per cert + severity, 7 d re-alert |
 | Listener certs | daily | ELBv2 `DescribeListenerCertificates` per TLS listener across the same regions as the cert check. ACM alone cannot answer "is this domain covered?": a listener carries extra SNI certificates beyond its default, so a name absent from ACM may still be served. Reports the extra SNI certificates as one `info` inventory finding per listener. A denied or unreachable read is one `info` scoping finding per region saying SNI certificates are **not inspected** -- never silence, because silence would read as "no certificate" | Per listener, 7 d re-alert |
@@ -150,7 +154,109 @@ Operator-accepted imperfections (`suppress <pattern> | <reason>`) live in a `sup
 
 The counterweight is the scheduled suppression review (weekly by default): a mailed report listing every ledger entry with its reason, age, match count in the window, and sample dedup keys. Entries with zero matches are flagged as unsuppress candidates; a high-count entry is a prompt to re-examine what the pattern is actually eating. The same text is available on demand via the `review` command.
 
+**Two sources (SIO-1868).** Every ledger row carries a `source`. A `chat` row
+is what an operator typed with `suppress`. A `file` row comes from the
+committed manifest `deploy/suppressions.yaml`, which ships in the bundle and is
+reconciled into the ledger at monitor startup, before the first check runs, so
+a fleet-wide suppression is a reviewed diff rather than a command typed on
+each host. Reconcile adds and updates `file` rows and removes a `file` row the
+manifest no longer lists; it never touches a `chat` row. An entry is a
+`pattern`, a mandatory `reason`, and optional `accounts` (matched against
+`PI_MONITOR_ACCOUNT_NAME`; omitted means every account, and a host with no
+account name never matches a scoped entry). A missing file is the normal case
+on a dev checkout; an unreadable or invalid one is logged and leaves the
+existing ledger unchanged. `PI_MONITOR_SUPPRESSIONS_FILE` overrides the path.
+
 The agent module provisions one alarm itself -- `<name_prefix>-agent-status-check` (`StatusCheckFailed` on the agent host, no actions) -- so the alarm family always has a real signal even in an account with no other alarms: a degraded agent host becomes a critical incident report instead of silence.
+
+### Churn classification (SIO-1868)
+
+An autoscaler's resources are created and destroyed continuously, so a
+required-tags rule flags them every day about the account's designed steady
+state. A dedup-key pattern cannot tell those apart from stable untagged
+resources (an AWS-managed NAT or control-plane ENI), so the compliance check
+classifies by ownership tag instead (`scripts/monitor/checks/churn-tags.ts`).
+For each newly flagged warn pair whose rule is eligible, it asks the Resource
+Groups Tagging API (`tag:GetResources`, already on the base read policy)
+whether the resource carries one of the `PI_MONITOR_CHURN_TAGS` keys. A match
+is held out of the report and journaled as a `suppressed_finding` under the
+label `churn-tag:autoscaler-owned`.
+
+- **Eligibility is per rule** (`PI_MONITOR_CHURN_RULES`, default
+  `required-tags`, a case-insensitive substring of the Config rule name).
+  Ownership is a property of the resource, not the rule: a security rule
+  firing on a churning node is still reported.
+- **Fails open.** A throttled or failed tag lookup journals a `check_error`
+  (stage `churn-classification`) and every finding is reported unclassified,
+  as is a resource type that cannot be mapped to an ARN.
+- **Kill-switch.** An explicitly empty `PI_MONITOR_CHURN_TAGS` or
+  `PI_MONITOR_CHURN_RULES` turns the classification off; unset keeps the
+  defaults.
+- **Still reviewed.** The label has no ledger row, so the suppression review
+  synthesises an entry for it from the journal (match count, sample keys, the
+  recorded reason, `since in code, not the ledger`). Without that the review
+  would read "nothing is being masked" while findings were being held back.
+
+### State checkpoint and restore (SIO-1745)
+
+`state.db` lives on the root volume, and any userdata-affecting change replaces
+the instance, which used to take the suppression ledger, the reusable
+diagnoses and the operator's `investigate off` / `pause` controls with it. The
+monitor now checkpoints the database to the distribution bucket
+(`scripts/monitor/checkpoint.ts`), and the bootstrap restores it on a fresh
+host.
+
+- **Where.** The prefix is derived from `BUNDLE_S3_URI`, so the feature needs
+  no userdata variable of its own (adding one would replace every spoke): the
+  manifest is `s3://<dist-bucket>/state/<account_id>/<monitor-name>/manifest.json`
+  and the database bodies are content-addressed under
+  `checkpoint-db/<account_id>/<monitor-name>/<sha256>.db`. The manifest names
+  its body by hash, so the pair can never disagree.
+- **When.** On `PI_MONITOR_CHECKPOINT_CRON` (default `23 */6 * * *`, and it
+  runs even while the monitor is paused), on shutdown (bounded to 10 s so a
+  hung S3 call cannot hold up the host), and on demand with the `checkpoint`
+  command. Best-effort: a failure is logged and the monitor carries on.
+  Enabled unless `PI_MONITOR_CHECKPOINT_ENABLED=false` or `BUNDLE_S3_URI` is
+  empty.
+- **Credentials.** The checkpoint client pins itself to the instance role, not
+  the workload role: `DevOpsAgentReadOnly` denies `s3:GetObject`
+  (`SecretAndDataPlaneDeny`). The instance role's `MonitorStateCheckpoint`
+  statement grants `s3:PutObject`/`s3:GetObject` on this host's own two
+  prefixes only, so one spoke can neither read nor overwrite another's state.
+- **Bucket side (SIO-1746).** The write is cross-account, so the hub root's
+  generated bucket policy carries a matching `OrgWriteCheckpointState` Allow,
+  and a lifecycle rule expires superseded bodies under `checkpoint-db/` after
+  30 days. Both are rendered by `just fleet render`
+  (`scripts/fleet/render.ts`), not hand-edited.
+- **Restore.** Before `pi-monitor.service` starts, the bootstrap
+  (`deploy/bootstrap/agent-bootstrap.sh`) fetches the manifest and the body it
+  names and verifies the sha256. It never
+  restores over an existing `state.db`, and only a genuine "object does not
+  exist" counts as a fresh start. A manifest that cannot be fetched for any
+  other reason, an unreadable body or a hash mismatch BLOCKS the restore: the
+  unit is enabled but not started and `~/.pi/monitor/RESTORE-BLOCKED` says
+  why, because a blank start would look exactly like a healthy first boot.
+
+The IAM grant has to be applied before the bundle that uses it is published;
+the order and the cross-account policy rules are in
+[Deploying from a worktree](../deployment/deploying-from-a-worktree.md#4-order-iam-first-then-publish-then-replace).
+
+### Harvesting diagnoses into runbook candidates (SIO-1892)
+
+The checkpoint is also the read path for fleet learning.
+`scripts/fleet-harvest.ts` is an operator CLI (nothing runs on a spoke, and no
+spoke reads another's state) that reads each named spoke's checkpointed
+`state.db` from the dist bucket, or local fixture files with `--db`/`--origin`.
+`scripts/monitor/harvest.ts` takes the journaled diagnoses of the last
+`--window-days` (14), joins the actionability verdicts, groups recurring
+causes, and keeps a group seen from `--min-origins` (2) spokes or
+`--min-occurrences` (3) times. Every string is redacted before it is written,
+and the account id becomes an 8-hex digest. The output is a file of
+`kind: runbook` candidate drafts for the analyzer's `learn:ingest`; nothing
+reaches a model or a spoke until a human approves it. The consumer side is in
+the monorepo's
+[Agent Memory](../../../../docs/architecture/agent-memory.md) ("Fleet
+channel").
 
 ### Investigation
 
@@ -160,7 +266,7 @@ Findings of severity warn or critical go to the account's Pi agent (`aws-<accoun
 
 A finding passes these gates, in order, before it can cost a model turn: the suppression ledger, `severity != info` and `family != spoke-health`, **report-only families**, reuse (below), the **Jev gate**, then the budget (below). Every held-back finding still ships in the incident report with its reason; only the model turn is saved.
 
-- **Report-only families.** A warn finding whose family is listed in `PI_MONITOR_REPORT_ONLY_FAMILIES` is reported with `uninvestigated: report-only family (<family>)` and never investigated, nor sent to Jev. A critical finding in the same family still is. Empty by default; the fleet sets `compliance`, whose diagnoses in a measured week were all tagging fixes the finding already names.
+- **Report-only families.** A warn finding whose family is listed in `PI_MONITOR_REPORT_ONLY_FAMILIES` is reported with `uninvestigated: report-only family (<family>)` and never investigated, nor sent to Jev. A critical finding in the same family still is. A report-only finding still shows a diagnosis the agent already made for the same dedup_key (it just never asks for a new one), and it is journaled `report_only: true` so the digest does not count it as `[uninvestigated]`. Empty by default, and nothing in the bootstrap, the Terraform module or `fleet.yaml` renders it: like `TYPESAFE_API_KEY` it is operator-set per host in `~/.coms-env.local`, so it does not survive an instance replacement. The value the SIO-1883 measurement supports is `compliance`, whose diagnoses in a measured week were all tagging fixes the finding already names.
 - **Jev gate.** With `TYPESAFE_API_KEY` set, each warn finding in the batch is sent to TypeSafe's `jev-1.13.0` classifier as its family, severity, and REDACTED resource and summary (ARNs, account ids, access keys and email addresses are replaced before anything leaves the host; evidence blobs are never sent). A four-option Choice (`critical`, `investigate_now`, `investigate_later`, `routine`) supplies the `routine` probability, and a yes/no question asks whether the finding repeats one of the eight newest diagnosed findings of the last 24 h. Either at p >= 0.85 holds the finding back (`uninvestigated: routine operational event (p=..)` / `same failure as a recently diagnosed finding`). A check-critical finding is never judged into a hold; a missing answer sends; if any request in the round fails, or the 10 s deadline passes, every finding is sent. The journal's `check_error` row and the log say why, as a fixed label per request (`timeout`, `http <status>`, `invalid json`, `schema`, `network`, SIO-1885), never the response text. `MONITOR_ACTIONABILITY_ENABLED=false` stops judging; `MONITOR_ACTIONABILITY_ENFORCING=false` judges and journals (`actionability_verdict` rows) without holding anything back.
 - **What the fleet data says (SIO-1883, 2026-09-26).** Over 7 days the 8 spokes spent 516 turns on 1,128 findings. Replayed against 537 findings labelled from their real diagnoses, the gate would have saved 22% of turns and compliance as report-only a further 16% (38% together), with no urgent finding held back except three repeats of an incident diagnosed in the same hour, which still appeared in the report. Only the Choice's `routine` probability is used: its `critical` and `investigate_later` probabilities did not separate urgent findings from the rest (urgent warns scored `critical` at most 0.04), so Jev is not used to promote or delay anything.
 - **Measuring it.** `status` shows the prompts used and the findings held back in the last 24 h; the daily digest adds `- investigation: N turn(s), H finding(s) held back by the jev gate` (omitted on a quiet day).
@@ -179,7 +285,36 @@ Every investigation prompt is a full model turn on the account agent, and one no
 Both report kinds go to `PI_MONITOR_REPORT_TO` (code default `laptop`; the bootstrap sets `ops` on deployed hosts) with a long TTL, so they wait in the hub mailbox when the operator is offline:
 
 1. **Incident report** whenever a run has findings: severity-first summary, per-finding diagnosis and evidence. Recoveries ship as info.
-2. **Daily digest** even when quiet: 24 h finding counts, each warn/critical finding of the window named on its own line (capped at 10, `[uninvestigated]`-tagged where the diagnosis failed, with an uninvestigated total -- counts alone hide what needs follow-up), check errors broken down by check family, current ALARM states, spend vs baseline, suppressed-finding count, and the deployed bundle version (the deploy canary: a stale bundle is visible without an SSM round-trip). When any check family errored in the window the header flags `DEGRADED` at `[warn]` -- a green digest produced over broken checks would be a lie. A missing digest is itself the monitor's dead-man signal.
+2. **Daily digest** even when quiet: 24 h finding counts, every warn/critical finding of the window named on its own line (no cap since SIO-1873: the old 10-entry cap hid 21 of 31 findings and three whole families on one account; `[uninvestigated]`-tagged where the diagnosis failed, with an uninvestigated total -- counts alone hide what needs follow-up), check errors broken down by check family, current ALARM states, spend vs baseline, suppressed-finding count, and the deployed bundle version (the deploy canary: a stale bundle is visible without an SSM round-trip). When any check family errored in the window the header flags `DEGRADED` at `[warn]` -- a green digest produced over broken checks would be a lie. A missing digest is itself the monitor's dead-man signal.
+
+How a digest line reads (`scripts/monitor/report.ts`): each notable finding is
+`- (<severity>/<family>) <resource>`, with its summary wrapped onto indented
+lines beneath it rather than cut mid-token (SIO-1832) and a blank line between
+entries. Rows are collapsed on `dedup_key`, so a flapping alarm is one line
+with a repeat count, `(x10)`, instead of ten identical lines (SIO-1727), and
+consecutive entries on one resource mark the repeat `(also)`. The
+`(<severity>/<family>)` tag is what the analyzer's fleet pane turns into a
+severity badge (SIO-1723).
+
+**Account name (SIO-1832).** Every report header names the account as
+`aws-<account_id> (<name>)` when the host knows its friendly name, and as the
+bare `aws-<account_id>` otherwise. The name is `PI_MONITOR_ACCOUNT_NAME`,
+which the bootstrap writes from `AGENT_NAME`. It is dropped when empty, when
+it is Terraform's own `aws-<id>` fallback, or when it contains anything
+outside `[a-z0-9-]`, and truncated at 32 characters so the status keyword
+(`DEGRADED`, `PAUSED`) survives a 100-character email subject.
+
+**Email fan-out (SIO-1821).** With `PI_MONITOR_REPORT_SNS_TOPIC_ARN` set, the
+daily digest and the suppression review are also published to that SNS topic
+(`scripts/monitor/report-email.ts`); incident reports are not, since email is
+a poor paging channel. The mailbox send happens first and stays the system of
+record: SNS is fire-and-forget, so a failed publish costs one email and never
+fails the digest. The subject is the report's first line (cut at 100
+characters), and a body over the 256 KiB SNS limit is truncated with a pointer
+back to the hub mailbox. A value that is not a topic ARN disables the feature
+rather than breaking the monitor. The topic, its policy and the variable's
+rollout are in
+[Deployment](../deployment/deployment.md#shipping-a-feature-that-needs-a-new-userdata-variable-sio-1821).
 
 If the hub is unreachable at report time, the report is queued in `state.db` and retried on the next tick -- the mailbox covers the offline-recipient half, this covers the offline-hub half.
 
@@ -200,6 +335,7 @@ Any peer can prompt the monitor by name; it answers without a model:
 | `investigate on\|off [reason]` | Stop or resume sending findings to the account agent; persisted |
 | `pause [reason]` | Skip the scheduled check cycles; the digest still ships flagged PAUSED; persisted |
 | `resume` | Clear a pause |
+| `checkpoint` | Write a state checkpoint to S3 now (SIO-1745). Replies `checkpoint attempted; see monitor log for the outcome`, or that checkpointing is disabled |
 
 ```
 ask monitor-eu-oit-dev to run-checks
@@ -207,11 +343,14 @@ ask monitor-eu-oit-dev to run-checks
 
 ### Configuration
 
-Env-with-defaults; no config files. Set in the systemd unit environment or `~/.coms-env`.
+Env-with-defaults, plus one committed file: `deploy/suppressions.yaml`, reconciled into the suppression ledger at startup (SIO-1868, see [The suppression ledger](#the-suppression-ledger)). Set variables in `~/.coms-env` (written by the bootstrap) or the operator-owned `~/.coms-env.local`, which the unit sources second.
 
 | Variable | Default | Controls |
 |----------|---------|----------|
 | `PI_MONITOR_NAME` | `monitor-aws-<account_id>` | Peer name |
+| `PI_MONITOR_ACCOUNT_NAME` | unset (bootstrap sets `AGENT_NAME`) | Friendly account name in report headers and the email subject, and the name `accounts:` in `deploy/suppressions.yaml` is matched against (SIO-1832). Must match `[a-z0-9-]`, truncated at 32 |
+| `PI_COMS_NET_PROJECT` | `COMS_PROJECT`, else `default` | coms-net project the monitor registers in; must be its agent's project or every investigation send is `target_not_found`. The bootstrap writes it |
+| `PI_MONITOR_REPORT_SNS_TOPIC_ARN` | unset (off) | SNS topic the digest and suppression review are also published to (SIO-1821). Reaches the host through userdata from the hub's `monitor_report_sns_topic_arn` manifest key; a value that is not a topic ARN disables it |
 | `PI_MONITOR_REPORT_TO` | `laptop` (bootstrap sets `ops`) | Report recipient (a peer name) |
 | `PI_MONITOR_REPORT_TTL_MS` | `1209600000` (14 d) | Mailbox TTL on reports |
 | `PI_MONITOR_CHECK_CRON` | `*/15 * * * *` | Alarm/log/drift cadence |
@@ -228,7 +367,7 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_INVESTIGATE` | on (`false`/`0` off) | Boot default for the persisted `investigate` control |
 | `PI_MONITOR_INVESTIGATE_BUDGET_PER_DAY` | `24` | Investigation prompts per rolling 24 h |
 | `PI_MONITOR_INVESTIGATE_COOLDOWN_MINUTES` | `360` | A dedup_key diagnosed this recently reuses that diagnosis instead of a new prompt (SIO-1739); `0` turns the hold-back off, reuse then only fills in for budget-skipped findings |
-| `PI_MONITOR_REPORT_ONLY_FAMILIES` | (empty) | Comma list of families whose warn findings are reported but never investigated; critical findings in them still are (SIO-1883). Fleet value: `compliance` |
+| `PI_MONITOR_REPORT_ONLY_FAMILIES` | (empty) | Comma list of families whose warn findings are reported but never investigated; critical findings in them still are (SIO-1883). Not rendered by the bootstrap, Terraform or `fleet.yaml`: operator-set in `~/.coms-env.local`. Measured value: `compliance` |
 | `TYPESAFE_API_KEY` | (unset) | Enables the Jev gate; unset skips it and every warn finding is investigated as before. Operator-set in `~/.coms-env.local` |
 | `PI_MONITOR_INVESTIGATE_PER_RESOURCE_PER_DAY` | `3` | Prompts naming the same resource per rolling 24 h |
 | `PI_MONITOR_LOGS_FILTER` | `?ERROR ?Exception` | CloudWatch filter pattern (WARN deliberately absent) |
@@ -241,12 +380,20 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_CERT_WARN_DAYS` / `PI_MONITOR_CERT_CRIT_DAYS` | `30` / `7` | Certificate expiry thresholds |
 | `PI_MONITOR_COST_PCT` / `PI_MONITOR_COST_ABS` | `0` / `100` | Cost anomaly threshold: yesterday must exceed the 14-day baseline by BOTH values; the fleet default is an absolute $100 gate with the percentage filter off (SIO-1680) |
 | `PI_MONITOR_STATE_DB` | `~/.pi/monitor/state.db` | State location |
+| `PI_MONITOR_SUPPRESSIONS_FILE` | `deploy/suppressions.yaml` in the bundle | Committed suppression manifest reconciled into the ledger at startup (SIO-1868) |
+| `PI_MONITOR_CHURN_TAGS` | `karpenter.sh/nodepool`, `karpenter.sh/nodeclaim`, `karpenter.k8s.aws/ec2nodeclass`, `eks:eni:owner`, `node.k8s.amazonaws.com/instance_id` | Comma-separated ownership tag keys that mark a resource as autoscaler-created (SIO-1868). Setting it replaces the default; an explicitly empty value turns churn classification off |
+| `PI_MONITOR_CHURN_RULES` | `required-tags` | Comma-separated, case-insensitive substrings of the Config rule names whose findings may be classified as churn. Explicitly empty turns classification off |
+| `BUNDLE_S3_URI` | unset (bootstrap writes it when the host has a bundle) | The fleet bundle location; the state checkpoint prefix is derived from its bucket (SIO-1745). Empty disables checkpointing |
+| `PI_MONITOR_CHECKPOINT_ENABLED` | on (`false` off) | State checkpoint kill-switch; also off whenever `BUNDLE_S3_URI` is empty |
+| `PI_MONITOR_CHECKPOINT_CRON` | `23 */6 * * *` | State checkpoint cadence; runs even while paused |
 
 Hub-side: `PI_COMS_NET_MAX_TTL_MS` (default `1209600000`, 14 days) caps any requested `ttl_ms`.
 
 ### IAM
 
 Everything fits the existing role except two named additions in `deploy/modules/agent/main.tf`: `ce:GetCostAndUsage` (inline `cost-explorer-read`; Cost Explorer is always called against `us-east-1`) and `acm:ListCertificates`/`acm:DescribeCertificate` plus `elasticloadbalancing:DescribeLoadBalancers`/`DescribeListeners`/`DescribeListenerCertificates` (`CertificateReads` in the dev-extensions policy) for the cert and listener-cert checks. `sts:GetCallerIdentity` needs no grant; `cloudwatch:GetMetricData`, `cloudtrail:GetTrailStatus`, and `cloudtrail:LookupEvents` are already on the DevOpsAgentReadOnly policies.
+
+Two later grants are writes, each scoped to one target: `MonitorReportPublish` (SIO-1821, `sns:Publish` on the one report topic, on the workload role and present only when the topic variable is set) and `MonitorStateCheckpoint` (SIO-1745, `s3:PutObject`/`s3:GetObject` on this host's own checkpoint prefixes, on the instance role).
 
 ### Families considered and not built (SIO-1749)
 

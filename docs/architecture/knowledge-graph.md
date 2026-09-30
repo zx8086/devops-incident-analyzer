@@ -1,8 +1,8 @@
 # Knowledge Graph (lbug / LadybugDB)
 
-The embedded entity-and-correlation graph both agents write to and read from when `KNOWLEDGE_GRAPH_ENABLED` is set. It records the entities a turn touches (services, incidents, deployments, config changes) and the relationships between them, so a later turn can recall prior dependencies, similar past incidents, and a deployment's change history.
+The embedded entity-and-correlation graph that three of the four top-level agents write to and read from when `KNOWLEDGE_GRAPH_ENABLED` is set: `incident-analyzer`, `elastic-iac` and `landing-zone-terraform`. The fourth, `pi-fleet-console`, does not touch it. It records the entities a turn touches (services, incidents, deployments, config changes) and the relationships between them, so a later turn can recall prior dependencies, similar past incidents, and a deployment's change history.
 
-Source: `packages/knowledge-graph/` (store + schema + readers + writers), `packages/mcp-server-knowledge-graph/` (the in-process MCP server, SIO-967), `packages/agent/src/graph-knowledge.ts` (incident-side nodes), `packages/agent/src/iac/graph-knowledge.ts` (elastic-iac nodes). Design spec: [`../superpowers/specs/2026-06-19-knowledge-graph-mcp-server-design.md`](../superpowers/specs/2026-06-19-knowledge-graph-mcp-server-design.md). Foundation tickets: SIO-850 (graph + incident nodes), SIO-954 (IaC nodes + enable), SIO-965 (three-layer IaC model), SIO-967 (MCP server).
+Source: `packages/knowledge-graph/` (store + schema + readers + writers), `packages/mcp-server-knowledge-graph/` (the in-process MCP server, SIO-967), `packages/agent/src/graph-knowledge.ts` (incident-side nodes), `packages/agent/src/iac/graph-knowledge.ts` (elastic-iac nodes), `packages/agent/src/landing-zone/gitlab-import.ts` (Landing Zone change-history import, SIO-1867). Design spec: [`../superpowers/specs/2026-06-19-knowledge-graph-mcp-server-design.md`](../superpowers/specs/2026-06-19-knowledge-graph-mcp-server-design.md). Foundation tickets: SIO-850 (graph + incident nodes), SIO-954 (IaC nodes + enable), SIO-965 (three-layer IaC model), SIO-967 (MCP server).
 
 ## What this is (and is not)
 
@@ -26,20 +26,25 @@ GraphStore (interface)        init() | run<T>(cypher, params) | close()
 - **`getGraphStore()`** — a module-level singleton. Because embedded lbug takes an **exclusive OS file lock** on its data directory, this singleton is *the one lock holder* for the whole process; every pipeline `record*`/`enrich*` node and the in-process MCP server share it.
 - **`LadybugStore`** loads the `lbug` native addon through a variable specifier, so the package typechecks and unit-tests **without** the native module installed. Install it (`bun add lbug`) and set the flag to activate.
 - **`run()`** executes parameterized Cypher — every value is bound as `$param`, never string-interpolated, so the writer/reader boundary is injection-safe.
-- **`close()` is a deliberate no-op** (SIO-954): lbug's native finalizer can segfault Bun at teardown, so the store holds the lock for the process lifetime and relies on per-query durability. See the test gotcha below.
+- **`close()` never calls the native `db.close()`** (SIO-954): lbug's native finalizer can segfault Bun at teardown, so the store relies on per-query durability and the OS reclaims the file handle at process exit. It does not merely drop the references either (SIO-1807): an unreferenced native `Database` is collectable, and the garbage collector then runs that same destructor mid-run, which segfaulted the next store the process opened. A closed store therefore parks its `db` and `conn` handles on a `globalThis` slot (`Symbol.for("devops-agent.knowledge-graph.parkedNativeHandles")`) for the life of the process, where the collector cannot reach them. See the test gotcha below.
 - **`graphPath(env)`** — `.data/knowledge-graph` by default, overridden by `KNOWLEDGE_GRAPH_PATH`.
 
 ## Schema
 
 `packages/knowledge-graph/src/schema.ts` declares the data model up front (lbug is table-typed, unlike Neo4j's schema-optional labels). `MIGRATIONS` is the node/rel DDL, `ALTER_MIGRATIONS` adds columns additively, `VECTOR_INDEX_SETUP` builds the HNSW index where supported. Writes are MERGE-based (idempotent — safe to re-run).
 
-**Node labels** (`NODE_LABELS`) span two domains:
+**Node labels** (`NODE_LABELS`) span the incident, IaC and Landing Zone domains:
 
 - **Incident-side (SIO-850):** `Service`, `Deployment`, `KafkaTopic`, `ConsumerGroup`, `ApiRoute`, `Bucket`, `AwsAccount`, `AwsResource`, `Incident` (carries a 1024-dim Bedrock Titan embedding for similarity search), `Finding`, `Runbook`, `WikiPage`, `RootCause` (SIO-1026: a derived cause keyed by a stable class hash, linked from an `Incident` via `HAS_ROOT_CAUSE`).
 - **IaC-side (SIO-954/965):** `ElasticDeployment` (a cluster, distinct from a microservice `Service`), `ConfigChange` (one maker turn's proposed edit), `MergeRequest`, plus the three-layer repo model `Module` -> `Stack` -> `StackInstance` (the sparse `(deployment, stack)` state cell a change targets), `Workflow`, `Session`, `Pipeline`, `Prompt` (SIO-1038: a turn's verbatim user prompt, stored RAW/untruncated; PK = `requestId`, so it links to that turn's `ConfigChange` for free).
 - **Telemetry bindings (SIO-1100):** `TelemetrySource` (one observability coordinate — a log group, index, APM service name, topic — keyed `<datasource>:<kind>:<resourceId>`) and `Alias` (a raw source-specific name + its normalized canonical form).
 
 **Relationship types** (`REL_TYPES`): incident edges `DEPENDS_ON`, `PRODUCES_TO`, `CONSUMES_FROM`, `ROUTES_TO`, `AFFECTED_BY`, `CORRELATES_WITH`, `RESOLVED_BY`, `DOCUMENTED_IN`, `DEPLOYED_AS`, `HAS_ROOT_CAUSE` (SIO-1026); telemetry-binding edges (SIO-1100) `OBSERVED_IN` (`Service` -> `TelemetrySource`, bi-temporal: `confidence`, `discoveredBy`, `evidence`, `lastVerified`, `tValid`, `tInvalid`), `RESOLVES_TO` (`Alias` -> `Service`, bi-temporal), `DISCOVERED_DURING` (`TelemetrySource` -> `Incident`, provenance); topology edge (SIO-1104) `RUNS_ON` (`Service` -> `AwsResource`, bi-temporal + `consecutiveMisses`); as of SIO-1104 the four original topology rel tables (`DEPENDS_ON`, `PRODUCES_TO`, `CONSUMES_FROM`, `ROUTES_TO`) also carry lifecycle columns (`discoveredBy`, `tValid`, `tInvalid`, `consecutiveMisses` -- in the CREATE DDL for fresh graphs and tolerant rel-table `ALTER_MIGRATIONS` for existing ones); IaC edges `CHANGED_BY`, `PROPOSED_IN`, `USES_MODULE`, `OF_STACK`, `ON_DEPLOYMENT`, `TARGETS`, `VIA_WORKFLOW`, `IN_SESSION`, `RAN`, `PROMPTED_IN` (SIO-1038: `Prompt` -> `Session`).
+
+**Landing Zone additions (SIO-1867).** Two groups of tables back the `landing-zone-terraform` agent (see [Landing Zone Terraform Agent](landing-zone-terraform-agent.md)):
+
+- **Change history and governance:** nodes `GitLabGroup`, `Repository`, `TerraformRoot` (carries `managesAccounts`), `TerraformModule`, `SharedModule`, `TerraformPlan`, `Standard`, `ADR`. lbug relationship tables are endpoint-typed, so the new endpoint pairs get explicit table names instead of widening the Elastic IaC tables: `CONTAINS` (group to repository), `REPOSITORY_CONTAINS_ROOT`, `ROOT_USES_MODULE`, `MODULE_USES_SHARED_MODULE`, `CHANGE_TARGETS_REPOSITORY`, `CHANGE_TARGETS_ROOT`, `PRODUCED` (`Pipeline` to `TerraformPlan`), `GOVERNED_BY`, `IMPLEMENTS`. The existing `ConfigChange` and `Pipeline` nodes are reused, and `ConfigChange` gained outcome-evidence columns. Written by the GitLab import in `packages/agent/src/landing-zone/gitlab-import.ts` (`recordLandingZoneRepository`, `recordLandingZoneChange`, `recordPipeline`, `recordTerraformPlan`, plus a resumable import checkpoint).
+- **Account network and DNS topology:** nodes `AwsOrganization`, `OrganizationalUnit`, `Region`, `AvailabilityZone`, `RouteTable`, `Route`, `InternetGateway`, `NatGateway`, `TransitGateway`, `CoreNetwork`, `NetworkAttachment`, `VpcEndpoint`, `NetworkAcl`, `HostedZone`, `ResolverEndpoint`, `ResolverRule`, `DnsFirewallRuleGroup`, `CidrBlock`, reusing the existing `Vpc`, `Subnet`, `DnsRecord`, `IpAddress` and `AwsAccount` labels. Edges are named by their endpoints (`ACCOUNT_OWNS_VPC`, `VPC_CONTAINS_SUBNET`, `SUBNET_USES_ROUTE_TABLE`, `ROUTE_TABLE_HAS_ROUTE`, the `ROUTE_TARGET_*` family, `VPC_HAS_NETWORK_ATTACHMENT`, `HOSTED_ZONE_CONTAINS_DNS_RECORD`, the `DNS_RECORD_RESOLVES_TO_*` family, and so on) and every one carries the same evidence columns: `state`, `source`, `evidence`, `observedAt`, `validFrom`, `validTo`, `reconciliationStatus`, `confidence`, `consecutiveMisses`. A `TopologyFact` node (PK `key`) holds one evidence fact per entity or relationship, with `state`, `status`, `confidence` and a `payload`. The writer is `recordLandingZoneTopology` (`writer.ts`); it is exported and covered by the package tests, but no agent node calls it yet, so these tables are populated only by a caller that invokes it directly.
 
 `reader.ts` exposes curated, parameterized read functions (`priorRelationshipsForServices`, `similarIncidents`, `rootCauseForIncident`, `priorRootCauses`, `priorChangesForDeployment`, `changeHistoryForStackInstance`, `deploymentsRunningStack`, `stacksUsingModule`, `successfulPromptChanges`, `appliedChanges`, `topology`, `bindingsForServices`, `hasBinding`, …); `writer.ts` exposes MERGE-based writers (`upsertEntities`, `recordIncident`, `recordRootCause`, `recordServiceBinding`, `setIncidentEmbedding`, `recordIacChange`, `recordPipeline`, `setChangeOutcome`, `linkCorrelation`, the `seed*` functions, …).
 
@@ -88,7 +93,7 @@ Per sweep, each source maps live data to edges (soft-failing independently, boun
 
 ## The in-process MCP server (port 9087, SIO-967)
 
-The graph is exposed to the elastic-iac agent as an MCP server on the **same rails as every datasource** (one `MultiServerMCPClient` registration, boot-strict `/identity`, health polling) — but it must run **in-process**, not standalone.
+The graph is exposed to the elastic-iac and landing-zone-terraform agents as an MCP server on the **same rails as every datasource** (one `MultiServerMCPClient` registration, boot-strict `/identity`, health polling) -- but it must run **in-process**, not standalone.
 
 **Why in-process:** the exclusive lbug file lock means a second process opening the same `.data/knowledge-graph` path fails (`Could not set lock on file`) — for a reader *or* a writer. The web/agent process already opens the graph in its pipeline `record*`/`enrich*` nodes, so a standalone KG process is impossible while the agent runs.
 
@@ -100,7 +105,7 @@ So `startKnowledgeGraphServer()` mounts the server on `127.0.0.1:9087` **inside 
 
 ### Tool surface
 
-Reached at `http://127.0.0.1:9087/mcp`. When the in-process server is running (gated on `KNOWLEDGE_GRAPH_ENABLED`, see above), nine **curated** read-only tools are always registered (`tools/curated.ts`), each binding its args as params (injection-safe):
+Reached at `http://127.0.0.1:9087/mcp`. When the in-process server is running (gated on `KNOWLEDGE_GRAPH_ENABLED`, see above), twenty **curated** read-only tools are always registered (`tools/curated.ts`), each binding its args as params (injection-safe): the nine below, plus the eleven `kg_lz_*` Landing Zone tools in the next table.
 
 | Tool | Input | Returns | Reader |
 |------|-------|---------|--------|
@@ -114,9 +119,25 @@ Reached at `http://127.0.0.1:9087/mcp`. When the in-process server is running (g
 | `kg_network_map` | `service`, `asOf` (optional) | persisted network map for one service: DNS -> load balancer -> target group -> workload chain, VPC/subnet placement, currently-valid IP bindings, and service endpoints (SIO-1204) — bi-temporal `asOf` read; accreted per incident, verify live before acting on IPs | `networkMapForService` |
 | `kg_ip_to_workload` | `ip`, `asOf` (optional) | cached reverse-IP lookup: one or more `BOUND_TO` owners valid for `ip` at the requested `asOf` (or currently, by default); verify-then-trust against the live AWS reverse-IP protocol before relying on it | `ipToWorkload` |
 
+The Landing Zone tools (SIO-1867) read the change-history and topology tables. An empty result never reads as absence: each appends "The graph may be incomplete; verify against live GitLab before concluding absence."
+
+| Tool | Input | Returns | Reader |
+|------|-------|---------|--------|
+| `kg_lz_repository_history` | `repository`, `limit` (optional, default 20, max 200) | a repository's change history with MR, pipeline and Terraform plan outcomes | `repositoryChangeHistory` |
+| `kg_lz_module_consumers` | `moduleId` | Terraform roots that consume one local or shared module | `terraformModuleConsumers` |
+| `kg_lz_account_roots` | `repository` (optional) | Terraform roots recorded as managing AWS accounts | `accountManagingRoots` |
+| `kg_lz_mr_outcome` | `mrUrl` | the recorded change, pipeline and plan outcome for one merge request | `mergeRequestPipelineOutcome` |
+| `kg_lz_repository_standards` | `repository` | standards and accepted ADRs governing a repository | `standardsForRepository` |
+| `kg_lz_account_network_map` | `accountId` | the account's VPC and subnet map, graph-recorded topology only | `accountNetworkMap` |
+| `kg_lz_hostname_resolution` | `hostname` | the DNS-only resolution path through hosted zones and records (no packet-routing claim) | `hostnameResolutionPath` |
+| `kg_lz_subnet_route_association` | `subnetId` | the route-table association for one subnet | `subnetRouteAssociation` |
+| `kg_lz_vpc_route_path` | `vpcId` | subnet, route table, route, destination and target path for one VPC | `vpcRoutePath` |
+| `kg_lz_central_attachment` | `vpcId` | the Core Network or Transit Gateway attachment path for one VPC | `centralNetworkAttachments` |
+| `kg_lz_topology_drift` | `accountId` (optional) | desired versus observed topology differences, unknowns and conflicting evidence | `landingZoneTopologyDrift` |
+
 **`kg_successful_prompts` vs `kg_applied_changes` (SIO-1203).** The `Prompt` node only exists from SIO-1038 onward (`recordIacPromptNode`) — the KG itself was activated for elastic-iac earlier, in SIO-954, which wrote `ConfigChange`/`MergeRequest` but never a prompt. So `kg_successful_prompts`' INNER join is invisible to any change applied in that gap window (SIO-954 → SIO-1038): the change is real and recorded, it just has no prompt to join. A missing `Prompt` on a change recorded after SIO-1038 can also happen — `recordIacPromptNode` soft-fails and logs-and-continues on a graph-write error — so an absent prompt means "not recorded", not necessarily "predates SIO-1038"; don't infer the date from the absence alone. `kg_applied_changes` is the full-coverage fallback — it returns every applied change regardless, rendering `(no prompt recorded)` for rows with no linked `Prompt`. Use `kg_successful_prompts` when you specifically need the verbatim prompt text; use `kg_applied_changes` for a complete historical count.
 
-A tenth tool, **`kg_run_cypher`**, is registered **by default** (`KG_MCP_ALLOW_CYPHER=false` to disable) for ad-hoc questions the curated tools don't cover. It runs `validateReadOnlyCypher()`: it rejects any write/DDL keyword (`CREATE/MERGE/SET/DELETE/DETACH/REMOVE/DROP/ALTER/COPY/CALL/...`) after stripping comments and string literals, rejects multi-statement payloads, and binds `$params`. Its description embeds a **schema card** (node tables, relationship directions, the two lbug binder quirks, worked examples) so the model can author valid read queries; `agents/elastic-iac/skills/query-knowledge-graph/SKILL.md` holds a fuller version. Schema is deliberately NOT stored in Agent Memory — it is static and versioned with the code.
+One more tool, **`kg_run_cypher`**, is registered **by default** (`KG_MCP_ALLOW_CYPHER=false` to disable) for ad-hoc questions the curated tools don't cover. It runs `validateReadOnlyCypher()`: it rejects any write/DDL keyword (`CREATE/MERGE/SET/DELETE/DETACH/REMOVE/DROP/ALTER/COPY/CALL/...`) after stripping comments and string literals, rejects multi-statement payloads, and binds `$params`. Its description embeds a **schema card** (node tables, relationship directions, the two lbug binder quirks, worked examples) so the model can author valid read queries; `agents/elastic-iac/skills/query-knowledge-graph/SKILL.md` holds a fuller version. Schema is deliberately NOT stored in Agent Memory -- it is static and versioned with the code.
 
 **Loud-fail (SIO-968):** when the graph is disabled or the store can't open, the tools return an explicit "KNOWLEDGE GRAPH UNAVAILABLE … do NOT answer from memory, specs, or runbooks" string instead of soft prose, so the agent reports the answer as unverified rather than fabricating a confident graph result.
 
@@ -165,6 +186,8 @@ The graph nodes are why the registered node counts exceed the base graphs:
 
 incident-analyzer consumes the graph purely through internal enrich nodes -- it has no LLM-callable `kg_*` tools by design (its graph use is enrichment, not a ReAct tool loop; the entity extractor only routes the seven user datasources, so a graph sub-agent would never be dispatched). SIO-1026 brought prior-root-cause recall into that enrichment path and added the shared `kg_prior_root_causes` MCP tool, which is available to elastic-iac's `kg_run_cypher`/curated surface and to any future ad-hoc caller.
 
+**landing-zone-terraform (SIO-1867)** is a third consumer with its own shape. It writes through the `gitlab-import-sweep` workflow (`packages/agent/src/landing-zone/gitlab-import.ts`), not through per-turn record nodes. It reads through the tool surface: `agents/landing-zone-terraform/tools/knowledge-graph.yaml` maps five actions onto `kg_lz_repository_history`, `kg_lz_module_consumers`, `kg_lz_account_roots`, `kg_lz_mr_outcome` and `kg_lz_repository_standards`, plus `kg_run_cypher` for ad-hoc reads, and its topology node (`landing-zone/topology-node.ts`) queries `TopologyFact` records through `kg_run_cypher`. The graph is advisory for that agent: it never authorizes a value or a repository write.
+
 SIO-1104 (5a) adds a **third write path** outside both agent pipelines: the scheduled topology sweep (see "The scheduled topology sweep" above) -- a declaratively-registered schedule (SIO-1358) writing through the same `getGraphStore()` singleton, gated by `KNOWLEDGE_GRAPH_ENABLED` and its own `enabled:` flag in `schedules/kg-topology-sweep.yaml`.
 
 ## Lifecycle
@@ -187,7 +210,9 @@ Activating the graph requires the optional `lbug` native module installed (`bun 
 
 ## Test gotcha (lbug teardown)
 
-`bun run --filter @devops-agent/knowledge-graph test` (or `bun test <file>`) can exit non-zero (SIGTRAP / 133, no summary) on a machine where lbug is installed — the real-engine integration suite hits the SIO-954 teardown finalizer crash *after* the assertions pass. The tests PASS; confirm an individual case with `bun test <file> -t "<name>"`. CI stays green because lbug is absent there. (memory: `reference_lbug_cypher_and_teardown_gotchas`, `reference_lbug_exclusive_file_lock`)
+`bun run --filter @devops-agent/knowledge-graph test` (or `bun test <file>`) can exit non-zero (SIGTRAP / 133, no summary) on a machine where lbug is installed -- the real-engine integration suite hits the SIO-954 teardown finalizer crash *after* the assertions pass. The tests PASS; confirm an individual case with `bun test <file> -t "<name>"`. CI stays green because lbug is absent there.
+
+A second, mid-run form of the same crash is fixed (SIO-1807): a test or CLI that closed one store and opened another used to segfault at address `0x8` on the next open, because the closed store's unreferenced native handles were garbage-collected and lbug's destructor ran during the run. `close()` now parks the handles for the life of the process (see "Store layer"). Two rules follow for anyone touching `store.ts`: never call the native `db.close()`, and never let a `Database` or `Connection` handle become unreferenced. The cost is one parked handle pair per `close()`, which is bounded because only CLIs and tests close a store; the app holds one store forever. (memory: `reference_lbug_cypher_and_teardown_gotchas`, `reference_lbug_exclusive_file_lock`)
 
 ## Where to go next
 

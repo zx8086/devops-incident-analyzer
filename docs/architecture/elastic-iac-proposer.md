@@ -1,6 +1,6 @@
 # Elastic IaC GitOps Proposer
 
-> **Last updated:** 2026-06-17 (post SIO-933)
+> **Last updated:** 2026-09-30 (SIO-1897 docs sync: node count corrected to 38, Renovate sub-flow documented)
 > **Code:** `packages/agent/src/iac/` (graph) + `packages/mcp-server-elastic-iac/` (MCP, :9086)
 > **Supersedes:** the original Terraform-maker design (`../superpowers/specs/2026-06-02-elastic-iac-agent-design.md`), which described the pre-SIO-873 9-node local-terraform graph. This document is the canonical reference for the current agent.
 
@@ -8,7 +8,9 @@ The `elastic-iac` agent is a peer to the incident-analyzer (selected by the UI a
 
 The governing principle (deck "Elastic Cloud Observability · IaC Monorepo", p.18): **agent proposes, GitOps disposes.** The agent never merges, approves, or applies — that is the human/CI side of a maker/checker separation of duties.
 
-## Graph (31 nodes)
+## Graph (38 nodes)
+
+Verified count: `grep -c addNode packages/agent/src/iac/graph.ts` = 38. The seven nodes of the Renovate on-demand sub-flow (SIO-1471, see [Renovate integration update](#renovate-integration-update)) took it from 31 to 38.
 
 SIO-1285 added `selectIacKnowledge` between `classifyIacIntent` and the intent fan-out.
 It is gated on the `knowledge_selection` block in `agents/elastic-iac/knowledge/index.yaml`
@@ -38,6 +40,15 @@ START -> bootstrap -> {connected? recordIacPrompt -> classifyIacIntent : END}
        syntheticsPushGate --(approved)--> pushSynthetics -> teardown -> END
   classifyIacIntent --(fleet-upgrade)-> detectFleetUpgrade -> fleetUpgradeGate [HITL]
        fleetUpgradeGate --(approved)--> applyFleetUpgrade -> teardown -> END
+  classifyIacIntent --(renovate-integration-update)-> extractRenovateTarget
+       extractRenovateTarget --(could not extract a target)--> END
+       extractRenovateTarget -> resolveIntegrationSlug -> resolveRenovateMarker
+          resolveRenovateMarker --(0 or 2+ dashboard matches)--> teardown -> END
+          resolveRenovateMarker --(exactly one)--> enrichRenovateTarget -> renovateTriggerGate [HITL]
+             renovateTriggerGate --(approved)--> triggerRenovateUpdate -> watchRenovateMr -> teardown -> END
+             renovateTriggerGate --(declined)--> teardown -> END
+  classifyIacIntent --(renovate-status-check)-> watchRenovateMr -> teardown -> END
+  classifyIacIntent --(gitops-amend)--> amendChange -> readClusterState   (in-place edit of an active proposal, SIO-990; blocked or no-op -> END)
   classifyIacIntent --(gitops)--------> parseIntent [iac_clarify interrupt]
     -> readClusterState -> guard
        guard --(blocked)--> END
@@ -48,7 +59,7 @@ START -> bootstrap -> {connected? recordIacPrompt -> classifyIacIntent : END}
              reviewGate --(rejected)--> teardown -> END
 ```
 
-`buildIacGraph()` lives in `packages/agent/src/iac/graph.ts`; state in `state.ts`; nodes in `nodes.ts`. It has its own `IacState` annotation and checkpointer thread, separate from the incident pipeline. HITL pauses use `interrupt`; the UI resumes through `POST /api/agent/iac/resume`. There are five distinct flows off `classifyIacIntent`: read-only Q&A (`info`/`converse`), the GitOps config-edit path (`gitops`), and three imperative CI-triggered sub-flows (`drift`, `synthetics-drift`, `fleet-upgrade`), plus `pipeline-status` follow-ups. `recordIacPrompt` (SIO-1038) sits on the `bootstrap -> classifyIacIntent` seam — the only chokepoint that sees every intent branch — so the verbatim prompt is captured before the fan-out on all flows.
+`buildIacGraph()` lives in `packages/agent/src/iac/graph.ts`; state in `state.ts`; nodes in `nodes.ts`. It has its own `IacState` annotation and checkpointer thread, separate from the incident pipeline. HITL pauses use `interrupt`; the UI resumes through `POST /api/agent/iac/resume`. There are six distinct flows off `classifyIacIntent`: read-only Q&A (`info`/`converse`), the GitOps config-edit path (`gitops`, with `gitops-amend` for an in-place correction), three imperative CI-triggered sub-flows (`drift`, `synthetics-drift`, `fleet-upgrade`), and the Renovate on-demand sub-flow (`renovate-integration-update`, with `renovate-status-check` for its follow-up), plus `pipeline-status` follow-ups. `recordIacPrompt` (SIO-1038) sits on the `bootstrap -> classifyIacIntent` seam -- the only chokepoint that sees every intent branch -- so the verbatim prompt is captured before the fan-out on all flows.
 
 ### Node responsibilities
 
@@ -71,6 +82,7 @@ START -> bootstrap -> {connected? recordIacPrompt -> classifyIacIntent : END}
 | `detectDrift` / `explainDrift` / `reconcileGate` / `reconcileStack` / `advanceDrift` | Drift sub-flow: detect config drift per stack, explain it, gate human approval, then trigger the reconcile CI pipeline and advance to the next stack. |
 | `detectSyntheticsDrift` / `syntheticsPushGate` / `pushSynthetics` | Synthetics drift sub-flow (SIO-902): audit one deployment's monitors (source YAML vs live Kibana), gate approval, push via a single remote `SYNTH_PUSH` CI job (no repo write). |
 | `detectFleetUpgrade` / `fleetUpgradeGate` / `applyFleetUpgrade` | Fleet binary upgrade sub-flow (SIO-913). See [Fleet upgrade](#fleet-upgrade) below. |
+| `extractRenovateTarget` / `resolveIntegrationSlug` / `resolveRenovateMarker` / `enrichRenovateTarget` / `renovateTriggerGate` / `triggerRenovateUpdate` / `watchRenovateMr` | Renovate on-demand sub-flow (SIO-1470/1471/1474/1475). See [Renovate integration update](#renovate-integration-update) below. |
 | `amendChange` | (SIO-990) In-place edit of an active proposal: a correction follow-up resolves to the existing branch/MR (`resolveBranch`) and updates it in place rather than opening a second MR, so `reviewGate` skips the duplicate `openMr`. |
 | `graphEnrichIac` / `recordIacEntities` / `recordIacOutcome` | (SIO-954/965/969) Knowledge-graph nodes, gated on `KNOWLEDGE_GRAPH_ENABLED`. `graphEnrichIac` (pre-draft) reads the deployment's change history + per-cell history + blast radius -> `iacGraphContext` and `lastStackInstanceOutcome` (a prior `failed` change on the same cell raises a HIGH risk on the plan-review card). `recordIacEntities` (after `openMr`) writes the `ConfigChange`; `recordIacOutcome` (after `watchPipeline`) writes the `Pipeline` + promotes the change outcome. See [knowledge-graph.md](knowledge-graph.md). |
 | `memoryEnrichIac` | (SIO-970) Agent-memory node, gated on the `agent-memory` backend (independent of the graph). Deterministic recall of prior `iac-change` facts for the targeted `stack_instance` -> `priorLearnings` on the plan-review card. See [agent-memory.md](agent-memory.md). |
@@ -122,6 +134,18 @@ The Fleet binary upgrade (SIO-913) is an imperative operation, not a config edit
 - The apply passes `MAX_AGENTS=resolvedCount` to clear Fleet's 500-agent cap (SIO-927). For an "all agents" request the agent omits the selector and the repo defaults `SELECTOR="*"`.
 
 CI contract `fleet-upgrade-report/v1`: jobs `fleet-upgrade-{preview,apply}-on-demand`, vars `FLEET_UPGRADE_{PREVIEW,APPLY}`, artifact `fleet-upgrade-report.json`.
+
+## Renovate integration update
+
+An "update the X integration on deployment Y" request asks Renovate to open its merge request now rather than on its schedule (SIO-1470 tools, SIO-1471 graph lane). Like the Fleet upgrade it is imperative and propose-only: a schedule-triggered Renovate run only creates branches and merge requests, and the apply jobs stay manual, so this lane cannot deploy anything.
+
+- `extractRenovateTarget` extracts the `{deployment, integration}` pair with a small structured-output call. If it cannot, the turn ends with a clarifying message instead of proceeding on a guessed target.
+- `resolveIntegrationSlug` (SIO-1474) maps a Kibana Fleet display name to the package slug with an exact, case-insensitive lookup against Kibana's own package list. It never blocks: any failure leaves the integration name unchanged.
+- `resolveRenovateMarker` finds the Dependency Dashboard issue by title (never by a hardcoded id), reads its body, and matches the target to a live marker. Exactly one match proceeds; zero or several end the turn with a no-match or disambiguation message and no gate.
+- `enrichRenovateTarget` is best-effort context for the approval card: installed version, target version, affected policies, and a version-range changelog. It never sets a blocked reason and never throws; a failed lookup degrades the card to the plain marker text.
+- `renovateTriggerGate` is the single approve/decline HITL interrupt, rendered by `RenovateTriggerChoiceCard` (`renovate_trigger_choice`).
+- `triggerRenovateUpdate` ticks the dashboard checkbox and plays the pipeline schedule. An API failure on either step blocks to `teardown`.
+- `watchRenovateMr` polls, on the same bounded interval and budget as `watchPipeline`, for the merge request Renovate creates. A later "did the Renovate MR open?" turn classifies as `renovate-status-check` and re-enters here directly, without re-triggering. SIO-1475 added a follow-up guard and deployment-wide trigger history; SIO-1527 attaches the merge-request edge to the lane's `ConfigChange` when the MR is discovered.
 
 ## Configuration
 

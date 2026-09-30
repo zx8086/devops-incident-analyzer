@@ -1,9 +1,9 @@
 # Monorepo Structure
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-07-19
+> **Last updated:** 2026-09-30
 
-Package map and dependency graph for the DevOps Incident Analyzer Bun workspace monorepo. This document covers the workspace layout, package relationships, and configuration. The monorepo contains 17 workspace packages (5 core, 9 MCP servers — including the in-process `mcp-server-knowledge-graph` — and 3 supporting packages: knowledge-graph, memory-pr, skillflow), 1 app, and a set of declarative agent definitions that the gitagent-bridge package compiles into LangGraph nodes at runtime.
+Package map and dependency graph for the DevOps Incident Analyzer Bun workspace monorepo. This document covers the workspace layout, package relationships, and configuration. The monorepo contains 20 workspace packages (5 core, 10 MCP servers, including the in-process `mcp-server-knowledge-graph`, and 5 supporting packages: knowledge-graph, memory-pr, skillflow, tools-verify, pi-coms), 1 app, and a set of declarative agent definitions that the gitagent-bridge package compiles into LangGraph nodes at runtime (or, for the pi-fleet personas, exports as a Pi package).
 
 ---
 
@@ -35,22 +35,33 @@ devops-incident-analyzer/
         atlassian-agent/
           agent.yaml
           SOUL.md
+        aws-agent/
+          agent.yaml
+          SOUL.md
       tools/                     Tool definitions (YAML)
       skills/                    Skill definitions (Markdown)
       compliance/                Compliance rules and audit templates
-      knowledge/                 Domain knowledge documents
+      knowledge/                 Domain knowledge documents (runbooks per datasource)
       workflows/                 Multi-step workflow definitions
-    shared/                      Shared agent resources
+      hooks/                     Lifecycle hooks (hooks.yaml: bootstrap and teardown steps)
+      memory/                    File-backed live memory (runtime/ and wiki/)
+    elastic-iac/                 Elastic IaC GitOps proposer agent (own skills, tools, knowledge, hooks, memory, workflows)
+    landing-zone-terraform/      PVH Landing Zone Terraform agent (own skills, tools, knowledge, hooks, memory, workflows)
+    pi-fleet-console/            In-process fleet console persona run by the pi-fleet graph (SIO-1655)
+    pi-fleet/                    Console persona plus agents/aws-spoke/, exported as a Pi package into the fleet bundle (SIO-1649); never dispatched in-process
+    shared/                      Shared agent resources (context, skills)
   packages/
     shared/                      Cross-package types, Zod schemas, MCP bootstrap
     observability/               Pino logger, OpenTelemetry, LangSmith tracing
     checkpointer/                LangGraph state persistence (memory + bun:sqlite)
     gitagent-bridge/             YAML-to-LangGraph adapter
-    agent/                       LangGraph supervisor and 31-node pipeline (21 base + 4 gated KG + 6 gated HIL-learning nodes). The 21 base nodes include correlation enforcement, typed findings, the AWS estate router, resolveIdentifiers, and the mitigation branch split; the 6 HIL-learning nodes (learnFetchTicket..applyLearnings) form the learn-from-ticket lane. Plus a separate 31-node elastic-iac proposer graph
+    agent/                       LangGraph supervisor and 32-node pipeline (22 base + 4 gated KG + 6 gated HIL-learning nodes). The 22 base nodes include correlation enforcement, typed findings, the AWS estate router, resolveIdentifiers, fetchFleetInbox, and the mitigation branch split; the 6 HIL-learning nodes (learnFetchTicket..applyLearnings) form the learn-from-ticket lane. Plus three separate graphs: the 38-node elastic-iac proposer (src/iac/), the 31-node Landing Zone graph (src/landing-zone/) and the pi-fleet console (src/pi-fleet/)
     knowledge-graph/             Embedded entity + correlation knowledge graph (lbug/LadybugDB; SIO-850/954/965; gated on KNOWLEDGE_GRAPH_ENABLED). See architecture/knowledge-graph.md
     mcp-server-knowledge-graph/  In-process Knowledge Graph MCP server (:9087, SIO-967): curated kg_* tools + read-only Cypher over the embedded graph
-    memory-pr/                   PR-based human-in-the-loop for durable agent learnings (SIO-849)
+    memory-pr/                   PR-based human-in-the-loop for durable agent learnings (SIO-849); opens the promotion PR for an approved learning candidate (SIO-1896)
     skillflow/                   Declarative workflow (DAG) loader + executor (SIO-848)
+    tools-verify/                Static checks over tool definitions, run by `bun run tools:verify`
+    pi-coms/                     pi-coms hub, Pi spoke extension, fleet monitor, Terraform and deploy scripts (SIO-1654); own docs index under packages/pi-coms/docs/
     mcp-server-elastic/          Elasticsearch MCP server (117 tools: 101 cluster incl. 9 ML anomaly-detection + 4 ES|QL/async-search + 16 conditional cloud/billing on EC_API_KEY)
     mcp-server-kafka/            Kafka MCP server (11-61 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
     mcp-server-couchbase/        Couchbase Capella MCP server (~43 tools: official Couchbase tools, SIO-1107)
@@ -59,6 +70,7 @@ devops-incident-analyzer/
     mcp-server-atlassian/        Atlassian MCP server (Jira + Confluence Rovo OAuth 2.1 proxy + incident filters)
     mcp-server-aws/              AWS MCP server (~40 read-only tools across CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray + multi-estate via cross-account AssumeRole)
     mcp-server-elastic-iac/      Elastic IaC MCP server (GitOps proposer tools for terraform/git/gitlab/elastic-cloud, port 9086)
+    mcp-server-landing-zone-iac/ Landing Zone IaC MCP server (14 lz_* tools: 10 bounded reads + 4 governed proposal tools behind write mode, port 9088; SIO-1867)
   apps/
     web/                         SvelteKit frontend
   docs/
@@ -124,7 +136,7 @@ Key relationships:
 - **web** depends on **agent** for the LangGraph pipeline and SSE streaming
 - **agent** depends on **gitagent-bridge** (YAML manifest loading), **checkpointer** (state persistence), **observability** (tracing and logging), and **shared** (types and schemas)
 - **gitagent-bridge** reads from the `agents/` directory at runtime
-- All eight MCP servers depend on **shared** for the `createMcpApplication` bootstrap, transport abstractions, logger factory, and telemetry initialization
+- All ten MCP server packages depend on **shared** for the `createMcpApplication` bootstrap, transport abstractions, logger factory, and telemetry initialization
 - MCP servers are independent of each other and of the **agent** package -- the agent connects to them over the network via `@langchain/mcp-adapters`
 
 ---
@@ -274,7 +286,7 @@ Couchbase Capella MCP server with ~43 tools for cluster management, query analys
 | Capability | Details |
 |------------|---------|
 | Tools | ~43 tools: N1QL query, INFER schema, EXPLAIN, Index Advisor, covering-index detectors, bucket operations, playbooks |
-| Configuration | Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD` |
+| Configuration | Single cluster: `COUCHBASE_URL`, `COUCHBASE_USERNAME`, `COUCHBASE_PASSWORD` |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
 | Port | 9082 (default) |
 
@@ -329,6 +341,91 @@ Source: `packages/mcp-server-atlassian/src/`
 
 ---
 
+### @devops-agent/mcp-server-aws
+
+Read-only AWS MCP server for the multi-estate incident fan-out. Every tool call carries a target `estate`, which the server resolves to a cross-account `AssumeRole` session; `aws_list_estates` enumerates the configured targets. It runs as an AgentCore runtime and the agent reaches it through a local SigV4-signing proxy on port 3001 (`AWS_MCP_URL`). Tool catalog and configuration: [MCP Server Configuration](../configuration/mcp-server-configuration.md); onboarding an account: [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md).
+
+Source: `packages/mcp-server-aws/src/`
+
+---
+
+### @devops-agent/mcp-server-elastic-iac
+
+MCP server behind the `elastic-iac` agent: terraform, git, GitLab and Elastic Cloud tools used to read cluster state, edit deployment and policy JSON, and open a merge request. Port 9086. It serves that agent only and is not part of the incident fan-out. See [Elastic IaC GitOps Proposer](../architecture/elastic-iac-proposer.md).
+
+Source: `packages/mcp-server-elastic-iac/src/`
+
+---
+
+### @devops-agent/mcp-server-landing-zone-iac
+
+MCP server behind the `landing-zone-terraform` agent (SIO-1867). Fourteen `lz_*` tools over the private Landing Zone GitLab repositories:
+
+| Capability | Details |
+|------------|---------|
+| Read tools (10) | Repository catalog, bounded file reads, representative examples, open changes, historical merge requests, merge-request and pipeline reads, project deployments, pipeline plan, Terraform topology extraction |
+| Governed write tools (4) | `lz_create_branch`, `lz_commit_allowed_files`, `lz_open_merge_request`, `lz_watch_pipeline`; registered only when write mode is enabled and validates (`config.write.enabled` in `src/server.ts`). No merge, apply, state or pipeline-trigger capability |
+| Port | 9088 (`LANDING_ZONE_IAC_MCP_PORT`) |
+
+See [Landing Zone Terraform Agent](../architecture/landing-zone-terraform-agent.md) and the [runbook](../operations/landing-zone-agent-runbook.md).
+
+Source: `packages/mcp-server-landing-zone-iac/src/`
+
+---
+
+### @devops-agent/knowledge-graph
+
+Embedded entity and correlation graph on lbug (LadybugDB), gated on `KNOWLEDGE_GRAPH_ENABLED`. Holds the store (`store.ts`), the single-file typed schema (`schema.ts`), readers and writers, migrations and the IaC seed. Embedded lbug takes an exclusive file lock, which is why its MCP server runs in-process. See [Knowledge Graph](../architecture/knowledge-graph.md).
+
+Source: `packages/knowledge-graph/src/`
+
+---
+
+### @devops-agent/mcp-server-knowledge-graph
+
+In-process MCP server (port 9087, mounted inside the web app) over the embedded graph: curated `kg_*` readers, the Landing Zone `kg_lz_*` readers, and a read-only-guarded `kg_run_cypher`.
+
+Source: `packages/mcp-server-knowledge-graph/src/`
+
+---
+
+### @devops-agent/memory-pr
+
+Turns approved learning into a pull request against the repository, so durable agent knowledge is reviewed like code (SIO-849). It scans the proposed content for secrets, fetches the base file, and opens the PR through the GitHub API. The learning review pane's approve action uses it to promote a candidate (SIO-1896). Every entry point returns `skipped` unless `MEMORY_PR_ENABLED` is set, the kill switch is off, and both `GITHUB_TOKEN` and `MEMORY_PR_REPO` are configured. See [Agent Memory](../architecture/agent-memory.md).
+
+Source: `packages/memory-pr/src/`
+
+---
+
+### @devops-agent/skillflow
+
+Declarative workflow layer (SIO-848): loads the `workflows/` YAML of an agent into a DAG (`dag.ts`), resolves step inputs from templates (`template.ts`, `resolvers.ts`), executes steps through registered handlers (`executor.ts`), and evaluates triggers and cron schedules (`triggers.ts`, `scheduler.ts`). See [Agent Concepts](../architecture/agent-concepts.md).
+
+Source: `packages/skillflow/src/`
+
+---
+
+### @devops-agent/tools-verify
+
+Static verification of tool definitions. No unit tests of its own; it is the check.
+
+| Script | Checks |
+|--------|--------|
+| `bun run tools:verify` | Action-tool-map coverage (`verify-action-tool-map.ts`) and that no MCP server registers tools through the forbidden `server.tool()` sugar (`verify-no-sugar-registration.ts`) |
+| `bun run tools:verify:drift` | Elastic tool registry drift (`verify-elastic-registry-drift.ts`) |
+
+Source: `packages/tools-verify/src/`
+
+---
+
+### @devops-agent/pi-coms
+
+The pi-coms hub, the Pi spoke extension, the fleet monitor, and the Terraform and deploy scripts for the AWS account spokes (imported as a subtree by SIO-1654, layout intact). It has its own documentation index at [packages/pi-coms/docs](../../packages/pi-coms/docs/README.md); read `deployment/deployment.md` there before any `just fleet` command. Its monitor dependencies live in a nested non-workspace `scripts/package.json` and must stay there.
+
+Source: `packages/pi-coms/`
+
+---
+
 ## App Reference
 
 ### @devops-agent/web
@@ -343,7 +440,7 @@ SvelteKit 2.0 frontend with Svelte 5 runes, Tailwind CSS v4, and Server-Sent Eve
 | Build tool | Vite 6 |
 | Port | 5173 (development) |
 
-The frontend contains 9 components:
+The frontend contains 42 components (`ls apps/web/src/lib/components/*.svelte`). The full component families, the API route table and the stores are in [Frontend](frontend.md). The nine that make up the chat shell:
 
 | Component | Purpose |
 |-----------|---------|
@@ -486,3 +583,4 @@ Catalogs pin shared dependency versions across the workspace. Individual package
 | 2026-04-04 | Initial monorepo structure document created |
 | 2026-04-13 | Added mcp-server-gitlab (10th package), gitlab-agent (5th sub-agent), updated pipeline from 8 to 12 nodes |
 | 2026-04-23 | Added mcp-server-atlassian (11th package) and atlassian-agent (6th sub-agent); updated all tool-count placeholders |
+| 2026-09-30 | SIO-1897 docs sync (SIO-1635..1896 window): package count 17 -> **20** (added `mcp-server-landing-zone-iac` SIO-1867, `pi-coms` SIO-1654, `tools-verify`); layout gains `aws-agent`, the `hooks/` and `memory/` dirs, and the `elastic-iac`, `landing-zone-terraform`, `pi-fleet-console` and `pi-fleet` agent definitions; corrected the stale 31-node line to 32 and the elastic-iac proposer to 38; added Package Reference entries for the nine packages that had none; frontend 9 -> 42 components with a pointer to frontend.md. |

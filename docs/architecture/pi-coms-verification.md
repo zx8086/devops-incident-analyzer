@@ -49,7 +49,47 @@ user approves "Launch pi investigation"
 | Dispatch | `packages/agent/src/action-tools/executor.ts` |
 | Card proposal hook | `packages/agent/src/mitigation.ts` (after the LLM proposal block) |
 | Follow-up cards appended to the store | `apps/web/src/lib/stores/agent.svelte.ts` (`executeAction`) |
-| Rendering | `apps/web/src/lib/components/ActionConfirmationCard.svelte` |
+| Card (proposal, approve, one-line status) | `apps/web/src/lib/components/ActionConfirmationCard.svelte` |
+| Start/poll execution in the browser | `apps/web/src/lib/stores/pi-fleet.svelte.ts` (`runAction`), `apps/web/src/routes/api/pi/actions` |
+| Rendered verdict and investigation | `apps/web/src/lib/components/PiReplyBody.svelte`, shown in the fleet pane (SIO-1789) |
+
+## Which estates get a card (SIO-1777)
+
+`estatesFromState` decides the estates the report assessed: the router's
+`awsTargetEstates` when set, otherwise the per-estate `deploymentId` tags the
+AWS sub-agent stamps on its results. From that set it removes every estate
+whose AWS result carries `serviceAbsent`, meaning a complete ECS enumeration
+proved the focus service is not deployed there. The router's list is intent,
+set before any tool ran, so a card for an estate the report itself ruled out is
+noise. The same function feeds the fleet inbox node, so the inbox fetch skips
+those estates too (see [Fleet Inbox Enrichment](fleet-inbox-enrichment.md)).
+
+## Where the card executes and where the reply is shown
+
+Approving a card no longer runs one long request from the card (SIO-1778). The
+store's `executeAction` hands a pi card to the fleet pane store's `runAction`, which POSTs `/api/pi/actions`
+and then polls `GET /api/pi/actions?msgId=` in short requests. The send, the
+wait and the reply appear in the fleet pane as a labelled entry. Since SIO-1789
+the pane also owns the rendered verdict or investigation (`PiReplyBody`); the
+card gets the result back only to show a one-line status with the verdict chip
+and to raise the follow-up card. When no pane is configured, the action runs
+the same way (it sends as the analyzer principal and needs no pane token) and
+the card renders the result itself.
+
+Two production-scoping rules sit beside this (SIO-1696):
+
+- **In-account replies.** The verify prompt tells the spoke to report only on
+  its own AWS account and to leave claims about other accounts or non-AWS
+  systems out of `claims[]` entirely. Those used to come back as
+  `unverifiable`, which both filled the reply with systems the agent cannot
+  reach and spawned investigate cards ordering it to chase them. `unverifiable`
+  now means an in-account read that genuinely failed. The investigate prompt
+  repeats the skip for open questions and requires every suggested action to be
+  performable in that account.
+- **Production-only UI.** The estate selector (`/api/aws/estates`) and the
+  fleet pane listing show production only. This is a UI filter: the AWS estate
+  router and the hub send path are not filtered, so a deliberately dev-targeted
+  investigation still routes.
 
 ## Routing rule
 
@@ -86,6 +126,17 @@ overall verdict is not `confirmed` or any claim is not confirmed; only then is
 the investigate card proposed, with `focus` built from the open claims and the
 agent's `recommended_investigation`.
 
+An unusable verdict says what arrived (SIO-1829). `unusableVerdictMessage`
+reports the reply's key names, never its values: "replied with an unusable
+verdict (keys: ...)". When the reply is recognisably a diagnoses envelope (its
+only key is `diagnoses` and it parses against `PiDiagnosesReplySchema`), the
+error instead says the agent answered with a diagnosis, not a verdict, and
+names `investigate-with-pi` as the tool that reads that shape. The verify path
+deliberately does not adapt a diagnosis into a verdict the way the investigate
+path adapts one (SIO-1830): a verdict is a judgement on the analyzer's own
+claims, and synthesising one from the spoke's observation would invent a
+judgement the spoke never made.
+
 ## Timeouts
 
 `await` is polled in 25 s slices (under the hub's 30 s default and its 30 s
@@ -115,14 +166,17 @@ exposure the single long request had.
 
 ## Configuration
 
-See the `pi-coms hub` block in `.env.example`. One hub per environment:
-`PI_COMS_HUBS` is a JSON map keyed by `dev`, `stg` and `prd`, each entry
-carrying `serverUrl` and `authToken` plus optional `project` (default
-`default`) and `fallbackTarget` (default `ops`). The single-hub variables
-(`PI_COMS_NET_SERVER_URL`, `PI_COMS_NET_AUTH_TOKEN`, `PI_COMS_NET_PROJECT`,
-`PI_COMS_FALLBACK_TARGET`) remain as a one-entry map for the environment named
-by `PI_COMS_NET_ENVIRONMENT` (default `dev`); a prd estate then gets a "no hub
-configured for prd" card error rather than the dev hub. The feature is off
+See the `pi-coms hub` block in `.env.example`. `PI_COMS_HUBS` is a JSON map
+keyed by hub selector (the AWS profile or account the hub lives in, SIO-1666),
+not by environment. Each entry carries `serverUrl`, `authToken`, the
+`environment` it serves (`dev`, `stg` or `prd`) and the explicit `estates`
+list it owns, plus optional `project` (default `default`) and `fallbackTarget`
+(default `ops`). The
+single-hub variables (`PI_COMS_NET_SERVER_URL`, `PI_COMS_NET_AUTH_TOKEN`,
+`PI_COMS_NET_PROJECT`, `PI_COMS_FALLBACK_TARGET`) remain as a one-entry map
+keyed by the environment named in `PI_COMS_NET_ENVIRONMENT` (default `dev`),
+claiming the estates in the comma-separated `PI_COMS_NET_ESTATES`; an estate no
+hub claims gets a readable card error rather than another hub. The feature is off
 unless one of the two forms is set; a malformed `PI_COMS_HUBS` is a readable
 error at execute time and suppresses card proposals with a warn log.
 
@@ -151,8 +205,9 @@ The web app's pi-fleet pane (SIO-1650) reads the same `PI_COMS_HUBS` and adds
 - The analyzer registers as an `explicit` peer, hidden from pool snapshots, and
   deregisters after every action. It never holds an SSE stream and never
   receives prompts.
-- Hub replies are rendered by the card as data. They are not appended to the
-  conversation and are never fed back into any LLM call.
+- Hub replies are rendered as data, by the fleet pane's `PiReplyBody` (or by
+  the card when there is no pane), with text interpolation only. They are not
+  appended to the conversation and are never fed back into any LLM call.
 - The report handed to the agent is the same markdown the user already sees,
   truncated to a fixed character budget, plus the confidence, root-cause
   attribution, and caveats sidecars.
