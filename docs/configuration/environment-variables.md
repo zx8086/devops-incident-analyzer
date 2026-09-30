@@ -427,7 +427,7 @@ Connection parameters for a single Couchbase Capella cluster.
 | `COUCHBASE_CONNECTION_TIMEOUT` | No | `5000` | Connection timeout in ms |
 | `READ_ONLY_QUERY_MODE` | No | `true` | SIO-1109/1813/1822: read-only gate. When on, the query tools reject a statement that modifies data or structure, and KV document writes are refused too. The gate reads a statement's keywords the way the query service does, so a write cannot be smuggled past it by quoting or escaping. Parsed as a kill-switch (SIO-1898): only an explicit `false` or `0` (any case) turns it off. Unset, `true`, `1`, an empty value and anything unrecognised keep it on, and an unrecognised value is logged as a warning. Set `false` only for a deployment that is meant to write. See [MCP Integration](../architecture/mcp-integration.md). |
 
-The variable names are the ones the server reads (`packages/mcp-server-couchbase/src/config/envMapping.ts`). Earlier revisions of this page, and still `docker-compose.yml` and `scripts/agentcore/deploy.sh`, use `CB_HOSTNAME` / `CB_USERNAME` / `CB_PASSWORD` / `CB_BUCKET`; the server does not read those names, and with only them set it falls back to the local defaults above. The "Required" column means required for a real cluster: the code defaults target a local single-node install.
+The variable names are the ones the server reads (`packages/mcp-server-couchbase/src/config/envMapping.ts`). The "Required" column means required for a real cluster: the code defaults target a local single-node install.
 
 The MCP server connects using the Couchbase Node.js SDK. For Capella the connection string uses the cluster endpoint shown in the Capella console.
 

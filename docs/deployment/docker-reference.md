@@ -35,10 +35,10 @@ Docker Compose uses per-service images defined in `docker-compose.yml`. Each ser
 
 | Service | Build Context | Exposed Port | Transport |
 |---------|--------------|-------------|-----------|
-| `elastic-mcp` | `packages/mcp-server-elastic` | 8080 | SSE |
-| `kafka-mcp` | `packages/mcp-server-kafka` | 3000 | HTTP |
-| `couchbase-mcp` | `packages/mcp-server-couchbase` | 8082 | HTTP |
-| `konnect-mcp` | `packages/mcp-server-konnect` | 8083 | HTTP |
+| `elastic-mcp` | `packages/mcp-server-elastic` | 9080 | SSE |
+| `kafka-mcp` | `packages/mcp-server-kafka` | 9081 | HTTP |
+| `couchbase-mcp` | `packages/mcp-server-couchbase` | 9082 | HTTP |
+| `konnect-mcp` | `packages/mcp-server-konnect` | 9083 | HTTP |
 | `gitlab-mcp` | `packages/mcp-server-gitlab` | 8084 | HTTP |
 | `atlassian-mcp` | `packages/mcp-server-atlassian` | 8085 | HTTP |
 | `agent-web` | `apps/web` | 5173 | -- |

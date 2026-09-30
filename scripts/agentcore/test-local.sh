@@ -6,7 +6,7 @@
 # Prerequisites (run in another terminal first):
 #   MCP_TRANSPORT=agentcore KAFKA_PROVIDER=local bun run packages/mcp-server-kafka/src/index.ts
 #   MCP_TRANSPORT=agentcore ELASTICSEARCH_URL=http://localhost:9200 bun run packages/mcp-server-elastic/src/index.ts
-#   MCP_TRANSPORT=agentcore CB_HOSTNAME=localhost bun run packages/mcp-server-couchbase/src/index.ts
+#   MCP_TRANSPORT=agentcore COUCHBASE_URL=couchbase://localhost bun run packages/mcp-server-couchbase/src/index.ts
 #   MCP_TRANSPORT=agentcore KONNECT_ACCESS_TOKEN=test bun run packages/mcp-server-konnect/src/index.ts
 #
 # Or test via Docker:

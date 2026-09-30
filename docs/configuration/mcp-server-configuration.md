@@ -342,7 +342,7 @@ The Couchbase server connects to a single Capella cluster. Unlike the Elasticsea
 | Bucket | `COUCHBASE_BUCKET` | Default bucket (default `default`); tools can override per-query |
 | Scope | `COUCHBASE_SCOPE` | Default scope (default `_default`) |
 
-These are the names `src/config/envMapping.ts` maps. The server does not read `CB_HOSTNAME` / `CB_USERNAME` / `CB_PASSWORD` / `CB_BUCKET`, which earlier revisions of this page named and which `docker-compose.yml` and `scripts/agentcore/deploy.sh` still pass; with only those set it connects to the local defaults.
+These are the names `src/config/envMapping.ts` maps.
 
 ### Bucket Configuration
 

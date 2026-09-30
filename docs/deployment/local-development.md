@@ -124,11 +124,11 @@ docker compose up -d
 |---------|---------------|------|------------|
 | Elasticsearch MCP | `elastic-mcp` | 9080 | `http://localhost:9080/health` |
 | Kafka MCP | `kafka-mcp` | 9081 | `http://localhost:9081/health` |
-| Couchbase MCP | `couchbase-mcp` | 8082 | `http://localhost:8082/health` |
-| Konnect MCP | `konnect-mcp` | 8083 | `http://localhost:8083/health` |
+| Couchbase MCP | `couchbase-mcp` | 9082 | `http://localhost:9082/health` |
+| Konnect MCP | `konnect-mcp` | 9083 | `http://localhost:9083/health` |
 | Web Frontend | `agent-web` | 5173 | `http://localhost:5173` |
 
-These are the ports `docker-compose.yml` publishes. Note that the file sets `agent-web`'s `COUCHBASE_MCP_URL` and `KONNECT_MCP_URL` to ports 9082 and 9083 while those two containers listen on 8082 and 8083, so check those two values if the Couchbase or Konnect datasource shows as not connected under Compose.
+These are the ports `docker-compose.yml` publishes, and the ports `agent-web` dials.
 
 All four MCP services expose health checks. The `agent-web` service has `depends_on` conditions that wait for all four to report healthy before starting. Health checks use:
 
@@ -269,8 +269,8 @@ Port numbers differ between local bare-metal, Docker Compose, and AgentCore depl
 |---------|-----------|----------------|-----------|
 | Elasticsearch MCP | 9080 | 9080 | 8000 |
 | Kafka MCP | 9081 | 9081 | 8000 |
-| Couchbase MCP | 9082 | 8082 | 8000 |
-| Konnect MCP | 9083 | 8083 | 8000 |
+| Couchbase MCP | 9082 | 9082 | 8000 |
+| Konnect MCP | 9083 | 9083 | 8000 |
 | GitLab MCP | 9084 | not in the Compose file | 8000 |
 | Atlassian MCP | 9085 | not in the Compose file | 8000 |
 | Atlassian OAuth callback | 9185 | -- | -- |
