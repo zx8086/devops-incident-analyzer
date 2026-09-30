@@ -49,10 +49,12 @@
 #   ELASTICSEARCH_PASSWORD  - Basic auth password
 #
 # Couchbase-specific:
-#   CB_HOSTNAME             - Capella cluster hostname
-#   CB_USERNAME             - Cluster username
-#   CB_PASSWORD             - Cluster password
-#   CB_BUCKET               - Target bucket name
+#   COUCHBASE_URL           - Connection string, e.g. couchbases://cb.xxxx.cloud.couchbase.com
+#                             (not a bare hostname)
+#   COUCHBASE_USERNAME      - Cluster username
+#   COUCHBASE_PASSWORD      - Cluster password
+#   COUCHBASE_BUCKET        - Target bucket name
+#   COUCHBASE_SCOPE         - Default scope (optional, server default: _default)
 #
 # Konnect-specific:
 #   KONNECT_ACCESS_TOKEN    - Kong Konnect API access token
@@ -146,7 +148,7 @@ echo "  Package:      ${MCP_SERVER_PACKAGE}"
 case "${MCP_SERVER}" in
   kafka)    echo "  Kafka:        ${KAFKA_PROVIDER} (auth=${MSK_AUTH_MODE})" ;;
   elastic)  echo "  Elastic:      ${ELASTICSEARCH_URL:-not set}" ;;
-  couchbase) echo "  Couchbase:    ${CB_HOSTNAME:-not set}" ;;
+  couchbase) echo "  Couchbase:    ${COUCHBASE_URL:-not set}" ;;
   konnect)  echo "  Konnect:      region=${KONNECT_REGION:-us}" ;;
   aws)
     AWS_ESTATE_COUNT=$(echo "${AWS_ESTATES:-{}}" | jq -er 'length' 2>/dev/null || echo "0")
@@ -473,17 +475,23 @@ case "${MCP_SERVER}" in
     fi
     ;;
   couchbase)
-    if [ -n "${CB_HOSTNAME:-}" ]; then
-      ENV_VARS="${ENV_VARS},CB_HOSTNAME=${CB_HOSTNAME}"
+    # SIO-1899: these are the names packages/mcp-server-couchbase/src/config/envMapping.ts
+    # maps. The server never read CB_*, so a runtime given those connected to the
+    # local defaults (couchbase://localhost).
+    if [ -n "${COUCHBASE_URL:-}" ]; then
+      ENV_VARS="${ENV_VARS},COUCHBASE_URL=${COUCHBASE_URL}"
     fi
-    if [ -n "${CB_USERNAME:-}" ]; then
-      ENV_VARS="${ENV_VARS},CB_USERNAME=${CB_USERNAME}"
+    if [ -n "${COUCHBASE_USERNAME:-}" ]; then
+      ENV_VARS="${ENV_VARS},COUCHBASE_USERNAME=${COUCHBASE_USERNAME}"
     fi
-    if [ -n "${CB_PASSWORD:-}" ]; then
-      ENV_VARS="${ENV_VARS},CB_PASSWORD=${CB_PASSWORD}"
+    if [ -n "${COUCHBASE_PASSWORD:-}" ]; then
+      ENV_VARS="${ENV_VARS},COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD}"
     fi
-    if [ -n "${CB_BUCKET:-}" ]; then
-      ENV_VARS="${ENV_VARS},CB_BUCKET=${CB_BUCKET}"
+    if [ -n "${COUCHBASE_BUCKET:-}" ]; then
+      ENV_VARS="${ENV_VARS},COUCHBASE_BUCKET=${COUCHBASE_BUCKET}"
+    fi
+    if [ -n "${COUCHBASE_SCOPE:-}" ]; then
+      ENV_VARS="${ENV_VARS},COUCHBASE_SCOPE=${COUCHBASE_SCOPE}"
     fi
     ;;
   konnect)
