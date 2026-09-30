@@ -127,8 +127,10 @@ async function main(): Promise<void> {
 	if (!skill) throw new Error("missing required --skill <skill_name>");
 
 	const { latestPerSkill } = await import("./skill-learner.ts");
+	// SIO-1900: verbatim, because the SKILL.md body is rendered from hit.text.
 	const hits = await searchAgentMemory(args.agent, "", { kind: "skill", skill_name: skill }, 64, {
 		deterministic: true,
+		verbatim: true,
 	});
 	const chosen = selectPromotableCandidate(latestPerSkill(hits));
 	if (!chosen.ok) {

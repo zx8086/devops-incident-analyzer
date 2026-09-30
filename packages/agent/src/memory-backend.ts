@@ -725,7 +725,12 @@ export async function searchAgentMemory(
 	// IDENTIFIER-keyed recall (by mr_url/pipeline_id/config_change_id) where a query string would
 	// rank the target out of the top-k window before the filter applies. The passed `query` is
 	// ignored in this mode. See docs/architecture/agent-memory.md "Retrieval: TWO modes".
-	opts?: { allSessions?: boolean; deterministic?: boolean; signal?: AbortSignal },
+	// SIO-1900: verbatim=true returns each hit's text exactly as it was stored (the
+	// service's `fact`) instead of the service's summary. A reader that parses a
+	// labelled fact back out (the learning loop's skill and runbook candidates) or
+	// re-stores it in a transition MUST pass it: the summary is an LLM paraphrase
+	// with none of the labels, and re-storing it degrades the fact on every step.
+	opts?: { allSessions?: boolean; deterministic?: boolean; verbatim?: boolean; signal?: AbortSignal },
 ): Promise<MemorySearchHit[]> {
 	if (selectedBackend() !== "agent-memory") return [];
 	const userId = resolveUserId(agentName);
@@ -770,7 +775,7 @@ export async function searchAgentMemory(
 			"agent-memory search",
 		);
 		return hits.map((h) => ({
-			text: h.text,
+			text: opts?.verbatim ? (h.fact ?? h.text) : h.text,
 			annotations: h.annotations ?? {},
 			...(h.blockId && { blockId: h.blockId }),
 			...(h.sessionId && { sessionId: h.sessionId }),

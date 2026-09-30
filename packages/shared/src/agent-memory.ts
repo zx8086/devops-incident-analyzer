@@ -70,6 +70,10 @@ export interface AddOptions {
 // MemoryBlock carries all three).
 export interface MemoryHit {
 	text: string;
+	// SIO-1900: the text exactly as the writer stored it. `text` prefers the
+	// service's own summary, an LLM paraphrase: right for a recall prompt, wrong
+	// for any reader that parses a labelled fact back out of it.
+	fact?: string;
 	score?: number;
 	annotations?: AnnotationMap;
 	blockId?: string;
@@ -367,6 +371,7 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 				.filter((b) => b.status === undefined || b.status === "ready")
 				.map((b) => ({
 					text: b.summary ?? b.fact ?? "",
+					...(b.fact ? { fact: b.fact } : {}),
 					score: b.rel_score ?? undefined,
 					// SIO-959: surface annotations so callers read structured fields (pipeline_id, ...).
 					annotations: b.annotations ?? undefined,

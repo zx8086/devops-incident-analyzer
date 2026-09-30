@@ -164,6 +164,29 @@ describe("createFetchAgentMemoryClient", () => {
 		restore();
 	});
 
+	// SIO-1900: the service returns its own paraphrase (`summary`) beside the text
+	// we stored (`fact`). `text` stays the summary; the verbatim fact rides along.
+	test("search carries the verbatim fact beside the summary", async () => {
+		const { restore } = stubFetch({
+			"POST /users/incident-analyzer/sessions/t-1/memory/search": {
+				status: 200,
+				body: {
+					count: 2,
+					memory_blocks: [
+						{ status: "ready", summary: "The proposed skill is designed to...", fact: "Proposed skill: x - y" },
+						{ status: "ready", summary: "summary only" },
+					],
+				},
+			},
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		const hits = await client.searchMemory(REF, "", { allSessions: true });
+		expect(hits[0]).toMatchObject({ text: "The proposed skill is designed to...", fact: "Proposed skill: x - y" });
+		expect(hits[1]?.text).toBe("summary only");
+		expect(hits[1]?.fact).toBeUndefined();
+		restore();
+	});
+
 	test("search filters non-ready blocks, returns text + rel_score, and applies minScore", async () => {
 		const { calls, restore } = stubFetch({
 			"POST /users/incident-analyzer/sessions/t-1/memory/search": {
