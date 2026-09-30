@@ -1,9 +1,9 @@
 # Documentation Index
 
 > **Targets:** Bun 1.4.2+ | LangGraph | TypeScript 5.x | MCP SDK 1.30.0
-> **Last updated:** 2026-09-23
+> **Last updated:** 2026-09-30
 
-Project-specific documentation for the DevOps Incident Analyzer monorepo. This index covers architecture, configuration, deployment, development, and operations for a LangGraph supervisor agent that orchestrates seven MCP server sub-agents (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian, AWS) to correlate DevOps incidents across 210+ tools, plus a peer **elastic-iac** GitOps proposer agent (an 8th MCP server) for Elastic Cloud infrastructure changes and the **pi-fleet-console** agent (SIO-1655) that queries the live pi-coms account spokes.
+Project-specific documentation for the DevOps Incident Analyzer monorepo. This index covers architecture, configuration, deployment, development, and operations for a LangGraph supervisor agent that orchestrates seven MCP server sub-agents (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian, AWS) to correlate DevOps incidents across 210+ tools, plus three peer agents resolved through the same registry: the **elastic-iac** GitOps proposer for Elastic Cloud infrastructure changes (its own MCP server, :9086), the **landing-zone-terraform** evidence and review agent for the PVH AWS Landing Zone (SIO-1867, its own MCP server, :9088), and the **pi-fleet-console** agent (SIO-1655) that queries the live pi-coms account spokes.
 
 ---
 
@@ -31,6 +31,9 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | Ask the live fleet a question across accounts | [pi-fleet console graph](architecture/pi-fleet-third-graph.md) |
 | Add or modify MCP tools | [Adding MCP Tools](development/adding-mcp-tools.md) |
 | Understand action-driven tool filtering | [Action Tool Maps](development/action-tool-maps.md) |
+| See what a sub-agent's prompt, tool belt and loop guards contain | [Sub-Agent Context Assembly](architecture/sub-agent-context-assembly.md) |
+| Review, approve or promote what the agents learned | [Agent Memory: learning loop and promotion PR](architecture/agent-memory.md) |
+| Understand the pi verify and investigate cards | [pi-coms verification](architecture/pi-coms-verification.md) |
 | Configure environment variables | [Environment Variables](configuration/environment-variables.md) |
 | Run locally | [Local Development](deployment/local-development.md) |
 | Deploy to AgentCore | [AgentCore Deployment](deployment/agentcore-deployment.md) |
@@ -55,10 +58,14 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | [Resolve Identifiers](architecture/resolve-identifiers.md) | The deterministic `resolveIdentifiers` pre-fan-out node (SIO-1084): resolves the loose incident service to canonical per-datasource identifiers via per-datasource probes + KG-seeded candidates (R7, SIO-1101), so sub-agents query the right keys |
 | [Agent Memory](architecture/agent-memory.md) | Live-memory tier (SIO-938): what each agent saves to Couchbase Agent Memory and when — dailylog breadcrumbs as TTL'd conversational messages, key decisions as durable facts, semantic recall (rel_score-ranked) at bootstrap, queue-flush at teardown; service-side embeddings, sync-write freshness, created_at conflict resolution, health/503 resilience; user-per-agent / thread-per-session mapping |
 | [Gitagent Bridge](architecture/gitagent-bridge.md) | YAML-to-LangGraph adapter: manifest loading, model factory, skill and tool resolution |
-| [MCP Integration](architecture/mcp-integration.md) | 8 MCP server connections (7 datasource + elastic-iac), tool scoping, health monitoring, trace propagation |
-| [Elastic IaC GitOps Proposer](architecture/elastic-iac-proposer.md) | The natural-language change agent (peer to the incident-analyzer): 31-node GitOps proposer, `elastic-iac-mcp` (:9086), HITL plan-review, JSON-edit-via-GitLab-API; 17 config-edit workflows (version-upgrade / tier-resize / ilm-rollout / ilm-delete / topology / slo / alerting / dataview / cluster-default-edit / cluster-default-delete / cluster-settings-edit / space / security / fleet-integration / dashboard / index-template-create / ingest-pipeline-create / ingest-pipeline-edit) plus drift, synthetics-drift, and Fleet-upgrade CI sub-flows, with verbatim-prompt capture, knowledge-graph + agent-memory enrichment on the plan-review card. Agent proposes, CI + human dispose. |
+| [MCP Integration](architecture/mcp-integration.md) | 10 MCP server connections (7 datasource + elastic-iac + landing-zone-iac + the in-process knowledge-graph), tool scoping, health monitoring, trace propagation |
+| [Sub-Agent Context Assembly](architecture/sub-agent-context-assembly.md) | What a sub-agent prompt contains and deliberately excludes (SIO-1444), the tools bound outside the 25-tool belt (evidence index, sandboxed execution), the in-loop context controls, and the loop guards and forced write-up |
+| [pi-coms verification](architecture/pi-coms-verification.md) | SIO-1635: the `verify-with-pi` and `investigate-with-pi` action cards, hub selection per estate, and the structured verdict |
+| [Elastic IaC GitOps Proposer](architecture/elastic-iac-proposer.md) | The natural-language change agent (peer to the incident-analyzer): 38-node GitOps proposer, `elastic-iac-mcp` (:9086), HITL plan-review, JSON-edit-via-GitLab-API; 17 config-edit workflows (version-upgrade / tier-resize / ilm-rollout / ilm-delete / topology / slo / alerting / dataview / cluster-default-edit / cluster-default-delete / cluster-settings-edit / space / security / fleet-integration / dashboard / index-template-create / ingest-pipeline-create / ingest-pipeline-edit) plus drift, synthetics-drift, and Fleet-upgrade CI sub-flows, with verbatim-prompt capture, knowledge-graph + agent-memory enrichment on the plan-review card. Agent proposes, CI + human dispose. |
 | [PVH Landing Zone Terraform Agent](architecture/landing-zone-terraform-agent.md) | Separate evidence-first graph for PVH repository routing, standards reconciliation, risk gates, topology projection, Agent Memory, historical GitLab learning, and optional human-reviewed GitOps proposals. |
-| [Knowledge Graph](architecture/knowledge-graph.md) | Optional embedded entity+correlation graph (lbug/LadybugDB): store + three-layer IaC schema (incl. the `Prompt` node), the in-process MCP server (:9087) with curated `kg_*` tools + read-only Cypher, the 7 record/enrich pipeline nodes across both agents, gating, and the lbug exclusive-lock / teardown gotchas |
+| [Knowledge Graph](architecture/knowledge-graph.md) | Optional embedded entity+correlation graph (lbug/LadybugDB): store + three-layer IaC schema (incl. the `Prompt` node), the Landing Zone change-history and topology schema, the in-process MCP server (:9087) with curated `kg_*` and `kg_lz_*` tools + read-only Cypher, the record/enrich pipeline nodes, gating, and the lbug exclusive-lock / teardown gotchas |
+| [Memory Model Mapping](architecture/memory-model-mapping.md) | How gitagent's file and git-native memory lines up with the Couchbase Agent Memory `user -> session -> block` hierarchy |
+| [Kafka Provider Factory](architecture/kafka-provider-factory.md) | The single-interface pattern behind `KAFKA_PROVIDER`: local Kafka, AWS MSK and Confluent Cloud from one codebase, written to be portable to another repo |
 
 ### Configuration
 
@@ -74,6 +81,9 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | [Local Development](deployment/local-development.md) | Docker Compose setup, port mapping, hot reload configuration |
 | [AgentCore Deployment](deployment/agentcore-deployment.md) | AWS Bedrock AgentCore packaging, IAM policies, gateway targets |
 | [Docker Reference](deployment/docker-reference.md) | Dockerfile patterns, multi-stage builds, security practices |
+| [AgentCore + MSK (unauthenticated)](deployment/agentcore-msk-no-auth.md) | Deploying the Kafka MCP server to AgentCore against an MSK cluster without authentication; the default path (`MSK_AUTH_MODE=none`) |
+| [AgentCore + MSK (IAM auth)](deployment/agentcore-msk-setup.md) | The same deployment against an IAM-authenticated MSK cluster in a private VPC (SASL/OAUTHBEARER) |
+| [Kafka MCP to AgentCore: SigV4](deployment/kafka-agentcore-sigv4.md) | Network topology and the local SigV4 proxy that signs the AgentCore invoke request |
 
 ### Development
 
@@ -96,6 +106,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | [Troubleshooting](operations/troubleshooting.md) | Common issues, diagnostic commands, and resolution steps |
 | [OAuth Seeding](operations/oauth-seeding.md) | One-time OAuth token seeding for Atlassian and GitLab |
 | [Landing Zone Agent Runbook](operations/landing-zone-agent-runbook.md) | Safe bring-up, capability checks, write-mode enablement, historical import, privacy-safe telemetry, troubleshooting, and rollback. |
+| [Estate Watch: Periodic AWS Self-Check Strategy](operations/aws-periodic-self-check-strategy.md) | Operating doctrine for a read-only agent that verifies an AWS account on a schedule. The pi-coms adaptation is [Estate Watch](../packages/pi-coms/docs/architecture/estate-watch.md) |
 
 ### Runbooks
 
@@ -105,6 +116,18 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | [MCP AgentCore Image Deployment](runbooks/mcp-agentcore-image-deployment.md) | Deploying a new container image to the Kafka/AWS AgentCore runtimes: build, inspect, ECR push, config-preserving update, toolCount-canary verification, VPC networkModeConfig gotcha, rollback |
 | [MCP Tool Audit](runbooks/mcp-tool-audit-runbook.md) | Datasource-agnostic procedure for auditing an MCP server's tools against its upstream API (schema-vs-docs, action-map reachability, read-only coherence, structured error envelopes) |
 | [MCP Steering Audit](runbooks/mcp-steering-audit-runbook.md) | Datasource-agnostic procedure for auditing a sub-agent's steering (false-absence, pagination-truncation, and tool-selection gaps) via live verification |
+| [Fleet Agent Binary Upgrade](runbooks/fleet-agent-binary-upgrade.md) | Rolling a new Elastic Agent binary across a deployment's Fleet-enrolled agents through the elastic-iac agent, with a log of every apply run. (Elastic Fleet, not the pi-coms fleet.) |
+
+### Reference
+
+| Document | Description |
+|----------|-------------|
+| [DevOpsAgentReadOnly IAM](reference/devops-agent-readonly-iam.md) | The trust policy and both permissions policies of the read-only role deployed to every monitored AWS estate |
+| [Agent Memory API Reference](reference/agent-memory-api-reference.md) | Vendored from the Agent Memory service's OpenAPI spec (`reference/agent-memory-openapi.json`); do not edit by hand |
+| [Model Conformance Probes](reference/model-probes/claude-sonnet-5.md) | One committed `bun run model:probe` report per model in `reference/model-probes/` (SIO-1224); every declared model capability must be backed by one |
+| [Successful elastic-iac Prompts](reference/successful-iac-prompts.md) | Real prompts that produced an applied elastic-iac change |
+| [Drift Report Contract](elastic-iac-drift-report-contract.md) | The `drift-report.json` data contract between the IaC repository's drift-check pipeline and this agent |
+| [Code Review Bake-off](code-review-bakeoff.md) | Closed record of the Greptile and CodeRabbit evaluation. Not a log to append to |
 
 ---
 
@@ -150,3 +173,4 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | 2026-09-06 | pi-fleet Phase 3 (SIO-1651): the `pi-handoff` workflow registering the skillflow `graph` and `agent` step handlers (their first production wiring), a detached post-turn trigger, and verdicts recorded as structured fields only |
 | 2026-09-06 | pi-fleet Phase 2c (SIO-1655): the `graphFor(agentName)` registry replacing the two-agent assumption ([#697](https://github.com/zx8086/devops-incident-analyzer/pull/697)), then the **pi-fleet-console** third graph ([#698](https://github.com/zx8086/devops-incident-analyzer/pull/698)) -- separate in-process persona `agents/pi-fleet-console/`, five hub tools, and `wrapUntrusted`, the only path where a hub reply reaches a model. Added [pi-fleet console graph](architecture/pi-fleet-third-graph.md). |
 | 2026-09-06 | pi-coms capability flags default ON with kill-switch semantics and move into `PiComsCapabilitiesSchema` ([#699](https://github.com/zx8086/devops-incident-analyzer/pull/699)); availability still follows a configured hub. Corrected the stale `31-node` pipeline figure here and the `PI_COMS_INBOX_ENABLED` gate wording in system-overview. |
+| 2026-09-30 | docs sync for the SIO-1635..1896 window (SIO-1897), 393 commits reviewed against the code. **Fourth agent:** `landing-zone-terraform` (SIO-1867, 31-node graph, `landing-zone-iac-mcp` on :9088) added to system-overview, monorepo-structure, mcp-integration, mcp-server-configuration, frontend, troubleshooting and local-development; MCP connections 8 -> **10**. **Verified counts:** elastic-iac proposer 31 -> **38** nodes (the Renovate on-demand sub-flow, SIO-1471, documented for the first time), frontend 34 -> **42** components, 20 workspace packages, 72 actions across the seven tool YAMLs, couchbase 43 tools. **New reference material:** the ordered tool-budget cut and the Jev action selector in [action-tool-maps](development/action-tool-maps.md) (SIO-1781, 1839, 1862, 1767); loop guards, forced write-up, the AWS absence proof, the evidence index threshold and rolling cache points in [sub-agent-context-assembly](architecture/sub-agent-context-assembly.md) (SIO-1268, 1773, 1775, 1779, 1783, 1791); the promotion PR, thumbs feedback and per-thread recall in [agent-memory](architecture/agent-memory.md) (SIO-1888, 1890, 1896); `reflect:analyze` in [authoring-skills-and-runbooks](development/authoring-skills-and-runbooks.md) (SIO-1834, 1893); the Landing Zone schema and 11 `kg_lz_*` tools in [knowledge-graph](architecture/knowledge-graph.md); Archify diagrams, the API route table, the surface vocabulary and the learning review pane in [frontend](development/frontend.md) (SIO-1808..1812, 1876..1879, 1891); the couchbase read-only gate and Search tools, the Atlassian custom tools and the GitLab proxy caps in [mcp-integration](architecture/mcp-integration.md) (SIO-1109, 1802, 1806, 1813, 1822, 1823, 1844, 1854, 1863). **Corrected contradictions:** the fleet pane lists production hubs only (SIO-1696); `fetchFleetInbox` walks the incident window with a cursor and reads three monitor kinds (SIO-1825..1828); a `runbooks-konnect` category exists (SIO-1870); the Couchbase connection variables are `COUCHBASE_URL` / `COUCHBASE_USERNAME` / `COUCHBASE_PASSWORD` / `COUCHBASE_BUCKET`, not `CB_*`. **Environment variables:** a code-vs-docs sweep added about 110 variables to [environment-variables](configuration/environment-variables.md), including a pi-coms integration section. **Index:** added a Reference section and the sixteen docs this index did not link. The pi-coms package docs were synced in the same change (state checkpoint and restore, churn classification, email fan-out, `stored` mailbox status, schema-checked replies; see [pi-coms](../packages/pi-coms/docs/README.md)). |

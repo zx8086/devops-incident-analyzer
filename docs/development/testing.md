@@ -1,7 +1,7 @@
 # Testing Strategy
 
 > **Targets:** Bun 1.3.9+ | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-09-30
 
 Test organization, patterns, and execution across the DevOps Incident Analyzer monorepo. All tests use the Bun test runner (`bun:test`) with `describe`/`test`/`expect` and run alongside TypeScript type checking and Biome linting as quality gates.
 
@@ -33,8 +33,24 @@ bun run --filter @devops-agent/mcp-server-kafka test # Kafka MCP server only
 ```bash
 bun test packages/gitagent-bridge/src/index.test.ts
 bun test packages/shared/src/tracing/__tests__/langsmith.test.ts
-bun test packages/agent/src/validation.test.ts
+cd packages/agent && bun run test src/validation.test.ts   # agent and web: through the script, see below
 ```
+
+### Run the package script, not bare `bun test` (SIO-1795)
+
+For `packages/agent` and `apps/web`, always run the package's `test` script. It is not a synonym for `bun test`:
+
+| Package | `test` script | Why |
+|---|---|---|
+| `packages/agent` | `bun test --isolate` | `--isolate` gives every test file a fresh global and module registry |
+| `apps/web` | `bunx svelte-kit sync && bun test --isolate` | The same isolation, after generating the SvelteKit types |
+| `packages/pi-coms` | `bun run deps:monitor && bun test` | Installs the nested monitor dependencies first |
+
+Without `--isolate`, a `mock.module()` stub registered by one file leaks into every file that runs after it, and Bun takes the file order from the filesystem, so the damage differs per machine. Measured on one commit: bare `bun test` failed 24 tests in `packages/agent` and 17 plus 12 errors in `apps/web`, while `bun run test` was 0 and 0, which is what CI runs. "Passes alone, fails in the suite, green on CI" means the flag was dropped; do not go hunting for a polluting test.
+
+- A path filter keeps the flag: `cd packages/agent && bun run test src/iac`.
+- There is no `bunfig.toml` key for isolation, so it cannot be made the default for bare `bun test`.
+- `bun test` at the repo root can crash the Bun runner mid-suite. Run per package (`bun run --filter <pkg> test`, or `cd` into the package).
 
 ### Watch Mode
 
@@ -110,8 +126,9 @@ describe("manifest-loader", () => {
     const agent = loadAgent(AGENTS_DIR);
     expect(agent.manifest.name).toBe("incident-analyzer");
     expect(agent.manifest.version).toBe("0.1.0");
-    expect(agent.tools.length).toBe(6);
-    expect(agent.skills.size).toBe(3);
+    expect(agent.manifest.model?.preferred).toBe("claude-sonnet-5");
+    expect(agent.manifest.delegation?.mode).toBe("router");
+    expect(agent.manifest.compliance?.risk_tier).toBe("medium");
   });
 });
 ```
@@ -229,6 +246,18 @@ expect(response.isError).toBeFalsy();
 | Tool registration tests | Mock `KafkaService`, verify `server.tool()` calls |
 | End-to-end integration | Requires live MCP servers (CI only) |
 
+### No Paid or Live Calls From the Test Suite
+
+Bun sets `NODE_ENV=test` and auto-loads `.env`, so a developer's real keys are present during a test run. Three resolvers return nothing under `NODE_ENV=test`, which makes the features behind them self-skip in tests by construction:
+
+| Resolver | Guards |
+|---|---|
+| `resolveTypeSafeApiKey()` (`packages/agent/src/typesafe-client.ts`) | Every Jev seam in `packages/agent` (action selector, Atlassian rerank, learning gate). Added after a suite run was measured making real billable requests that only passed because the failure path falls back correctly (SIO-1837 follow-up). |
+| `resolveDecisionMetricsDbPath()` (`packages/shared/src/decision-metrics.ts`) | No fake rows in a developer's real decision-metrics database. |
+| `resolveToolCallMetricsDbPath()` | The same, for the MCP tool-call counters. |
+
+A test that needs one of these seams injects it (for example the `ask` dependency of `selectActions`) instead of setting the key.
+
 ### Environment Cleanup
 
 Tests that modify `process.env` must restore original values in `afterEach`. The shared tracing tests demonstrate this pattern by deleting all LangSmith-related env vars after each test.
@@ -274,9 +303,9 @@ bun run yaml:check
 This runs `yamllint` against the `agents/` directory. The gitagent-bridge test suite also validates that all YAML files parse correctly and conform to the expected schema:
 
 ```typescript
-test("loads all 6 tool definitions", () => {
+test("loads all 9 tool definitions", () => {
   const agent = loadAgent(AGENTS_DIR);
-  expect(agent.tools.length).toBe(6);
+  expect(agent.tools.length).toBe(9);
   const toolNames = agent.tools.map((t) => t.name);
   expect(toolNames).toContain("elastic-search-logs");
   expect(toolNames).toContain("kafka-introspect");
@@ -293,13 +322,19 @@ The npm scripts live in `packages/agent/package.json`; the day-to-day ones are *
 
 | Script | What it does |
 |--------|--------------|
-| `eval:agent` | End-to-end LangSmith `final_response` regression for the full 32-node incident graph (5 incident-shaped queries x evaluators: `datasources_covered`, `confidence_threshold`, `response_quality` LLM judge). `eval:precheck` sanity-checks infra first; `eval:upload-dataset` (re)uploads the dataset. |
+| `eval:agent` | End-to-end LangSmith `final_response` regression for the full 32-node incident graph (5 incident-shaped queries x evaluators: `datasources_covered`, `datasources_precision`, `confidence_threshold`, `response_quality` LLM judge). Experiment prefix `incident-analyzer-eval-<git-sha>`. `eval:precheck` sanity-checks infra first; `eval:upload-dataset` (re)uploads the dataset. `-- --agent landing-zone-terraform` switches it to the Landing Zone release gate (below). |
 | `eval:incident-replay` | Live-replay incident eval (SIO-1371/1372/1374/1378). Adds the tier-3 trajectory-grounded evaluators `runbook_selection_vs_usage` (deterministic) and `citation_grounding` (LLM judge) from SIO-1442. `--ticket DEVOPS-XXXX` (SIO-1454) scopes the run to a single dataset example. |
 | `eval:mcp-tool` | MCP tool-call correctness eval (SIO-1398): a LangSmith set auditing whether each datasource's tools are called correctly and return usable data. `--datasource <id>` scopes it. |
 | `eval:tool-probe` | Direct per-tool health probe -- calls each MCP tool and reports which return data vs. error. This is the tool-**health** measure; `eval:mcp-tool` only observes tools the agent chose to call. |
 | `eval:spec-audit` | Tier-1 static/semantic OKF spec audit (SIO-1440): grades the spec layer (agent.yaml + SOUL.md + RULES.md + `knowledge/`) for frontmatter validity, orphaned knowledge, RULES-vs-SOUL contradictions. |
 | `eval:single-agent-probe` | Tier-2 isolated single-agent probe (SIO-1441): runs one sub-agent against real MCP with **no `buildGraph`, no mocks**, driven by `PROBE_DATASOURCE` / `PROBE_SCENARIO`. |
 | `model:probe` | Model-conformance probe (SIO-1224), not a graph eval -- verifies a model's capability assumptions; committed reports live in [`docs/reference/model-probes/`](../reference/model-probes/). See the [Model Upgrade Checklist](./model-upgrade-checklist.md). |
+
+**Datasources actually queried, and precision (SIO-1694).** `datasources_covered` no longer scores the dispatch list alone. `targetDataSources` is written once by the entity extractor, while the correlation layer dispatches extra fetches that land only in `dataSourceResults`, so evidence the agent genuinely gathered was under-reported. The evaluator now unions the dispatch list with every datasource whose first attempt succeeded or whose retry recovered (`firstAttempts`, a projection that never ships tool payloads to LangSmith); a dispatch that returned an error and never recovered does not count. It remains binary recall: 1 only when no expected datasource is missing. Its companion `datasources_precision` is a separate key, `(queried - extra) / queried`, so over-fan-out (an unnecessary sub-agent run is not cheap) is visible without turning the recall score into an F-score and breaking comparability with historical runs. It is emitted only when the example declares `expectedDatasources` and at least one datasource was queried.
+
+**Landing Zone evals (SIO-1872).** `bun run eval:agent -- --agent landing-zone-terraform` runs the Landing Zone graph over the in-repo `LANDING_ZONE_DATASET` (`packages/agent/src/eval/landing-zone-dataset.ts`) with the deterministic evaluators in `landing-zone-evaluators.ts` (repository routing, citation coverage, source hierarchy, representative examples, uncertainty disclosure, answer usefulness, and the three safety checks: no apply, no default-branch write, change gate present). It requires `LANDING_ZONE_IAC_MCP_URL` and skips the incident precheck. It is a local release gate, not a LangSmith experiment: the script turns tracing off because Landing Zone evidence can contain private repository data, prints each failing key, and exits non-zero unless routing accuracy is at least 90%, safety compliance is 100% and answer usefulness is at least 90%. `--agent` accepts only `incident-analyzer` (the default) or `landing-zone-terraform`.
+
+**Composite tools in `eval:mcp-tool` (SIO-1866).** The `expected_tools_fired` evaluator scores required tool groups, each satisfied by any one of its listed tools. A group may also declare `anySubResourceOf`: it is then satisfied when a composite tool returned the same sub-resource (for example `gitlab_get_merge_request` with `include: ["pipelines"]` in place of the dedicated pipelines tool). The comment names such matches as `<sub-resource> via composite`. Only sub-resource key names are projected from the payload, never arguments or content.
 
 **OKF spec-audit tiers (SIO-1440/1441/1442/1444).** Four tiers grade the spec layer rather than the graph's answers: tier 1 = `eval:spec-audit` (static/semantic), tier 2 = `eval:single-agent-probe` (isolated live probe), tier 3 = the two trajectory evaluators inside `eval:incident-replay`, tier 4 = static checks in tier-1's CLI plus `bun test` (`okf-spec-audit.test.ts`).
 
@@ -325,3 +360,4 @@ The npm scripts live in `packages/agent/package.json`; the day-to-day ones are *
 | 2026-04-04 | Initial version |
 | 2026-05-09 | Added Agent Eval section (/682) |
 | 2026-08-08 | SIO-1378..1458 sync: rewrote the "Agent Eval" section into "Evals & quality harness" -- documented the full script table (`eval:agent` / `eval:incident-replay` / `eval:mcp-tool` / `eval:tool-probe` / `eval:spec-audit` / `eval:single-agent-probe` / `model:probe`, mirrored into root `package.json` via SIO-1458), the four OKF spec-audit tiers (SIO-1440/1441/1442/1444), sound-freeze `EVAL_FIXTURE_MODE` record/replay (SIO-1379), the `--ticket` scoping (SIO-1454), and the MCP tool-call SQLite counters (SIO-1400/1402). |
+| 2026-09-30 | SIO-1897 docs sync (SIO-1635..1896 window): added the rule that `packages/agent` and `apps/web` run through `bun run test` (`--isolate`), never bare `bun test` (SIO-1795); documented that the suite cannot call the paid TypeSafe API or write real metrics rows (`NODE_ENV=test` guards, SIO-1837 follow-up); eval: datasources actually queried plus `datasources_precision` (SIO-1694), Landing Zone release-gate evals via `--agent landing-zone-terraform` (SIO-1872), composite tools satisfying a required group (SIO-1866). |

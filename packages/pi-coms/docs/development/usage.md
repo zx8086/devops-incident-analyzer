@@ -7,6 +7,7 @@ Day-to-day operation: starting peers, connecting to the deployed hub, addressing
 | Need to... | Run |
 |------------|-----|
 | Two peers on one machine | `just coms-net-server`, then `just coms --name a --cname a` and `just coms --name b --cname b` |
+| Peers on other machines of one LAN | `PI_COMS_NET_AUTH_TOKEN=<token> just coms-net-server-lan` (binds `0.0.0.0`; the hub refuses a non-loopback bind without a token), then each client sets `PI_COMS_NET_SERVER_URL` and the same token |
 | Connect to the corp hub | SSM tunnel + token (see below) |
 | List every just recipe | `just` |
 
@@ -51,7 +52,12 @@ port; the local port is assigned per hub so several tunnels can be open at once:
 
 ```bash
 just hub-tunnel eu-shared-services-prd 8787
+just hub-tunnel eu-shared-services-prd --local-port 18787   # override the local port for this run
 ```
+
+`--local-port N` (or `--local-port=N`) replaces the per-hub local port for one
+invocation, for when the assigned one is taken. `just coms <selector>` looks
+for the tunnel on the manifest's port, so a console needs the default.
 
 To open a Pi console against a deployed hub rather than a local one, pass the
 same selector to `just coms` (it needs that hub's tunnel up):
@@ -75,6 +81,21 @@ each streaming that agent's live Pi screen. The stream is
 `herdr terminal session observe` on the host over SSM, so nothing typed in
 those panes reaches an agent, and the observers do not resize the agent's
 terminal. Ctrl-C in a pane ends only that observer.
+
+Each observer asks for the size of its own pane, read from `herdr pane layout`
+rather than the pty (a freshly split pane still reports a default size, which
+streamed 80 columns into wider panes; SIO-1764). Stale observers are cleaned
+up for you (SIO-1766): a launch first closes every pane in the workspace
+labelled with one of that hub's spoke names, so a second `--observe` does not
+stack a new column beside dead ones, and the recipe closes them again when the
+console exits. `scripts/fleet-observe.sh close <selector>` does the same by
+hand.
+
+A token lookup that fails for any reason other than a missing parameter now
+prints the real AWS error (SIO-1882): an expired SSO login or an AccessDenied
+reads as itself, with `aws sso login --profile <profile>` suggested, instead of
+as `no principal "<name>"`. That message is kept for the case where the
+parameter genuinely does not exist.
 
 Operator sessions load `AGENTS.md` from `packages/pi-coms/` (run Pi with that directory as cwd, which `just coms` does). That file is GENERATED from `agents/pi-fleet/` by the gitagent bridge (SIO-1649): edit the definition, then run `just sync-persona`; a bridge test pins the committed copy to the export. It carries the console scope
 and synthesis rules. Personal tokens come from the directory
@@ -110,6 +131,7 @@ ask monitor-eu-oit-dev to run-checks     # run the check families now
 ... suppressions                         # the suppression ledger
 ... suppress <pattern> | <reason>        # accept a known gap (LIKE pattern on dedup keys)
 ... unsuppress <pattern>                 # remove a ledger entry
+... checkpoint                           # back the monitor's state up to S3 now
 ```
 
 Its incident reports and daily digest go to the `ops` duty name (`PI_MONITOR_REPORT_TO`) with a long TTL: they wait in the hub mailbox and appear as quiet one-line notices when a session holding that name connects -- never as a model turn. A quiet day still produces the digest -- silence past a day means the monitor itself is down, and a `DEGRADED` digest header means some check families errored. Details: [Monitoring](../architecture/monitoring.md).

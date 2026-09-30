@@ -1,9 +1,9 @@
 # MCP Server Configuration
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-05-07
+> **Last updated:** 2026-09-30
 
-Deep dive into how each of the seven MCP servers is configured. All servers follow the same 4-pillar configuration pattern, but each has distinct schema shapes, authentication models, and feature gates. This document covers the pattern itself, then walks through each server's specifics.
+Deep dive into how each MCP server is configured: the seven incident-datasource servers, plus the two IaC servers (Elastic IaC and Landing Zone IaC) at the end. The seven datasource servers follow the same 4-pillar configuration pattern, but each has distinct schema shapes, authentication models, and feature gates; the two IaC servers use a single-file `config.ts` instead. This document covers the pattern itself, then walks through each server's specifics. The tenth connection, the in-process knowledge-graph server, is covered in [Knowledge Graph](../architecture/knowledge-graph.md).
 
 For all environment variable names and defaults, see [Environment Variables](environment-variables.md).
 
@@ -308,12 +308,16 @@ REST Proxy is a separate Confluent component from Connect / SR / ksqlDB. The `Re
 
 **Package:** `packages/mcp-server-couchbase`
 **Config directory:** `packages/mcp-server-couchbase/src/config/`
-**Tool count:** ~15
+**Tool count:** 43 (the entries in `src/__tests__/tools-list-snapshot.json`)
 
 ### Configuration Schema
 
 ```
 CouchbaseConfig
+  server:
+    readOnlyQueryMode: boolean   # READ_ONLY_QUERY_MODE, default true
+    maxQueryTimeout: number      # MCP_MAX_QUERY_TIMEOUT, default 30000
+    maxResultsPerQuery: number   # MCP_MAX_RESULTS_PER_QUERY, default 1000
   connection:
     hostname: string (required)
     username: string (required)
@@ -332,14 +336,31 @@ The Couchbase server connects to a single Capella cluster. Unlike the Elasticsea
 
 | Parameter | Source | Notes |
 |-----------|--------|-------|
-| Hostname | `CB_HOSTNAME` | Capella cluster endpoint (e.g., `cb.xxxxxxxx.cloud.couchbase.com`) |
-| Username | `CB_USERNAME` | Database user with appropriate read permissions |
-| Password | `CB_PASSWORD` | Database user password |
-| Bucket | `CB_BUCKET` | Optional default bucket; tools can override per-query |
+| Connection string | `COUCHBASE_URL` | Default `couchbase://localhost`. For Capella, `couchbases://` plus the cluster endpoint (e.g., `couchbases://cb.xxxxxxxx.cloud.couchbase.com`) |
+| Username | `COUCHBASE_USERNAME` | Database user with appropriate read permissions (default `Administrator`) |
+| Password | `COUCHBASE_PASSWORD` | Database user password |
+| Bucket | `COUCHBASE_BUCKET` | Default bucket (default `default`); tools can override per-query |
+| Scope | `COUCHBASE_SCOPE` | Default scope (default `_default`) |
+
+These are the names `src/config/envMapping.ts` maps. The server does not read `CB_HOSTNAME` / `CB_USERNAME` / `CB_PASSWORD` / `CB_BUCKET`, which earlier revisions of this page named and which `docker-compose.yml` and `scripts/agentcore/deploy.sh` still pass; with only those set it connects to the local defaults.
 
 ### Bucket Configuration
 
-The `CB_BUCKET` variable sets a default bucket for queries that do not specify one explicitly. Tools that require a bucket will use this default if the agent does not provide a bucket name in the tool call. If `CB_BUCKET` is not set and a tool does not specify a bucket, the tool returns an error prompting the agent to provide one.
+The `COUCHBASE_BUCKET` variable sets a default bucket for queries that do not specify one explicitly. Tools that require a bucket use this default if the agent does not provide a bucket name in the tool call. When the variable is unset the configured default is the bucket named `default`.
+
+### Read-Only Query Mode
+
+`READ_ONLY_QUERY_MODE` maps to `server.readOnlyQueryMode` (`src/config/envMapping.ts`) and defaults to `true` (`src/config/defaults.ts`). The loader parses it as a kill-switch (`parseReadOnlyMode` in `src/config/loader.ts`, SIO-1898), because the flag guards a safety control: only an explicit `false` or `0` (any case, surrounding whitespace ignored) turns it off. Unset, `true`, `1`, an empty value and anything unrecognised keep it on, and an unrecognised value logs a warning. The other booleans in this config (`DOCS_ENABLED`, `PLAYBOOKS_ENABLED`, `LOG_INCLUDE_METADATA`) are opt-in and still require the literal `true`. Set `READ_ONLY_QUERY_MODE=false` to allow writes.
+
+With the mode on:
+
+| Path | What is refused |
+|------|-----------------|
+| SQL++ (`capella_run_sql_plus_plus_query`) | Any statement whose leading keyword is not on the read allow-list in `src/lib/sqlppParser.ts` (`SELECT`, `FROM`, `WITH`, `INFER`, `EXPLAIN`, `ADVISE`, plus `BEGIN`/`START`/`COMMIT`/`ROLLBACK`/`SAVEPOINT`/`SET`). That covers DML, DDL, `PREPARE`/`EXECUTE`, and `FLUSH`/`TRUNCATE COLLECTION` (SIO-1813, SIO-1822). |
+| `capella_explain_sql_plus_plus_query` | `EXPLAIN` of a data or structure modification statement. |
+| KV documents (`capella_upsert_document_by_id`, `capella_delete_document_by_id`) | Every call, through the shared `readOnlyRefusal()` guard (SIO-1109). |
+
+Refusals are non-degrading `bad-input` envelopes naming the variable to change. The tool annotations for `capella_run_sql_plus_plus_query` are derived from the same setting. See [MCP Server Integration](../architecture/mcp-integration.md#couchbase-capella-mcp-43-tools) for how the gate reads a statement.
 
 ---
 
@@ -483,7 +504,7 @@ AtlassianConfig
     siteName: string (required)                # ATLASSIAN_SITE_NAME
     oauthCallbackPort: number                  # ATLASSIAN_OAUTH_CALLBACK_PORT
     readOnly: boolean                          # ATLASSIAN_READ_ONLY (default: true)
-    incidentProjects: string[]                 # ATLASSIAN_INCIDENT_PROJECTS (allowlist)
+    incidentProjects: string[]                 # ATLASSIAN_INCIDENT_PROJECTS (optional narrowing, default all)
     timeout: number                            # ATLASSIAN_TIMEOUT
   tracing:
     enabled: boolean
@@ -512,9 +533,9 @@ Tokens are refreshed automatically when they near expiration.
 
 `ATLASSIAN_READ_ONLY=true` (the default) disables all write operations: creating issues, transitioning issue states, adding comments, and editing Confluence pages. The incident analyzer's compliance layer depends on this flag being true.
 
-### Incident Project Allowlist
+### Incident Project Narrowing
 
-`ATLASSIAN_INCIDENT_PROJECTS` restricts queries to a comma-separated allowlist of Jira project keys (e.g., `INC,OPS`). When set, the server filters proxied tool responses so that issues from other projects do not leak into incident investigations. When unset, all projects visible to the OAuth token are available.
+`ATLASSIAN_INCIDENT_PROJECTS` is an optional comma-separated list of Jira project keys (e.g., `INC,OPS`). It defaults to empty, and empty means the custom incident tools (`findLinkedIncidents`, `getIncidentHistory`) search every project visible to the OAuth token. When set, those tools add `project in (...)` to their JQL. It is passed only to the custom tools (`src/server.ts`), so it does not filter the proxied `atlassian_*` tools. Configured keys that do not exist on the site are dropped with a warning in the tool output instead of silently matching nothing (SIO-1184).
 
 ### Hybrid Tool Architecture
 
@@ -587,7 +608,7 @@ For step-by-step setup of a new estate (IAM role, trust policy with ExternalId, 
 
 ## Transport Configuration
 
-All seven MCP servers share the same transport abstraction. The transport mode is set via `MCP_TRANSPORT` and `MCP_PORT` environment variables, which are common across all servers.
+The seven incident-datasource MCP servers share the same transport abstraction. The transport mode is set via `MCP_TRANSPORT` and `MCP_PORT` environment variables, which are common across those servers. The two IaC servers read their own prefixed variables instead (`ELASTIC_IAC_MCP_*`, `LANDING_ZONE_IAC_MCP_*`) and support only `http` and `stdio`; see their sections below.
 
 ### Transport Modes
 
@@ -665,6 +686,66 @@ Per project rules the schema carries no `.default()`; `loadConfig()` supplies ex
 
 ---
 
+## Landing Zone IaC MCP Server
+
+**Package:** `packages/mcp-server-landing-zone-iac`
+**Config file:** `packages/mcp-server-landing-zone-iac/src/config.ts` (single-file `loadConfig()` + Zod schema, like Elastic IaC)
+**Role:** `landing-zone-iac-mcp`
+**Port:** 9088 (`LANDING_ZONE_IAC_MCP_PORT`)
+**Transport:** `http` (default) or `stdio`
+**Tool count:** 10 read tools; 14 when governed writes are enabled (3 write tools + `lz_watch_pipeline`)
+
+This server backs the **Landing Zone Terraform agent**. It reads an approved catalog of Landing Zone repositories from GitLab and, when explicitly enabled, exposes a policy-gated GitOps proposal facade (branch, commit, merge request). There are no `apply` or `destroy` tools. The agent, its review gates and its rollout are in [Landing Zone Terraform Agent](../architecture/landing-zone-terraform-agent.md) and the [Landing Zone agent runbook](../operations/landing-zone-agent-runbook.md).
+
+### Configuration Schema
+
+```
+Config
+  transport:
+    mode: "http" | "stdio"      # LANDING_ZONE_IAC_MCP_TRANSPORT (http)
+    port: number                # LANDING_ZONE_IAC_MCP_PORT (9088)
+    host: string                # LANDING_ZONE_IAC_MCP_HOST (0.0.0.0)
+    path: string                # LANDING_ZONE_IAC_MCP_PATH (/mcp)
+  gitlab:
+    baseUrl: string             # GITLAB_BASE_URL (https://gitlab.com)
+    token?: string              # GITLAB_PERSONAL_ACCESS_TOKEN (the READ credential)
+    timeoutMs: number           # LANDING_ZONE_IAC_GITLAB_TIMEOUT_MS (30000)
+    maxResponseBytes: number    # LANDING_ZONE_IAC_MAX_RESPONSE_BYTES (200000; 1024 to 2000000)
+  write:
+    enabled: boolean            # LANDING_ZONE_WRITE_ENABLED, true only for the literal "true"
+    token?: string              # LANDING_ZONE_GITLAB_WRITE_TOKEN
+    reviewSecret?: string       # LANDING_ZONE_WRITE_REVIEW_SECRET (32+ chars)
+    allowedProjects: string[]   # LANDING_ZONE_WRITE_PROJECTS (comma-separated)
+    allowedPathPrefixes: {project: string[]}  # LANDING_ZONE_WRITE_PATHS (JSON object)
+    backendProjects: string[]   # LANDING_ZONE_WRITE_BACKEND_PROJECTS (comma-separated)
+```
+
+The schema carries no `.default()`; `loadConfig()` supplies the env fallbacks shown in parentheses.
+
+### Tool families
+
+| Family | Tools | Registered |
+|--------|-------|------------|
+| Read (10) | `lz_list_repositories`, `lz_read_repository_files`, `lz_find_representative_examples`, `lz_list_open_changes`, `lz_list_historical_merge_requests`, `lz_read_merge_request`, `lz_list_merge_request_pipelines`, `lz_list_project_deployments`, `lz_read_pipeline_plan`, `lz_extract_terraform_topology` | Always. |
+| Governed write (3) | `lz_create_branch`, `lz_commit_allowed_files`, `lz_open_merge_request` | Only with `LANDING_ZONE_WRITE_ENABLED=true`. |
+| Pipeline watch (1) | `lz_watch_pipeline` | With the governed writes. Read-only: it observes existing merge-request pipelines and never triggers CI. |
+
+### Write gating
+
+Writes are opt-in: `write.enabled` is true only when `LANDING_ZONE_WRITE_ENABLED` is exactly `true` (unlike the agent's capability flags, which default ON). With it off, the four gated tools are not registered at all, so they are absent from `tools/list`.
+
+Turning it on makes the config schema enforce the whole write policy at boot (`superRefine` in `config.ts`); the server does not start with a partial one:
+
+- a write token is set, and it differs from the read credential;
+- a review-signing secret of at least 32 characters is set, and it differs from the write token;
+- `LANDING_ZONE_WRITE_PROJECTS` names at least one project;
+- every writable project has at least one allowed path prefix, and prefixes are relative (no leading `/`, no `..` segment);
+- every backend project is also write-allowlisted.
+
+At call time `assertWriteContext` in `tools/write.ts` additionally requires a review token that matches an HMAC of the reviewed manifest, a base SHA that is still the default branch head, and a target branch in the `agent/landing-zone/` namespace that is not the default branch.
+
+---
+
 ## See Also
 
 - [Environment Variables](environment-variables.md) -- complete variable listing with defaults
@@ -682,3 +763,4 @@ Per project rules the schema carries no `.default()`; `loadConfig()` supplies ex
 | 2026-05-10 | documented `elasticsearch_search` per-call `TransportRequestOptions` (helper `searchRequestOptions.ts`, shared `requestTimeout` cap raised to 120 000 ms) and Kafka `Admin` singleton lifecycle (one cached `Admin` per process, `KAFKA_TOOL_TIMEOUT_MS` replacing the dead `requestTimeout` knob). |
 | 2026-05-28 | docs drift sweep: added AWS MCP server section ( multi-estate via cross-account `AssumeRole`, `aws_list_estates`, ~40 read-only tools, AgentCore SigV4 proxy on port 3001); expanded Elastic Cloud + Billing section from 7 to 16 tools (SIO-822–826 added `get_account`, `get_es_resource`, `cancel_pending_plan`, `list_hardware_profiles`, `get_hardware_profile`, `simulate_hardware_profile_change` with `rate_source_confidence`, `list_instances`, `get_instance_items`, `get_instance_charts`); refreshed Elastic tool count from ~84 to ~93. |
 | 2026-06-02 | Added the Elastic IaC MCP server section (:9086, role `elastic-iac-mcp`, single-file `config.ts`, 23 read/plan/branch-only tools across terraform/git/gitlab/elastic). |
+| 2026-09-30 | SIO-1897 docs sync (SIO-1635..1896 window): intro and transport section now distinguish the seven datasource servers from the two IaC servers; Couchbase tool count corrected from ~15 to 43 and `READ_ONLY_QUERY_MODE` documented with what it refuses (SIO-1109, SIO-1813, SIO-1822); `ATLASSIAN_INCIDENT_PROJECTS` described as optional narrowing of the custom tools, not a proxied-tool allowlist (SIO-1184); new Landing Zone IaC MCP server section (:9088, role `landing-zone-iac-mcp`, 10 read tools, 4 gated tools, write policy). |

@@ -20,12 +20,16 @@ remove an entry when the underlying behavior changes.
   `touch /home/piagent/.pi-agent-reload && systemctl restart pi-agent`.
   Typical use: `export PI_COMS_NET_MUTE_SENDERS='monitor-*'` to stop the
   monitor waking one account agent (SIO-1673).
-- The fleet model (`eu.anthropic.claude-sonnet-5`) has a 1,000,000-token
-  window and Pi only auto-compacts above `contextWindow - reserveTokens`
-  (16,384 by default), i.e. at 98.4%. A spoke parked at 97-98% is normal
-  Pi behaviour, not a wedge; the extension's token-based compaction
-  (`PI_COMS_NET_COMPACT_ABOVE_TOKENS`) is what keeps sessions small. The
-  settings-file alternative (`~/.pi/agent/settings.json`,
+- There is no single fleet model: `pi_model` is per spoke in
+  `deploy/fleet.yaml`, falling back to `defaults.pi_model` (SIO-1743), so
+  everything below is per model. Pi only auto-compacts above
+  `contextWindow - reserveTokens` (16,384 by default). On a spoke running
+  `eu.anthropic.claude-sonnet-5`, which has a 1,000,000-token window, that
+  is 98.4%, so a spoke parked at 97-98% is normal Pi behaviour, not a
+  wedge; on a model with a smaller window the same reserve is a lower
+  percentage. The extension's token-based compaction
+  (`PI_COMS_NET_COMPACT_ABOVE_TOKENS`) is what keeps sessions small on
+  either. The settings-file alternative (`~/.pi/agent/settings.json`,
   `compaction.reserveTokens`) is not written by the bootstrap.
 - The hub mailbox lives on a dedicated EBS volume (`<prefix>-hub-mailbox`,
   `prevent_destroy`) mounted at `/home/comshub/.pi/coms-net`. Replacing the

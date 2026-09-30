@@ -2,7 +2,7 @@
 
 **Scope:** Deploy a new container image to an existing Bedrock AgentCore MCP runtime (image swap only — estates, env vars, and network config are preserved). Covers the Kafka and AWS runtimes; the procedure is identical except for the per-runtime values below.
 
-**Last validated:** 2026-08-07 — kafka v17 -> v18 and aws v14 -> v15 deploys (SIO-1420/1421/1422/1423), following the 2026-08-06 kafka v14 -> v16 / aws v11 -> v13 deploy (SIO-1400/1402/1407), the 2026-07-19 kafka v11 -> v12 / aws v9 -> v10 deploy (SIO-1161), and the SIO-710 hotfix deploy (v8 -> v10) that originated this runbook.
+**Last validated:** 2026-09-17, the aws v15 -> v16 deploy (SIO-1774 via SIO-1786; kafka not redeployed), following the 2026-08-07 kafka v17 -> v18 and aws v14 -> v15 deploys (SIO-1420/1421/1422/1423), the 2026-08-06 kafka v14 -> v16 / aws v11 -> v13 deploy (SIO-1400/1402/1407), the 2026-07-19 kafka v11 -> v12 / aws v9 -> v10 deploy (SIO-1161), and the SIO-710 hotfix deploy (v8 -> v10) that originated this runbook.
 
 ---
 

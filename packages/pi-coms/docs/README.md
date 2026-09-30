@@ -10,6 +10,9 @@ Project-specific documentation for pi-coms: peer-to-peer messaging between Pi Co
 | See how messages flow | [Communication](architecture/communication.md) |
 | Trace ports, discovery, TLS | [Networking](architecture/networking.md) |
 | Understand the AWS monitor and mailbox | [Monitoring](architecture/monitoring.md) |
+| Keep monitor state across an instance replacement | [State checkpoint and restore](architecture/monitoring.md#state-checkpoint-and-restore-sio-1745) |
+| Separate autoscaler churn from real tagging drift | [Churn classification](architecture/monitoring.md#churn-classification-sio-1868) |
+| Turn spoke diagnoses into reviewed runbook candidates | [Fleet harvest](architecture/monitoring.md#harvesting-diagnoses-into-runbook-candidates-sio-1892) |
 | See why the monitor checks what it checks | [Estate Watch](architecture/estate-watch.md) |
 | Review trust boundaries and IAM | [Security Model](security/security-model.md) |
 | Deploy the hub or an AWS agent | [Deployment](deployment/deployment.md) |
@@ -28,7 +31,7 @@ Project-specific documentation for pi-coms: peer-to-peer messaging between Pi Co
 | [overview.md](architecture/overview.md) | Components, design principles, and the two transports |
 | [communication.md](architecture/communication.md) | Tool surface, message lifecycle, auto-reply, broadcast, safety rails |
 | [networking.md](architecture/networking.md) | Listeners, ports, discovery files, SSE channel, end-to-end wire path |
-| [monitoring.md](architecture/monitoring.md) | Per-account AWS monitor, hub mailbox (store-and-forward), checks, suppression ledger, reports |
+| [monitoring.md](architecture/monitoring.md) | Per-account AWS monitor, hub mailbox (store-and-forward), checks, suppression ledger and committed manifest, churn classification, state checkpoint and restore, fleet harvest, reports and the email fan-out |
 | [estate-watch.md](architecture/estate-watch.md) | The periodic-watch doctrine the monitor implements: check ladder, memory, field rules |
 
 ### Security

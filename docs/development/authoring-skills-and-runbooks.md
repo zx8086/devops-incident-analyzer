@@ -1,7 +1,7 @@
 # Authoring Skills and Runbooks
 
 > **Targets:** Gitagent 0.1 | Bun 1.3.9+ | DevOps Incident Analyzer orchestrator
-> **Last updated:** 2026-08-08
+> **Last updated:** 2026-09-30
 
 The incident analyzer's orchestrator agent reasons with two kinds of Markdown content that are loaded into its system prompt at startup: **skills** (multi-step procedures the agent follows) and **knowledge entries** (reference material the agent consults, of which **runbooks** are the most common). This guide explains when to author each, the file conventions, the activation flow, and the known footguns.
 
@@ -71,6 +71,19 @@ agents/incident-analyzer/skills/
 ```
 
 The directory name **is** the skill name. It must be unique and match exactly what you will list in `agent.yaml`.
+
+The tree above is the orchestrator's. The same layout and the same spec gate apply wherever an agent keeps skills; each is activated through that agent's own `agent.yaml`:
+
+| Directory | Owner | Loaded |
+|---|---|---|
+| `agents/incident-analyzer/skills/` | The incident-analyzer orchestrator | In-process |
+| `agents/incident-analyzer/agents/<sub-agent>/skills/` | One specialist sub-agent | In-process, every skill body on every sub-agent turn |
+| `agents/elastic-iac/skills/` | The Elastic IaC proposer (config-edit procedures such as `version-upgrade`, `resize-tier`, `open-mr`, plus `search-memory` and `query-knowledge-graph`) | In-process |
+| `agents/landing-zone-terraform/skills/` | The Landing Zone agent (`open-mr`, `search-memory`, `query-knowledge-graph`) | In-process |
+| `agents/shared/skills/` | Every agent (`cite-sources`); a local skill of the same name shadows the shared one | In-process |
+| `agents/pi-fleet/agents/aws-spoke/skills/` | The pi-fleet AWS spoke persona: `verify-incident-report` plus the three SIO-1725 AWS investigation skills `paginate-before-concluding`, `trace-network-path` and `scope-cloudwatch-logs` | **Not in-process.** Exported into the fleet bundle as a Pi package by `packages/gitagent-bridge/src/pi-package-export.ts` and read by Pi on the spoke host |
+
+Spoke skills are written for a different runtime: the spoke works through the AWS CLI, not this repo's MCP tools, and the exporter is allowlist-only (hand-authored skills only; learned skills are never exported, and any 12-digit account id refuses the export). A change to a spoke skill reaches a spoke only when the fleet bundle is republished, see `packages/pi-coms/docs/deployment/deployment.md`.
 
 ### Step 2: Write SKILL.md
 
@@ -161,26 +174,52 @@ per-file manifest entry:
 
 ```text
 agents/incident-analyzer/knowledge/
-  index.yaml
+  index.yaml                 <-- category registry
+  index.md                   <-- OKF bundle root
   general/
-    runbooks/
+    runbooks/                (6)
       code-change-correlation.md
+      document-processing-failure.md
+      entity-not-found.md
+      external-system-integration-failure.md
       mcp-tool-audit.md
+      reference-data-gap.md
     systems-map/
+      service-dependencies.md
     slo-policies/
-  kafka/
-    runbooks/
-      kafka-consumer-lag.md
-  elastic/
-    runbooks/
-      high-error-rate.md
-  couchbase/
-    runbooks/
-      database-slow-queries.md
+      api-latency-slo.md
   aws/
-    runbooks/
+    runbooks/                (10)
+      aws-alb-target-unhealthy.md
+      aws-asg-scaling-failure.md
+      aws-cloudwatch-alarm-triage.md
+      aws-ecs-task-failures.md
+      aws-iam-permission-troubleshooting.md
+      aws-infrastructure-degradation.md
+      aws-msk-broker-unreachable.md
+      aws-msk-consumer-lag.md
+      aws-sqs-dlq-backlog.md
+      msk-iam-permissions.md
       my-new-pattern.md      <-- your new runbook, if AWS-specific
+  kafka/
+    runbooks/                (2)
+      kafka-consumer-exception-dlq.md
+      kafka-consumer-lag.md
+  couchbase/
+    runbooks/                (3)
+      couchbase-connectivity-timeout.md
+      couchbase-index-degradation.md
+      database-slow-queries.md
+  elastic/
+    runbooks/                (2)
+      high-error-rate.md
+      throughput-spike-log-volume.md
+  konnect/
+    runbooks/                (1)
+      gateway-5xx-upstream.md
 ```
+
+That is 24 runbooks across six registered `runbooks-*` categories as of 2026-09-30 (nine of them written in SIO-1870, which also added the `runbooks-konnect` category). GitLab and Atlassian have no runbook directory.
 
 The loader walks every `.md` file (excluding `.gitkeep`) in each directory registered under
 `knowledge/index.yaml`. Each `<datasource>/runbooks/` directory is its own registered
@@ -206,7 +245,7 @@ Two things that surprise people here:
 
 ### Step 2: Write the runbook
 
-Follow the conventions of the three existing runbooks:
+Follow the conventions of the existing runbooks:
 
 ```markdown
 # Runbook: <Short Pattern Name>
@@ -237,7 +276,7 @@ Runbooks are pure prose read by the LLM. There is no schema enforcement on their
 
 **Lifecycle fields gate selection, not just honesty (SIO-1287/1289).** The `status` and `stale_after` frontmatter fields are threaded into the runbook selector (`manifest-loader.ts`): a runbook with `status: deprecated`, or whose `stale_after` date is in the past, is treated as a "do not put in the prompt" signal -- it is excluded from selection rather than merely flagged. Set `status: stable` on a runbook you want selectable; use `draft` while authoring and `deprecated` to retire one without deleting the file.
 
-**OKF bundle roots (SIO-1290).** Each agent's `knowledge/` directory carries an OKF bundle-root file `knowledge/index.md` with an `okf_version:` header (alongside the `knowledge/index.yaml` category registry). Both the incident-analyzer and elastic-iac knowledge bundles have one; leave the `okf_version` in place when adding categories.
+**OKF bundle roots (SIO-1290).** Each agent's `knowledge/` directory carries an OKF bundle-root file `knowledge/index.md` with an `okf_version:` header (alongside the `knowledge/index.yaml` category registry). The incident-analyzer, elastic-iac and landing-zone-terraform knowledge bundles each have one; leave the `okf_version` in place when adding categories.
 
 #### Conventions worth stealing (SIO-1347, guidance only)
 
@@ -328,20 +367,64 @@ Scenario: you want the orchestrator to emit a post-incident blameless summary af
 
 Scenario: a new failure pattern where Konnect upstream timeouts correlate with Kafka producer throttling.
 
-1. No `runbooks-konnect` category exists yet (Konnect has zero runbooks today), so first
-   add one to `agents/incident-analyzer/knowledge/index.yaml`:
-   ```yaml
-   runbooks-konnect:
-     path: konnect/runbooks/
-     description: Kong Konnect operational runbooks
-   ```
-2. Create `agents/incident-analyzer/knowledge/konnect/runbooks/konnect-upstream-timeout.md`.
+1. Check `agents/incident-analyzer/knowledge/index.yaml` for the datasource's category. Konnect
+   has one (`runbooks-konnect`, path `konnect/runbooks/`, added with `gateway-5xx-upstream.md`
+   in SIO-1870), so there is nothing to register.
+2. Check the existing file first: if `gateway-5xx-upstream.md` already covers the pattern,
+   extend it instead of adding a near-duplicate that competes with it in the selector.
+   Otherwise create `agents/incident-analyzer/knowledge/konnect/runbooks/konnect-upstream-timeout.md`.
 3. Write "When to use", "Identification", "Drill-down", "Cross-datasource correlation", and "Remediation hints" sections. Reference real tool names -- double-check against `agents/incident-analyzer/tools/*.yaml`.
 4. `bun run yaml:check && bun run typecheck && bun run lint`.
 5. Submit an incident query matching the new pattern and verify the aggregator's correlation block cites the runbook.
 
-If the datasource already has a `runbooks-<datasource>` category (e.g. adding another
-AWS runbook), skip step 1 -- drop the file directly into the existing subfolder.
+**When the datasource has no category yet.** The registered runbook categories today are
+`runbooks-general`, `runbooks-aws`, `runbooks-kafka`, `runbooks-couchbase`, `runbooks-elastic`
+and `runbooks-konnect`. GitLab and Atlassian have none, so a first GitLab runbook needs a
+step 0: create the directory and add the category to `categories:` in `index.yaml` before
+dropping the file in (the walk only reads directories a category points at):
+
+```yaml
+runbooks-gitlab:
+  path: gitlab/runbooks/
+  description: GitLab operational runbooks (pipeline failures, deploy correlation)
+```
+
+The name must be `runbooks` or start with `runbooks-` to be treated as a runbook category
+(`isRunbookCategory()`, see Step 1 above).
+
+---
+
+## Reflection: finding what to author next (SIO-1834, SIO-1893)
+
+Skills and runbooks are usually written after an incident. `reflect:analyze` is the other source: it reads a window of past runs and reports where the agent repeatedly fell short, with evidence, so a human can decide what to write.
+
+```bash
+bun run --filter @devops-agent/agent reflect:analyze -- --hours 168 [--limit 200] [--emit-candidates drafts.json]
+```
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `--hours <n>` | `168` | Size of the window of runs to read. Must be a positive integer; a bare flag exits 2 instead of silently analysing a different window. |
+| `--limit <n>` | `200` | Maximum sessions read from the window. |
+| `--emit-candidates <path>` | off | Also write learning-candidate drafts. A relative path resolves into the report directory. |
+
+The pipeline is deterministic, with no LLM call (`packages/agent/src/reflect/`):
+
+1. **Adapter** (`adapter-langsmith.ts`): LangSmith traces become raw sessions. This repo stores no run transcripts locally, so LangSmith (`LANGSMITH_PROJECT`) is the only place a past turn survives.
+2. **Normalize** (`normalize.ts`): adds message indexes, clips bulky parts and PII-redacts every excerpt that can reach a report.
+3. **Scan** (`scan.ts`): one session becomes signals. Each signal carries a message index and an excerpt so a proposal can quote instead of assert. Suspects are datasources, not skill names: a trace carries no per-skill signal.
+4. **Aggregate and anchors** (`aggregate.ts`, `anchors.ts`): signals are grouped and ranked by recurrence across distinct sessions, not by volume. A gap is acted on only when seen in at least 2 sessions (`MIN_RECURRENCE`). Cross-session retries (a new session whose opener overlaps at least half of an earlier session's request, within 48 hours) are detected here. The output includes portfolio moves (`create`, `merge`, `split`, `delete`), which are hints for the reader, not verdicts.
+5. **Report and gate** (`report.ts`, `check-analysis.ts`): writes `<date>-analysis.json` and a markdown rendering of it to `experiments/reflect/` at the workspace root, then lints the analysis. Exit code 0 is clean, 1 means the report asserts something its evidence does not support, 2 is a usage error.
+
+`experiments/reflect/` is gitignored on purpose: findings quote real tool errors, and the redactor keeps hostnames, IPs and account ids (they are diagnostic data), so a report is never committable in this public repository. Treat every finding as a lead to verify.
+
+**From a finding to a candidate (SIO-1893).** `--emit-candidates` turns the analysis's `create` portfolio items into `kind:skill` candidate drafts (source `reflect`, evidence taken from the finding's excerpts) in the same file shape the fleet harvest produces. A `create` item whose sessions also carry a negative user reaction is filed as rejected with `task_success` 0, never as a live candidate. The drafts are not live: feed them to the ingest step, which applies the lesson-quality rubric, the Jev gate and dedupe, and records the survivors as candidate facts for the review pane:
+
+```bash
+bun run --filter @devops-agent/agent learn:ingest -- --file <path-to-drafts.json> --agent incident-analyzer [--dry-run]
+```
+
+Approval in the review pane then attempts the promotion PR (it is skipped unless `MEMORY_PR_ENABLED` is set), and merge is the only activation. The candidate lifecycle, the review rules and the promotion PR are documented in [Agent Memory](../architecture/agent-memory.md#promotion-pr-sio-1896). A promoted skill still has to pass the spec gate above, and a promoted runbook still has to pass the tool-name validator.
 
 ---
 
@@ -399,5 +482,6 @@ and query cookbooks. It is a good source when authoring AWS runbooks or extendin
 
 | Date | Change |
 |------|--------|
+| 2026-09-30 | SIO-1897 docs sync (SIO-1635..1896 window): runbook tree refreshed to the real layout (24 runbooks, six `runbooks-*` categories); the "no `runbooks-konnect` category" walkthrough rewritten now that SIO-1870 added it, with GitLab as the new-category example; listed where the other agents keep skills (elastic-iac, landing-zone-terraform, shared, and the exported aws-spoke skills from SIO-1725); new section on the reflection workflow (`reflect:analyze`, SIO-1834, and `--emit-candidates`, SIO-1893). |
 | 2026-09-05 | SIO-1640: added "External reference sources" (porting rules for the AWS Agent Toolkit: port not wrap, attribution line, em-dash and tool-name rewrite, RULES.md budget, authoring-time lookup via the managed AWS MCP `retrieve_skill`). |
 | 2026-08-08 | SIO-1282..1434 OKF sync: validator path corrected (`runbook-validator.test.ts` -> extracted `runbook-validator.ts`, SIO-1288); documented the `tools:` frontmatter tool declaration (SIO-1289), which is authoritative when present (the prose tail section becomes optional and is ignored; the tail is required only when frontmatter is absent); documented lifecycle-aware selection (`status: deprecated` / past `stale_after` excludes a runbook from the prompt, SIO-1287/1289) and the OKF `knowledge/index.md` bundle roots with `okf_version` (SIO-1290). Per-datasource runbook bundles (SIO-1432/1433/1434) were already covered. |

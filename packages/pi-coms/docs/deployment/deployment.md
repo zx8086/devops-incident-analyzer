@@ -49,7 +49,7 @@ rendered root by hand: change the manifest or `scripts/fleet/render.ts`.
 | `just fleet plan\|apply [names] [--yes]` | `terraform init -backend-config=backend.hcl` (migrating a local `terraform.tfstate` into the bucket on first use), then plan or apply. Production spokes apply only with `--yes`. |
 | `just fleet publish [--hub <hub>]` | `deploy/publish-fleet.sh` per hub bucket (persona export included); every hub when none is named. Builds from `git archive HEAD` and refuses a dirty tree under `packages/pi-coms`, `agents/` or `packages/gitagent-bridge`. |
 | `just fleet rollout [names] [--token-changed] [--operator <principal>]` | Run Command `pi-coms-update` per host (it writes the reload sentinel), or the bootstrap re-run after a token change; then polls `GET /v1/agents` through an SSM port-forward to that environment's hub until agent and monitor are online with the persona version. Needs an operator token for the hub: either the env var named by that hub's `token_env` (SIO-1666), or `--operator <principal>` / `PI_COMS_OPERATOR`, which reads `/pi-coms/auth/<principal>` from the hub account (SIO-1716). Name your OWN principal -- the hub authenticates by token hash and logs it, so a shared one loses attribution and makes revocation all-or-nothing. The token is resolved for every target hub BEFORE any `pi-coms-update` is dispatched, so a missing one sends nothing. |
-| `just fleet status [names]` | Credentials plus hub registration per spoke. |
+| `just fleet status [names]` | Credentials plus hub registration per spoke; each registered agent's line ends with its `purpose`, which carries the `persona=pi-fleet-vX.Y.Z` the spoke actually advertises (SIO-1732). Then one `config` line per spoke (SIO-1747): it reads the KEY NAMES (never values) of `~/.coms-env.local` over SSM and prints `ok`, `ok (per-host: ...)`, or `DRIFT n key(s) shadowed by .coms-env.local: ...` when the file sets a key the bootstrap also writes, since the unit sources that file second and it silently outranks the manifest. Report only; nothing is changed on the host. |
 | `just fleet deploy [names] [--yes]` | preflight, tokens ensure, render, apply, publish per hub of the selected spokes, rollout, status. A spoke that has never had `tokens ensure` fails the preflight step on `hub principal`, so run `just fleet tokens ensure <name>` once before the first `deploy` (SIO-1685). |
 
 Environments never cross: every spoke declares `env`, a hub exists per
@@ -57,6 +57,32 @@ environment (dev in eu-shared-services-dev, prd in eu-shared-services-prd),
 tokens are minted in the spoke's own hub directory, the bundle is read from the
 own environment's bucket, and the manifest loader refuses a CIDR that appears
 under two environments.
+
+`rollout` and `status` reach the hub through an SSM port-forward the CLI opens
+itself (`scripts/fleet/tunnel.ts`, SIO-1792). A hub already answering `/health`
+on that hub's `local_port` is the operator's own `just hub-tunnel`: the CLI
+uses it and leaves it open. Otherwise it spawns the tunnel, probes `/health`
+up to 30 times with a 2 s timeout per attempt, and fails with a named error
+(`tunnel to <hub> exited with code N before the hub answered` or `did not
+answer /health after 30 attempts`) instead of running against a tunnel that
+never opened. On exit, and on SIGINT or SIGTERM, it signals the tunnel's whole
+process group, so the `session-manager-plugin` child goes down with `aws`
+instead of staying behind holding the local port.
+
+`persona.min_version` in the manifest is a floor, not an exact version
+(SIO-1728): rollout compares the `persona=pi-fleet-vX.Y.Z` each agent
+advertises as a semver and accepts anything at or above the pin. An agent
+advertising no persona, or a malformed pin, still fails.
+
+`org_tags` (under `defaults`, overridable key by key per spoke) carries the
+tags the organization's required-tags Config rule checks (SIO-1759). Values
+are org-specific and stay in the gitignored manifest. Render writes them into
+each root's tfvars and the provider's `default_tags` merges them under the
+pi-coms markers, so `Project`, `ManagedBy`, `Stack`, `Environment`,
+`ComsProject` and `Name` are refused as keys. `default_tags` never reaches the
+primary ENI and reaches the root volume only at creation, so the agent module
+stamps both explicitly with `aws_ec2_tag`, and the hub module does the same
+for the hub host (SIO-1765).
 
 Production accounts already carry `DevOpsAgentReadOnly` for the incident
 analyzer. Their spokes use `readonly_role: adopt`: the rendered root imports
@@ -208,8 +234,29 @@ ExternalId. Named dev extensions live in the inline
 and history reads, log-content reads, certificate reads, Amplify build
 history reads, and an explicit
 Deny on secret values and data-plane gets. Models run on Amazon Bedrock
-(`eu.anthropic.claude-sonnet-5`) under the same assumed role -- no API keys
-exist anywhere in the system. Details: [Security Model](../security/security-model.md).
+under the same assumed role -- no API keys exist anywhere in the system.
+Details: [Security Model](../security/security-model.md).
+
+There is no single fleet model. The model is per spoke: `pi_model` on a spoke
+in `deploy/fleet.yaml`, falling back to `defaults.pi_model` (the example
+manifest shows `eu.anthropic.claude-sonnet-5` as the default and
+`eu.anthropic.claude-haiku-4-5-20251001-v1:0` as a per-spoke override). Which
+spoke runs which has changed more than once (SIO-1743 and after), so the
+gitignored manifest is the record, not this page. The agent module's own variable
+default (`openai/gpt-5.4-mini` in `deploy/modules/agent/variables.tf`) never
+applies to a rendered root, because the manifest always supplies a value.
+Changing a spoke's `pi_model` changes userdata, so it replaces that instance,
+and the new model needs its Bedrock agreement in THAT account first (see
+above). Anything sized to a context window, such as
+`PI_COMS_NET_COMPACT_ABOVE_TOKENS`, is per model too.
+
+The Pi version is pinned in two places that must move together (SIO-1763):
+`bun install -g @earendil-works/pi-coding-agent@0.85.1` in
+`deploy/bootstrap/agent-bootstrap.sh`, which is what the spoke runs, and the
+`0.85.1` devDependency pins in `package.json`, which are what typecheck
+resolves types from. Bump both in one change and ship it with a bundle
+publish; an unpinned install once picked up a release mid-rollout that did not
+run on Bun (SIO-1631).
 
 ## Boot sequence on an agent host
 

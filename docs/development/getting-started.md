@@ -130,7 +130,7 @@ For a single-command startup of all services:
 docker-compose up
 ```
 
-This starts all seven MCP servers and the web frontend with the port mappings defined in `docker-compose.yml`. See [Local Development](../deployment/local-development.md) for Docker Compose configuration details.
+This starts the services `docker-compose.yml` defines (the Elasticsearch, Kafka, Couchbase and Konnect MCP servers plus the web frontend) with their port mappings. The other MCP servers (GitLab, Atlassian, the AWS proxy, elastic-iac, landing-zone-iac) are started separately. See [Local Development](../deployment/local-development.md) for Docker Compose configuration details.
 
 ---
 
