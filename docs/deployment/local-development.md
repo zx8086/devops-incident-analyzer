@@ -269,8 +269,8 @@ Port numbers differ between local bare-metal, Docker Compose, and AgentCore depl
 |---------|-----------|----------------|-----------|
 | Elasticsearch MCP | 9080 | 9080 | 8000 |
 | Kafka MCP | 9081 | 9081 | 8000 |
-| Couchbase MCP | 9082 | 8082 | 8000 |
-| Konnect MCP | 9083 | 8083 | 8000 |
+| Couchbase MCP | 9082 | 9082 | 8000 |
+| Konnect MCP | 9083 | 9083 | 8000 |
 | GitLab MCP | 9084 | not in the Compose file | 8000 |
 | Atlassian MCP | 9085 | not in the Compose file | 8000 |
 | Atlassian OAuth callback | 9185 | -- | -- |
