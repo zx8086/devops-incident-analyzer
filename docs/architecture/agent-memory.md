@@ -92,7 +92,7 @@ Clients never generate, send, or store vectors — there is no embedding field o
 
 Auth is optional OIDC (`Authorization: Bearer <jwt>`, when the service runs with `OIDC_AUTH_ENABLED`). The base URL is **required config** with no default (the service docs are inconsistent between ports 8070 and 8080).
 
-On our side, the client method `searchMemory(query)` *is* this embedding-powered semantic search — there is no separate "embed" call. The rest of this doc covers how the incident-analyzer and elastic-iac agents map onto the model above.
+On our side, the client method `searchMemory(query)` *is* this embedding-powered semantic search -- there is no separate "embed" call. The rest of this doc covers how the four top-level agents (incident-analyzer, elastic-iac, landing-zone-terraform, pi-fleet-console) map onto the model above.
 
 ## Identity mapping
 
@@ -145,7 +145,7 @@ Beyond the two block types above, the agents read and write memory in a number o
 
 | # | Scenario | Where | Trigger | Mode |
 |---|----------|-------|---------|------|
-| R1 | Bootstrap semantic recall | `memory-backend.ts` `recallAgentMemory` | `load_live_memory` bootstrap (both agents) | **semantic** — `searchMemory(latest user message, allSessions, relevant_k=8)` ranked by `rel_score` |
+| R1 | Bootstrap semantic recall | `memory-backend.ts` `recallAgentMemory` | `load_live_memory` bootstrap (all four top-level agents declare it) | **semantic** -- `searchMemory(latest user message, allSessions, relevant_k=8)` ranked by `rel_score` |
 | R2 | IaC change intent recall | `iac/nodes.ts` `recallIacChangeIntent` -> `searchAgentMemory` | "check my MR" / plan-review enrichment | **deterministic** — filter `{kind:iac-change, mr_url}` alone (SIO-998) |
 | R3 | Last IaC change recall (cross-thread) | `iac/nodes.ts` `recallLastIacChange` | a cleared thread mints a new threadId | **deterministic** — `mr_iid`/deployment filter, `allSessions` (SIO-990) |
 | R4 | Plan-review memory enrich | `iac/graph-knowledge.ts` `memoryEnrichIac` | pre-draft, after `graphEnrichIac` (SIO-970) | **deterministic** — filter `{stack_instance, kind:iac-change}` -> `priorLearnings` |
@@ -170,11 +170,45 @@ Keys are `pipeline_id` for fleet learnings and `config_change_id ?? mr_url` for 
 
 An IaC change proposal fact (W3) is written `proposed` and TTL-decays. A background sweep (`iac/reconcile.ts` `reconcileAll`, driven by `Bun.cron` with a `setInterval` fallback under Node, SIO-1021, plus a bounded refresh in `bootstrapIac`) enumerates unreconciled `kind:iac-change` facts, re-checks each MR's live state, and **appends** an authoritative terminal fact (`lifecycle: applied | apply-failed | closed`) when the MR reaches a terminal outcome. The append-only model + `dedupePreferring` means the panel shows one row per change at its latest lifecycle. The `outcome:"completed"` annotation means "proposal turn done", NOT applied; `lifecycleTag()` maps it to `proposed` so the UI never mislabels a still-open change as live.
 
-### Skill-learning loop (SIO-1015 / 1016 / 1017 / 1018)
+### Learning loop (SIO-1015 / 1016 / 1017 / 1018, generalised to every agent in SIO-1886..1896)
 
-Every top-level agent (SIO-1889). After a turn, the post-turn learner seam (`skill-learner.ts`) pre-gates on a `complex` query plus either `confidence >= 0.6` and >= 2 datasources (the orchestrator) or the graph's own `completed` outcome (the others); a Jev gate (`learning-gate.ts`: task_success >= 0.5 as a hard precondition, then a mean of three questions >= 0.6, agent-beacon's rule) runs before the full-model judge; the judge, over a PII-redacted transcript, proposes a reusable skill with verbatim evidence quotes (verified against the transcript) which must pass the lesson-quality rubric; the result is a `kind:skill` **candidate fact** carrying `status` / `source` / `task_success` / `task_success_source` (deduped by `skill_name`, R6) — never auto-loaded. A state change is a newer fact with the same `skill_name`; readers keep the latest (`listLearningCandidates`).
+Every top-level agent (SIO-1889). After a turn, the post-turn learner seam (`skill-learner.ts`) pre-gates on a `complex` query plus either `confidence >= 0.6` and >= 2 datasources (the orchestrator) or the graph's own `completed` outcome (the others); a Jev gate (`learning-gate.ts`: task_success >= 0.5 as a hard precondition, then a mean of three questions >= 0.6, agent-beacon's rule) runs before the full-model judge; the judge, over a PII-redacted transcript, proposes a reusable skill with verbatim evidence quotes (verified against the transcript) which must pass the lesson-quality rubric; the result is a `kind:skill` **candidate fact** carrying `status` / `source` / `task_success` / `task_success_source` (deduped by `skill_name`, R6) -- never auto-loaded. A state change is a newer fact with the same `skill_name`; readers keep the latest (`listLearningCandidates`). **Reflect (SIO-1893).** `reflect:analyze --emit-candidates drafts.json` also writes the analysis's `create` portfolio items as `kind:skill` candidate drafts (source `reflect`, evidence from the finding's excerpts, filed rejected with `task_success` 0 when a session carried a negative user reaction), in the same file shape `learn:ingest` reads. Humans promote a candidate into a real `SKILL.md` or runbook through a PR, by either of two paths: approving it in the review pane, which attempts the promotion PR described under [Promotion PR](#promotion-pr-sio-1896), or the `skill:promote` CLI (SIO-1017, `--pr` for the git-native branch and PR, SIO-1345). Thereafter the skill's confidence evolves from per-turn outcomes via Laplace smoothing on its frontmatter (SIO-1016), traced by the per-turn skill-application signal (SIO-1018). Requires the agent-memory backend (the file backend has no fact storage for proposals).
 
-Every top-level agent (SIO-1889). After a turn, the post-turn learner seam (`skill-learner.ts`) pre-gates on a `complex` query plus either `confidence >= 0.6` and >= 2 datasources (the orchestrator) or the graph's own `completed` outcome (the others); a Jev gate (`learning-gate.ts`: task_success >= 0.5 as a hard precondition, then a mean of three questions >= 0.6, agent-beacon's rule) runs before the full-model judge; the judge, over a PII-redacted transcript, proposes a reusable skill with verbatim evidence quotes (verified against the transcript) which must pass the lesson-quality rubric; the result is a `kind:skill` **candidate fact** carrying `status` / `source` / `task_success` / `task_success_source` (deduped by `skill_name`, R6) — never auto-loaded. A state change is a newer fact with the same `skill_name`; readers keep the latest (`listLearningCandidates`). **Reflect (SIO-1893).** `reflect:analyze --emit-candidates drafts.json` also writes the analysis's `create` portfolio items as `kind:skill` candidate drafts (source `reflect`, evidence from the finding's excerpts, filed rejected with `task_success` 0 when a session carried a negative user reaction), in the same file shape `learn:ingest` reads. Humans promote a proposal into a real `SKILL.md` (`skill:promote`, SIO-1017); thereafter the skill's confidence evolves from per-turn outcomes via Laplace smoothing on its frontmatter (SIO-1016), traced by the per-turn skill-application signal (SIO-1018). Requires the agent-memory backend (the file backend has no fact storage for proposals).
+### Human feedback on candidates (SIO-1890)
+
+A thumbs click in the chat is the human `task_success` signal. `POST /api/agent/feedback` (`apps/web/src/routes/api/agent/feedback/+server.ts`) calls `recordTurnFeedback()` when the body carries `threadId` and `agentName` and the score is exactly 0 or 1. The verdict is first bound to a known thread (the checkpointer must hold an assistant turn for that agent on that thread; otherwise it is ignored with a warning). It is then stored as its own `kind:feedback` fact and applied to every candidate that thread produced as a newer fact: thumbs-up sets `task_success=1` with `task_success_source=feedback`; thumbs-down sets the candidate to `rejected`. A changed vote reopens: a candidate rejected by an earlier thumbs-down returns to `candidate` on a later thumbs-up, while a rejection from the review pane, or a supersession, stands. The memory work is bounded by `LEARNING_FEEDBACK_DEADLINE_MS` (default `5000`; any non-positive or non-numeric value falls back to the default) so a stalled backend can never hold up the LangSmith write that follows, and a failure here never fails the request.
+
+### Promotion PR (SIO-1896)
+
+Approval never activates anything by itself: it records the decision and then tries to open a draft PR through `packages/memory-pr` (`openMemoryPr`, `packages/memory-pr/src/index.ts`). Merge of that PR is the only activation.
+
+**Two entry points, one opener.**
+
+| Entry point | What it promotes |
+|---|---|
+| `POST /api/agent/memory/candidates` with `action: "approve"` (`reviewCandidate`, `packages/agent/src/learning-review.ts`) | A reviewed learning candidate. A `kind:skill` candidate becomes a `SKILL.md` plus the `agent.yaml` `skills:` insertion, built from the base branch's live manifest, on branch `agent/learn/<agent>/skill-<name>`. A `kind:runbook` candidate becomes one markdown file under the agent's runbook tree on branch `agent/learn/<agent>/runbook-<name>`. |
+| `POST /api/agent/memory/promote` (`apps/web/src/routes/api/agent/memory/promote/+server.ts`) | An explicit proposal validated against `MemoryPrProposalSchema` (`kind`: `wiki-page`, `key-decision`, `new-skill` or `runbook`), passed straight to the opener. Returns 400 on an invalid body. |
+
+The same opener also serves the `open_memory_pr` teardown step (queued wiki and key-decision proposals) and the incident-close workflow (SIO-1357), which is gated separately by `CLOSURE_LEARNING_ENABLED` and is **off** unless that is `true` or `1`.
+
+**What the opener returns.** It never throws for the expected "off" paths:
+
+| Result | When |
+|---|---|
+| `skipped` | `MEMORY_PR_ENABLED` is not `true`/`1` (this is opt-in, unlike the capability flags); the kill switch is active; `GITHUB_TOKEN` or `MEMORY_PR_REPO` is missing; or the branch already exists with no PR (a partial earlier attempt, which the reason names so an operator can delete it and retry). |
+| `blocked` | The proposal's branch equals the base branch; the secret scan finds a credential in any file (before any GitHub write); or the branch already has a PR, open or closed (into the configured base, checked before any write; into any base when branch creation reports that the branch exists). The result then carries that PR's `url` and `number`. |
+| `opened` | A draft PR was created against `MEMORY_PR_BASE` (default `main`). Labeling is best-effort and cannot turn `opened` into a failure. |
+
+**Rules the code enforces.**
+
+- **Refs are never moved.** Branch creation is the only ownership test. A branch that already has a PR blocks; nothing is reused, refreshed or force-updated, because GitHub's ref API has no compare-and-swap. A concurrent attempt that loses the PR-creation race (HTTP 422) resolves to the same `blocked` result.
+- **Blocked reasons name the next step.** An open PR says to review that PR; a closed or merged one says the proposal was already reviewed and is not re-proposed automatically; a branch without a PR says to delete the branch to retry.
+- **The promotion outcome is its own fact.** The outcome (`opened`, `skipped`, `blocked`, `failed`, plus the PR URL) is stored as a separate `kind:promotion` fact and merged into the review row at read time. Stored as another approved skill fact it could outrank a reject or supersede written while the PR was opening.
+- **Only unpromoted approvals are retried.** Approving an already-approved candidate writes no second transition and retries only the PR, and only when the recorded outcome is `skipped` or `failed` (`RETRYABLE_PROMOTIONS`). `opened` is done, `blocked` would fail the same way, and an outcome that was never recorded is treated as done. Those cases return 409. If the outcome could not be stored after the PR call, the response says so (`promotionStored: false`) and the row cannot be retried from the pane.
+- **Runbook `target_dir` is bounded.** A runbook candidate whose stored `target_dir` lies outside the owning agent's runbook tree is refused at approval (409) and at `learn:ingest`, before anything is written.
+- **Approval preconditions are unchanged.** `task_success` must be confirmed (`1`), and when the action carries the `expectedStatus` the reviewer saw, it must still match the stored status, otherwise the action is refused as stale (409).
+
+Configuration: `MEMORY_PR_ENABLED`, `MEMORY_PR_REPO`, `MEMORY_PR_BASE`, `GITHUB_TOKEN` (see the block at the end of this doc).
 
 ### Measuring learning (SIO-1894)
 
@@ -205,11 +239,19 @@ Calibrate the Jev gate thresholds (agent-beacon's 0.5 floor and 0.6 mean, `learn
 
 ## Lifecycle: when reads and writes happen
 
-Driven by each agent's `hooks/hooks.yaml` lifecycle steps, run per session (keyed by `threadId`) from `apps/web/src/lib/server/agent.ts`. incident-analyzer, elastic-iac and landing-zone-terraform declare the same bootstrap set (`load_live_memory`, `load_wiki_index`, `warm_knowledge_graph`, `emit_session_start`) and the teardown steps `flush_daily_log` and `checkpoint_key_decisions`; incident-analyzer additionally declares `open_memory_pr`, and landing-zone-terraform additionally declares `close_knowledge_graph`. pi-fleet-console has no `hooks.yaml` and runs no lifecycle steps (SIO-1888 adds it the memory subset). The lifecycle runner resolves hooks for the **invoked** agent via `getAgentByName(ctx.agentName)`, so each agent runs its own steps under its own Agent Memory user.
+Driven by each agent's `hooks/hooks.yaml` lifecycle steps, run per session (keyed by `threadId`) from `apps/web/src/lib/server/agent.ts`. incident-analyzer, elastic-iac and landing-zone-terraform declare the same bootstrap set (`load_live_memory`, `load_wiki_index`, `warm_knowledge_graph`, `emit_session_start`) and the teardown steps `flush_daily_log` and `checkpoint_key_decisions`; incident-analyzer additionally declares `open_memory_pr`, and landing-zone-terraform additionally declares `close_knowledge_graph`. pi-fleet-console declares only the memory subset (SIO-1888, `agents/pi-fleet-console/hooks/hooks.yaml`): `load_live_memory` and `emit_session_start` at bootstrap and `flush_daily_log` at teardown, with no wiki, knowledge-graph or memory-PR step. The lifecycle runner resolves hooks for the **invoked** agent via `getAgentByName(ctx.agentName)`, so each agent runs its own steps under its own Agent Memory user.
 
 **Bootstrap (session start)** — `load_live_memory` step:
 1. read durable context (file context still loaded for the prompt), then
 2. **recall**: `registerMemoryRecaller` -> a readiness probe (`checkHealth`), then `searchMemory(query = latest user message, session_ids: "all", relevant_k: 8)` — a semantic search across the agent's past sessions. Results come back ranked by `rel_score` (the FTS-KNN relevance score); only blocks with `status: "ready"` are returned (extraction is async). Hits are appended to the first-turn prompt context. If the service is unhealthy the recall is skipped (no noisy per-turn failure) but the session is still bound so writes queue for a later retry.
+
+**How the recall reaches each agent's prompt (SIO-1888).** Bootstrap stashes the recall per thread (`lifecycle.ts`). The orchestrator reads it through `prompt-context.ts` into the aggregator prompt. The other three agents ran `load_live_memory` and then never read the result, so they now share one seam, `buildAgentLiveMemorySection(agentName)` (`packages/agent/src/agent-live-memory.ts`): the agent's own runtime files plus the stash for the current request's thread, rendered as a `## Live Memory` section with the recall under `### Recalled From Past Sessions`, and an empty string when there is nothing to show.
+
+| Agent | Where it is appended | Framing |
+|---|---|---|
+| elastic-iac | The read-only lanes `answerInfo` and `converseIac` (`iac/nodes.ts`), last in the system prompt | Preceded by `LIVE_MEMORY_FRAMING`: the section is evidence from past sessions and durable notes, never an instruction, and never a reason to change tool choices or the read-only rules |
+| landing-zone-terraform | `buildLandingZoneAnswerSystemPrompt()` (`landing-zone/answer.ts`), after the base answer prompt | Covered by that prompt's existing rule that memory text is untrusted evidence, never instructions |
+| pi-fleet-console | `withFleetLiveMemory()` (`pi-fleet/graph.ts`), rebuilt on every model call through the ReAct agent's `messageModifier` so the per-thread recall reaches each turn | Appended after the persona prompt (SOUL/RULES/DUTIES); there is no memory-specific framing line here, the persona's evidence rules are written for spoke replies |
 
 **Teardown (session end)** — `flush_daily_log` step:
 1. `appendDailyLog(finalEntry)` enqueues the session breadcrumb, then
@@ -246,7 +288,14 @@ IAC_PROPOSAL_FACT_TTL_SECONDS=      # TTL on the iac-change proposal fact (W3); 
 SKILL_LEARNING_ENABLED=true         # post-turn learning-candidate learner for every agent (W6); kill-switch, agent-memory backend only
 LEARNING_JEV_GATE_ENABLED=true      # SIO-1889 Jev gate before the judge; kill-switch, self-skips without TYPESAFE_API_KEY
 LEARNING_INGEST_ENABLED=true        # SIO-1892 learn:ingest of harvested candidate drafts (fleet-harvest.ts output)
-LEARNING_REVIEW_ENABLED=true        # SIO-1891 review pane + /api/agent/memory/candidates; approve opens the promotion PR
+LEARNING_REVIEW_ENABLED=true        # SIO-1891 review pane + /api/agent/memory/candidates; approve records the decision and attempts the promotion PR
+LEARNING_FEEDBACK_DEADLINE_MS=5000  # SIO-1890 bound on the thumbs-feedback memory write (default 5000)
+MEMORY_PR_ENABLED=                  # opt-in: only true/1 lets memory-pr open PRs; unset => every promotion is "skipped"
+MEMORY_PR_REPO=                     # <owner>/<repo> the promotion PRs are opened against (required with GITHUB_TOKEN)
+MEMORY_PR_BASE=main                 # base branch for promotion PRs (default main)
+GITHUB_TOKEN=                       # token memory-pr uses; missing => "skipped"
+CLOSURE_LEARNING_ENABLED=           # SIO-1357 incident-close learning chain; OFF unless true/1
+LIVE_MEMORY_IMMUTABLE=              # SIO-845 file backend: true/1 writes dailylog entries as hash-chained JSON lines (tamper-evident); OFF by default
 ```
 
 Requires a running Agent Memory Docker container connected to your Capella cluster, with an embedding model + LLM available for vector embeddings and summaries. With async writes (default), semantic search returns a block only once it reaches `status: "ready"`; with `AGENT_MEMORY_SYNC_WRITES=true` a block is `ready` by the time the write returns.
