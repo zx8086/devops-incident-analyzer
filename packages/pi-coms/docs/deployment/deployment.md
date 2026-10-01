@@ -378,7 +378,7 @@ aws ssm send-command --instance-ids <id> --profile <profile> --region eu-central
 # and no context-mode extension in Pi's argv (base64 a script for anything longer)
 grep -c '"ctx"' /home/piagent/.pi/agent/mcp.json
 sudo -u piagent -i pi mcp list   # "ctx: connected, 11 tools (direct, global)", four marked [hidden] (SIO-1788); exit 1 if not connected
-grep -c pi-mcp-adapter /home/piagent/.pi/agent/settings.json   # expect 0 (SIO-1915)
+grep -sc pi-mcp-adapter /home/piagent/.pi/agent/settings.json || true   # expect 0, or no output on a fresh host with no settings.json (SIO-1915)
 P=$(pgrep -u piagent -f pi-coding-agent/dist/cli.js | head -1); pgrep -P "$P" -f context-mode/server.bundle.mjs
 tr '\0' ' ' < /proc/$P/cmdline | grep -c adapters/pi/extension.js   # expect 0
 
