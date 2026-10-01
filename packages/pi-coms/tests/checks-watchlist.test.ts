@@ -60,6 +60,29 @@ describe("checkWatchlist", () => {
 		expect(state.getWatermark("watchlist")).toBe(NOW);
 	});
 
+	test("a throttled pass fingerprints nothing, so the next pass still reports earlier hits (SIO-1911)", async () => {
+		const state = new MonitorState(":memory:");
+		const ok = fakeClient({ StopLogging: [{ id: "e1", user: "mallory" }] });
+		const throttled = {
+			send: async (cmd: LookupEventsCommand) => {
+				if (cmd.input.LookupAttributes?.[0]?.AttributeValue === "CreateUser") throw new Error("Rate exceeded");
+				return ok.send(cmd);
+			},
+		};
+		const events = ["StopLogging", "CreateUser"];
+		await expect(checkWatchlist(throttled, state, { now: NOW, events })).rejects.toThrow("Rate exceeded");
+		expect(state.getWatermark("watchlist")).toBeNull();
+		const retry = await checkWatchlist(ok, state, { now: NOW + 60_000, events });
+		expect(retry.map((f) => f.dedup_key)).toEqual(["watch:StopLogging:e1"]);
+	});
+
+	test("a name listed twice reports its event once (SIO-1911)", async () => {
+		const state = new MonitorState(":memory:");
+		const client = fakeClient({ StopLogging: [{ id: "e1", user: "mallory" }] });
+		const out = await checkWatchlist(client, state, { now: NOW, events: ["StopLogging", "StopLogging"] });
+		expect(out).toHaveLength(1);
+	});
+
 	test("quiet estate produces nothing", async () => {
 		const state = new MonitorState(":memory:");
 		const out = await checkWatchlist(fakeClient({}), state, { now: NOW, events: ["StopLogging"] });
