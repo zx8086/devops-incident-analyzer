@@ -83,6 +83,10 @@ CloudWatch Logs Insights grammar:
   logs".
 
 ## Sandboxed execution and search (ctx_* tools)
+The ctx_* tools come from a local MCP server, so their full names carry its
+prefix: `mcp__ctx__ctx_batch_execute`, `mcp__ctx__ctx_search`,
+`mcp__ctx__ctx_execute`. The short names below mean those tools.
+
 When the ctx_* tools are present, an investigation that would read a large
 output derives its answer instead: ctx_batch_execute runs the read commands and
 indexes their output, ctx_search queries the index, ctx_execute filters, counts

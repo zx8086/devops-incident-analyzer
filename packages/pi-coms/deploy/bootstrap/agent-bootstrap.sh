@@ -104,7 +104,11 @@ rm -rf "$HOME/.bun/install/global/node_modules/@mariozechner/pi-coding-agent"
 # package.json on the same version so typecheck sees the runtime's types.
 # 0.85.1 (SIO-1763): dist no longer references pi-server; verified on Bun 1.4.2
 # on eu-shared-services-dev with coms-net.ts and a Bedrock turn.
-bun install -g @earendil-works/pi-coding-agent@0.85.1
+# 0.99.2 (SIO-1915): `bin` moved to dist/bundle/cli.js, which calls
+# node:module enableCompileCache; the wrapper below keeps running the unbundled
+# dist/cli.js, which is still shipped and starts on Bun 1.4.2. MCP is built in
+# from 0.99.0, so pi-mcp-adapter is gone (see the ctx block below).
+bun install -g @earendil-works/pi-coding-agent@0.99.2
 
 # `bun install -g` leaves a `#!/usr/bin/env node` shebang on the pi symlink, and
 # these hosts have no (or too old a) Node -- pi-tui needs the regex `v` flag.
@@ -171,38 +175,29 @@ if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ];
       echo "context-mode install failed; spoke starts without ctx_* tools" >&2
     fi
   fi
+fi
 
-  # The ctx_* tools reach the model through pi-mcp-adapter (SIO-1734): the same
-  # package `just coms` loads on the laptop, and what context-mode's own Pi docs
-  # prescribe (an mcp.json entry). Pi core has no MCP support, and context-mode's
-  # bundled Pi extension starts its bridge only from before_agent_start, which Pi
-  # emits only for typed prompts -- never for the pi.sendMessage() turns a spoke
-  # lives on (SIO-1726). Only server.bundle.mjs from the install above is used.
-  #
-  # `pi install npm:` shells out to npm, absent on this host, so bun add into
-  # Pi's own package root and register the package in settings.json directly.
-  PI_NPM_DIR="$HOME/.pi/agent/npm"
-  MCP_ADAPTER_VERSION="2.33.0"
-  if [ ! -f "$PI_NPM_DIR/node_modules/pi-mcp-adapter/index.ts" ] \
-     || [ "$(cat "$PI_NPM_DIR/.mcp-adapter-version" 2>/dev/null || echo none)" != "$MCP_ADAPTER_VERSION" ]; then
-    mkdir -p "$PI_NPM_DIR"
-    [ -f "$PI_NPM_DIR/package.json" ] || echo '{"name":"pi-packages","private":true}' > "$PI_NPM_DIR/package.json"
-    if (cd "$PI_NPM_DIR" && bun add --ignore-scripts "pi-mcp-adapter@$MCP_ADAPTER_VERSION"); then
-      echo "$MCP_ADAPTER_VERSION" > "$PI_NPM_DIR/.mcp-adapter-version"
-    else
-      echo "pi-mcp-adapter install failed; spoke starts without ctx_* tools" >&2
-    fi
-  fi
-  python3 - <<'PY'
+# The ctx tools reach the model through Pi's BUILT-IN MCP support (0.99.0+,
+# SIO-1915), from the mcp.json entry the launcher writes. context-mode's own Pi
+# extension is still not used: it starts its bridge only from before_agent_start,
+# which Pi emits only for typed prompts -- never for the pi.sendMessage() turns a
+# spoke lives on (SIO-1726). Only server.bundle.mjs from the install above is used.
+#
+# pi-mcp-adapter (SIO-1734) served this before Pi had MCP. It must be REMOVED on
+# a host that still has it, not just left unused: an installed extension that
+# registers /mcp replaces the built-in support, and from 3.0.0 the adapter no
+# longer reads mcp.json at all. Runs with the kill-switch off too.
+python3 - <<'PY'
 import json, os
 p = os.path.expanduser("~/.pi/agent/settings.json")
-d = json.load(open(p)) if os.path.exists(p) else {}
-pk = d.setdefault("packages", [])
-if "npm:pi-mcp-adapter" not in pk:
-    pk.append("npm:pi-mcp-adapter")
-    json.dump(d, open(p, "w"), indent=2)
+if os.path.exists(p):
+    d = json.load(open(p))
+    pk = d.get("packages", [])
+    if "npm:pi-mcp-adapter" in pk:
+        pk.remove("npm:pi-mcp-adapter")
+        json.dump(d, open(p, "w"), indent=2)
 PY
-fi
+rm -rf "$HOME/.pi/agent/npm/node_modules/pi-mcp-adapter" "$HOME/.pi/agent/npm/.mcp-adapter-version"
 BOOTSTRAP
 
 # ── AWS credentials wait ───────────────────────────────────────────────────
@@ -674,28 +669,31 @@ if [ -n "PI_PROVIDER_PLACEHOLDER" ]; then
 fi
 
 # Extensions are repeatable (-e/--extension). coms-net is the only one loaded
-# by flag; ctx_* comes from pi-mcp-adapter via settings.json packages (SIO-1734).
+# by flag; the ctx tools come from Pi's built-in MCP support (SIO-1915).
 EXT_ARGS=(-e extensions/coms-net.ts)
 
-# The ctx_* tools are one mcp.json entry served by pi-mcp-adapter. Written HERE,
-# not in the bootstrap: this script sources ~/.coms-env.local, so the kill-switch
-# takes effect on the next relaunch, the same way it used to gate the -e flag.
-# keep-alive connects at session_start, before the first turn; directTools +
-# toolPrefix none keep the plain ctx_* names the aws-spoke RULES.md documents.
+# The ctx tools are one mcp.json entry read by Pi's built-in MCP support. Written
+# HERE, not in the bootstrap: this script sources ~/.coms-env.local, so the
+# kill-switch takes effect on the next relaunch, the same way it used to gate the
+# -e flag. Pi connects every enabled server when the session starts and the first
+# prompt waits up to 10 s for a server with `direct` tools. `direct` declares the
+# tools to the model like built-ins; the default exposure (`codemode`) would hide
+# them behind model-written scripts, which this fleet does not run. The model
+# sees them as mcp__ctx__ctx_execute etc., the names aws-spoke RULES.md documents.
 #
-# excludeTools (SIO-1788): directTools would otherwise hand the model all eleven
-# tools the server offers. Four are maintenance commands for a person, not for an
-# unattended agent: ctx_upgrade would move context-mode off the CTX_VERSION pin
-# under a running fleet, ctx_purge deletes the index an investigation just built,
-# ctx_doctor and ctx_insight are operator diagnostics. The adapter matches the
-# server's own tool names, which already carry the ctx_ prefix.
+# toolExposure hidden (SIO-1788): `direct` would otherwise hand the model all
+# eleven tools the server offers. Four are maintenance commands for a person, not
+# for an unattended agent: ctx_upgrade would move context-mode off the
+# CTX_VERSION pin under a running fleet, ctx_purge deletes the index an
+# investigation just built, ctx_doctor and ctx_insight are operator diagnostics.
+# The keys are the SERVER's tool names, not the mcp__ctx__ ones.
 CTX_SERVER="$HOME/.pi-ctx/node_modules/context-mode/server.bundle.mjs"
 if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
    && [ -f "$CTX_SERVER" ]; then
-  printf '%s\n' "{\"mcpServers\":{\"ctx\":{\"command\":\"$HOME/.bun/bin/bun\",\"args\":[\"$CTX_SERVER\"],\"lifecycle\":\"keep-alive\",\"directTools\":true,\"toolPrefix\":\"none\",\"excludeTools\":[\"ctx_upgrade\",\"ctx_purge\",\"ctx_doctor\",\"ctx_insight\"]}}}" \
+  printf '%s\n' "{\"mcpServers\":{\"ctx\":{\"command\":\"$HOME/.bun/bin/bun\",\"args\":[\"$CTX_SERVER\"],\"exposure\":\"direct\",\"toolExposure\":{\"ctx_upgrade\":\"hidden\",\"ctx_purge\":\"hidden\",\"ctx_doctor\":\"hidden\",\"ctx_insight\":\"hidden\"}}}}" \
     > "$HOME/.pi/agent/mcp.json"
 else
-  # No server entry: the adapter loads but registers no ctx_* tools.
+  # No server entry: the built-in support starts with nothing to connect.
   rm -f "$HOME/.pi/agent/mcp.json"
 fi
 
