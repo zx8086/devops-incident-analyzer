@@ -59,7 +59,7 @@ describe("agent-bootstrap.sh project scoping", () => {
 
 // SIO-1788 / SIO-1793: the launcher writes mcp.json as a hand-escaped JSON string
 // inside a printf, behind the CTX_MODE_ENABLED kill-switch and a check that the
-// server bundle exists. A quoting slip yields a file the adapter cannot parse; a
+// server bundle exists. A quoting slip yields a file Pi cannot parse; a
 // wrong CTX_SERVER path makes the `-f` test fail and the else branch delete the
 // file; either way the spoke silently starts with no ctx_* tools. So run the
 // whole block (CTX_SERVER= through fi, exactly as the launcher carries it: the
@@ -105,10 +105,21 @@ describe("agent-bootstrap.sh mcp.json entry", () => {
 		// The path is asserted from the SCRIPT's CTX_SERVER= line, not one the test supplied.
 		expect(ctx.args).toEqual([join(r.home, SERVER_REL)]);
 		expect(ctx.command).toBe(join(r.home, ".bun/bin/bun"));
-		expect(ctx.excludeTools).toEqual(["ctx_upgrade", "ctx_purge", "ctx_doctor", "ctx_insight"]);
+		// SIO-1915: Pi's built-in MCP shape. `direct` declares the tools to the model;
+		// the default (`codemode`) would leave a spoke with no visible ctx tools.
+		expect(ctx.exposure).toBe("direct");
+		expect(ctx.toolExposure).toEqual({
+			ctx_upgrade: "hidden",
+			ctx_purge: "hidden",
+			ctx_doctor: "hidden",
+			ctx_insight: "hidden",
+		});
 		// The names the aws-spoke RULES.md tells the model to use must stay reachable.
-		for (const kept of ["ctx_batch_execute", "ctx_execute", "ctx_search"]) expect(ctx.excludeTools).not.toContain(kept);
-		expect(ctx).toMatchObject({ lifecycle: "keep-alive", directTools: true, toolPrefix: "none" });
+		for (const kept of ["ctx_batch_execute", "ctx_execute", "ctx_search"])
+			expect(ctx.toolExposure).not.toHaveProperty(kept);
+		// pi-mcp-adapter keys mean nothing to the built-in support; a leftover one
+		// would be a sign the entry was only half converted.
+		for (const gone of ["lifecycle", "directTools", "toolPrefix", "excludeTools"]) expect(ctx).not.toHaveProperty(gone);
 	});
 
 	test.each(["false", "0"])(
@@ -134,5 +145,55 @@ describe("agent-bootstrap.sh mcp.json entry", () => {
 		const r = runLauncherBlock({ ctxModeEnabled: "no", serverPresent: true });
 		expect(r.exitCode).toBe(0);
 		expect(r.mcpJson).not.toBeNull();
+	});
+});
+
+// SIO-1915: an installed pi-mcp-adapter REPLACES Pi's built-in MCP support (it
+// registers /mcp) and from 3.0.0 no longer reads mcp.json, so a host upgraded in
+// place would lose its ctx tools unless the bootstrap takes the adapter out.
+describe("agent-bootstrap.sh removes pi-mcp-adapter", () => {
+	const lines = SCRIPT.split("\n");
+	const marker = lines.findIndex((l) => l.startsWith("# pi-mcp-adapter (SIO-1734) served this"));
+	const start = lines.findIndex((l, i) => i > marker && l === "python3 - <<'PY'");
+	const end = lines.findIndex(
+		(l, i) => i > start && l.startsWith('rm -rf "$HOME/.pi/agent/npm/node_modules/pi-mcp-adapter"'),
+	);
+	const block = lines.slice(start, end + 1).join("\n");
+
+	function run(settings: string | undefined) {
+		const home = mkdtempSync(join(tmpdir(), "sio-1915-home-"));
+		const adapter = join(home, ".pi/agent/npm/node_modules/pi-mcp-adapter");
+		mkdirSync(adapter, { recursive: true });
+		writeFileSync(join(adapter, "index.ts"), "// stand-in\n");
+		const settingsPath = join(home, ".pi/agent/settings.json");
+		if (settings !== undefined) writeFileSync(settingsPath, settings);
+		const out = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", block], {
+			env: { HOME: home, PATH: process.env.PATH ?? "" },
+		});
+		const after = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, "utf-8")) : null;
+		const adapterLeft = existsSync(adapter);
+		rmSync(home, { recursive: true, force: true });
+		return { exitCode: out.exitCode, stderr: out.stderr.toString(), after, adapterLeft };
+	}
+
+	test("the block was found", () => {
+		expect(marker).toBeGreaterThan(0);
+		expect(start).toBeGreaterThan(marker);
+		expect(end).toBeGreaterThan(start);
+	});
+
+	test("drops the adapter from settings.json packages, keeps everything else, and deletes the install", () => {
+		const r = run(JSON.stringify({ theme: "dark", packages: ["npm:pi-mcp-adapter", "npm:other"] }));
+		expect(r.stderr).toBe("");
+		expect(r.exitCode).toBe(0);
+		expect(r.after).toEqual({ theme: "dark", packages: ["npm:other"] });
+		expect(r.adapterLeft).toBe(false);
+	});
+
+	test("a host with no settings.json, or none naming the adapter, is left alone", () => {
+		expect(run(undefined)).toMatchObject({ exitCode: 0, after: null, adapterLeft: false });
+		const r = run(JSON.stringify({ packages: ["npm:other"] }));
+		expect(r.exitCode).toBe(0);
+		expect(r.after).toEqual({ packages: ["npm:other"] });
 	});
 });

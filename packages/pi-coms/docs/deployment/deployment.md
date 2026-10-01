@@ -251,9 +251,10 @@ above). Anything sized to a context window, such as
 `PI_COMS_NET_COMPACT_ABOVE_TOKENS`, is per model too.
 
 The Pi version is pinned in two places that must move together (SIO-1763):
-`bun install -g @earendil-works/pi-coding-agent@0.85.1` in
+`bun install -g @earendil-works/pi-coding-agent@0.99.2` in
 `deploy/bootstrap/agent-bootstrap.sh`, which is what the spoke runs, and the
-`0.85.1` devDependency pins in `package.json`, which are what typecheck
+`0.99.2` devDependency pins in `package.json` (`pi-coding-agent`, `pi-tui`, and
+`typebox` at the version that Pi release depends on), which are what typecheck
 resolves types from. Bump both in one change and ship it with a bundle
 publish; an unpinned install once picked up a release mid-rollout that did not
 run on Bun (SIO-1631).
@@ -275,34 +276,43 @@ run on Bun (SIO-1631).
 4. Copy `vendor/pi-fleet/aws-spoke/AGENTS.override.md` (the persona the bridge exported at publish time, SIO-1649) into the checkout as `AGENTS.override.md`, install `vendor/pi-fleet/skills/` under `~/.pi/agent/skills/pi-fleet/`, and append `persona=pi-fleet-vX.Y.Z` to the register purpose
    (agent hosts only) so spokes load the investigation discipline instead of
    the repo's development instructions.
-5. Install the `ctx_*` tool path (SIO-1726, SIO-1734), unless
+5. Install the `ctx_*` tool path (SIO-1726, SIO-1915), unless
    `CTX_MODE_ENABLED` is `false` or `0`: `context-mode@1.0.169` into
-   `~/.pi-ctx` and `pi-mcp-adapter@2.33.0` into `~/.pi/agent/npm`, both
-   `bun add --ignore-scripts` (better-sqlite3's postinstall needs node-gyp,
-   absent on the host; the server uses `bun:sqlite`), both pinned, both
-   non-fatal, and `npm:pi-mcp-adapter` merged into `~/.pi/agent/settings.json`
-   `packages`. Installed outside `~/pi-coms` because that directory is
+   `~/.pi-ctx` with `bun add --ignore-scripts` (better-sqlite3's postinstall
+   needs node-gyp, absent on the host; the server uses `bun:sqlite`), pinned
+   and non-fatal. Installed outside `~/pi-coms` because that directory is
    replaced whole on every convergence. Only `server.bundle.mjs` is used;
    context-mode's own Pi extension is NOT loaded on spokes (it bootstraps
    from `before_agent_start`, which Pi never emits for the
-   `pi.sendMessage()` turns a spoke lives on).
+   `pi.sendMessage()` turns a spoke lives on). The same step REMOVES
+   `pi-mcp-adapter` (the SIO-1734 path, used before Pi had MCP) from
+   `~/.pi/agent/settings.json` `packages` and from `~/.pi/agent/npm`, with the
+   kill-switch on or off: an installed extension that registers `/mcp` replaces
+   Pi's built-in MCP support, and from 3.0.0 the adapter no longer reads
+   `mcp.json`.
 6. Install `herdr.service`, `pi-agent.service`, `pi-monitor.service`. The
    monitor is deliberately independent of the agent: a wedged agent never
    stops detection.
 
 On every relaunch the launcher (not the bootstrap, because only the launcher
-sources `~/.coms-env.local`) writes `~/.pi/agent/mcp.json` with one
-`keep-alive` entry for the ctx server (`directTools`, `toolPrefix: none`, so
-the names stay `ctx_*`), or removes the file when `CTX_MODE_ENABLED` is off.
-Pi core has no MCP support; the adapter connects at session start, before the
-first turn, which is why the first inbound message already sees the tools.
+sources `~/.coms-env.local`) writes `~/.pi/agent/mcp.json` with one entry for
+the ctx server, or removes the file when `CTX_MODE_ENABLED` is off. Pi's
+built-in MCP support (0.99.0+, SIO-1915) reads that file, connects every enabled
+server when the session starts, and holds the first prompt up to 10 s for a
+server with `direct` tools, which is why the first inbound message already sees
+them. The entry sets `exposure: "direct"`: the tools are declared to the model
+like built-ins. The default exposure, `codemode`, would leave them reachable
+only from model-written scripts, which the fleet does not run. The model sees
+the tools as `mcp__ctx__ctx_execute` and so on; the aws-spoke `RULES.md` names
+them that way.
 
-The entry also carries `excludeTools` (SIO-1788), so the model gets seven of the
-server's eleven tools. Hidden: `ctx_upgrade` (it would move context-mode off its
-pin under a running fleet), `ctx_purge` (it deletes the index an investigation
-just built), and the operator diagnostics `ctx_doctor` and `ctx_insight`. The
-adapter matches the server's own tool names, which already start with `ctx_`;
-`pi-mcp-adapter@2.33.0` supports the key (checked on a dev spoke, 2026-09-17).
+The entry also carries `toolExposure` (SIO-1788) marking four tools `hidden`, so
+the model gets seven of the server's eleven. Hidden: `ctx_upgrade` (it would
+move context-mode off its pin under a running fleet), `ctx_purge` (it deletes
+the index an investigation just built), and the operator diagnostics
+`ctx_doctor` and `ctx_insight`. The keys are the server's own tool names.
+`pi mcp list` (as `piagent`) prints the server's state and each tool's
+exposure, and exits 1 when an enabled server is not connected.
 
 Do not mistake the sandbox for a security boundary. context-mode can enforce
 deny rules inside `ctx_execute`, but per its README it reads them from Claude
@@ -367,7 +377,8 @@ aws ssm send-command --instance-ids <id> --profile <profile> --region eu-central
 # Per host: ctx_* path (SIO-1734) -- mcp.json present, the ctx server a child of Pi,
 # and no context-mode extension in Pi's argv (base64 a script for anything longer)
 grep -c '"ctx"' /home/piagent/.pi/agent/mcp.json
-grep -o '"excludeTools":\[[^]]*\]' /home/piagent/.pi/agent/mcp.json   # the four maintenance tools (SIO-1788)
+sudo -u piagent -i pi mcp list   # "ctx: connected, 11 tools (direct, global)", four marked [hidden] (SIO-1788); exit 1 if not connected
+grep -sc pi-mcp-adapter /home/piagent/.pi/agent/settings.json || true   # expect 0, or no output on a fresh host with no settings.json (SIO-1915)
 P=$(pgrep -u piagent -f pi-coding-agent/dist/cli.js | head -1); pgrep -P "$P" -f context-mode/server.bundle.mjs
 tr '\0' ' ' < /proc/$P/cmdline | grep -c adapters/pi/extension.js   # expect 0
 
