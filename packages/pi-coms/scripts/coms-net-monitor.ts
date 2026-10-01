@@ -563,7 +563,9 @@ function main(): void {
 	const ec2 = new EC2Client({ region });
 	const ce = new CostExplorerClient({ region: "us-east-1" }); // Cost Explorer is us-east-1 only
 	const sts = new STSClient({ region });
-	const cloudtrail = new CloudTrailClient({ region });
+	// SIO-1911: the watchlist's back-to-back LookupEvents calls burst past the
+	// 2 TPS account limit; adaptive mode rate-limits client-side.
+	const cloudtrail = new CloudTrailClient({ region, retryMode: "adaptive", maxAttempts: 10 });
 	const certScanRegions = certRegions(region, process.env.PI_MONITOR_CERT_REGIONS);
 	const acmClients = certScanRegions.map((r) => ({
 		region: r,

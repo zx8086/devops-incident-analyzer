@@ -73,7 +73,6 @@ export async function checkWatchlist(
 				const id: string = e.EventId ?? "unknown";
 				const key = `watch:${name}:${id}`;
 				if (!state.shouldAlert(key)) continue;
-				state.markAlerted(key, "watchlist");
 				let detail: { sourceIPAddress?: string; userIdentity?: { arn?: string } } = {};
 				try {
 					detail = JSON.parse(e.CloudTrailEvent ?? "{}");
@@ -100,6 +99,10 @@ export async function checkWatchlist(
 			nextToken = resp.NextToken;
 		} while (nextToken);
 	}
+	// SIO-1911: fingerprint only after the whole pass succeeds. The fingerprint
+	// is permanent, so marking inside the loop let a throttled later call throw
+	// away findings whose events the next pass would then skip as already seen.
+	for (const f of findings) state.markAlerted(f.dedup_key, "watchlist");
 	state.setWatermark(WATERMARK_KEY, now);
 	return findings;
 }
