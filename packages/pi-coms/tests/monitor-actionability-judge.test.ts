@@ -127,6 +127,20 @@ describe("judgeActionability", () => {
 		expect(out.size).toBe(0);
 	});
 
+	test("a triage choice with no routine probability yields NO verdict (SIO-1914)", async () => {
+		// The verdict's existence is journaled as "judged actionable" and can stamp
+		// a fleet success, so a partial answer must not become one.
+		const ask = (async () =>
+			({
+				model: "jev-1.13.0",
+				answers: {
+					triage: { type: "choice", choice: "critical", confidence: 0.5, probabilities: { critical: 1 } },
+				},
+			}) as SystemOneResponse) as Ask;
+		const out = await judgeActionability([finding("a")], [], { apiKey: "k", ask });
+		expect(out.size).toBe(0);
+	});
+
 	test("the duplicate question is omitted when there is nothing to compare against", async () => {
 		// Asking it against an empty list invites an answer with nothing behind it.
 		let asked: string[] = [];
@@ -141,10 +155,18 @@ describe("judgeActionability", () => {
 		expect(asked).toEqual(["triage", "duplicate"]);
 	});
 
-	test("a missing duplicate answer is 0, which sends", async () => {
+	test("a duplicate question that was asked and not answered yields NO verdict (SIO-1914)", async () => {
+		// Was "is 0, which sends". It still sends -- a finding missing from the map
+		// is sent -- but it no longer counts as judged.
 		const ask = (async () => reply(0.2)) as Ask;
 		const out = await judgeActionability([finding("a")], ["prior"], { apiKey: "k", ask });
-		expect(out.get("a")?.duplicate).toBe(0);
+		expect(out.size).toBe(0);
+	});
+
+	test("a duplicate question that was never asked leaves duplicate at 0", async () => {
+		const ask = (async () => reply(0.2)) as Ask;
+		const out = await judgeActionability([finding("a")], [], { apiKey: "k", ask });
+		expect(out.get("a")).toEqual({ routine: 0.2, duplicate: 0 });
 	});
 
 	test("keeps the NEWEST eight of the recent context, not the oldest", async () => {

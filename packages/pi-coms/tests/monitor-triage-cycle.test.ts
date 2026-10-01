@@ -81,6 +81,35 @@ describe("report-only families (SIO-1883)", () => {
 		expect(judged).toEqual([["logs:app"]]);
 	});
 
+	// SIO-1914: a finding the gate judged worth a turn carries that on its own
+	// journal row; a held one, one the judge said nothing about, and a critical
+	// one (never gated) do not.
+	test("the finding row records what the gate judged actionable, and only that", async () => {
+		const d = harness([W("app"), W("noisy"), W("unjudged"), W("crit", { severity: "critical" })], {
+			actionability: {
+				enforcing: true,
+				judge: async () =>
+					new Map([
+						["logs:app", { routine: 0.1, duplicate: 0 }],
+						["logs:noisy", { routine: 0.99, duplicate: 0 }],
+						["logs:crit", { routine: 0.99, duplicate: 0 }],
+					]),
+			},
+		});
+		await runCycle(d);
+		const rows = d.state
+			.journalRows(60_000, "finding")
+			.map((r) => JSON.parse(r.payload) as { dedup_key: string; judged_actionable?: boolean });
+		expect(rows.map((r) => r.dedup_key).sort()).toEqual(["logs:app", "logs:crit", "logs:noisy", "logs:unjudged"]);
+		expect(rows.filter((r) => r.judged_actionable === true).map((r) => r.dedup_key)).toEqual(["logs:app"]);
+		// holds are journaled exactly as before, and the held-back counter with them
+		const holds = d.state
+			.journalRows(60_000, "actionability_verdict")
+			.map((r) => (JSON.parse(r.payload) as { dedup_key: string }).dedup_key);
+		expect(holds).toEqual(["logs:noisy"]);
+		expect(triageCounts(d.state, 60_000).heldBack).toBe(1);
+	});
+
 	test("envFamilies trims, drops empties, and is empty when unset", () => {
 		expect([...envFamilies(" compliance, drift ,,")]).toEqual(["compliance", "drift"]);
 		expect(envFamilies(undefined).size).toBe(0);

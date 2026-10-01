@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { CandidateDraftSchema, ingestCandidates, redactAwsIdentifiers } from "./learn-ingest.ts";
 import { parseIngestArgs } from "./learn-ingest-cli.ts";
+import { gateLearning } from "./learning-gate.ts";
 
 const NOW = "2026-09-29T12:00:00Z";
 const prevFlag = process.env.LEARNING_INGEST_ENABLED;
@@ -116,6 +117,69 @@ describe("ingestCandidates", () => {
 	});
 
 	// SIO-1896 (Codex review): the PR path must stay inside the agent's knowledge tree.
+	// SIO-1914: found by the first real fleet harvest. Jev scored a fleet-verified
+	// draft 0.49 on task success (floor 0.5) and it was dropped, although its mean
+	// passed. A confirmed success on the draft replaces Jev's estimate, as a thumbs
+	// does; the real gate is driven here with scripted Jev scores.
+	describe("a confirmed success on the draft replaces Jev's task-success estimate (SIO-1914)", () => {
+		const jev = (p: { task_success: number; reusable_correction: number; evidence_supported: number }) => ({
+			gate: (input: Parameters<typeof gateLearning>[0]) =>
+				gateLearning(input, {
+					apiKey: "k",
+					env: { NODE_ENV: "test" },
+					ask: async () => ({
+						model: "jev-1.13.0",
+						answers: Object.fromEntries(Object.entries(p).map(([k, v]) => [k, { type: "noul" as const, noul: v }])),
+						usage: { input_tokens: 1, output_tokens: 1 },
+					}),
+				}),
+		});
+		const measured = { task_success: 0.49, reusable_correction: 0.8, evidence_supported: 0.75 };
+
+		test("a fleet-verified draft below Jev's floor is stored, keeping its fleet verdict", async () => {
+			const h = harness();
+			const report = await ingestCandidates([draft()], "incident-analyzer", { ...h.deps, ...jev(measured) });
+			expect(report).toEqual({ stored: ["rds-storage-nearly-full"], skipped: [] });
+			expect(h.writes[0]?.annotations).toMatchObject({ task_success: "1", task_success_source: "fleet-verdict" });
+		});
+
+		test("the same scores without a draft verdict are still dropped at the floor", async () => {
+			const h = harness();
+			const report = await ingestCandidates(
+				[draft({ task_success: "", task_success_source: "" })],
+				"incident-analyzer",
+				{ ...h.deps, ...jev(measured) },
+			);
+			expect(report.skipped).toEqual([{ name: "rds-storage-nearly-full", reason: "jev:task_success" }]);
+			expect(h.writes).toHaveLength(0);
+		});
+
+		// Codex: only a source that outranks Jev may override it. A draft claiming
+		// success from an older Jev estimate, or from no source, is judged afresh.
+		test("a success claim whose source does not outrank Jev is not an override", async () => {
+			for (const source of ["jev", ""]) {
+				const h = harness();
+				const report = await ingestCandidates(
+					[draft({ task_success: "1", task_success_source: source })],
+					"incident-analyzer",
+					{ ...h.deps, ...jev(measured) },
+				);
+				expect(report.skipped).toEqual([{ name: "rds-storage-nearly-full", reason: "jev:task_success" }]);
+				expect(h.writes).toHaveLength(0);
+			}
+		});
+
+		test("a fleet verdict does not rescue a draft with no reusable lesson: the mean still applies", async () => {
+			const h = harness();
+			const report = await ingestCandidates([draft()], "incident-analyzer", {
+				...h.deps,
+				...jev({ task_success: 0.49, reusable_correction: 0.2, evidence_supported: 0.3 }),
+			});
+			expect(report.skipped).toEqual([{ name: "rds-storage-nearly-full", reason: "jev:reusable_correction" }]);
+			expect(h.writes).toHaveLength(0);
+		});
+	});
+
 	test("a target_dir outside the agent's runbook tree, or another agent's, is refused", async () => {
 		const h = harness();
 		const report = await ingestCandidates(
