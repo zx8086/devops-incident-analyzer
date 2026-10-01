@@ -76,6 +76,13 @@ describe("checkWatchlist", () => {
 		expect(retry.map((f) => f.dedup_key)).toEqual(["watch:StopLogging:e1"]);
 	});
 
+	test("a name listed twice reports its event once (SIO-1911)", async () => {
+		const state = new MonitorState(":memory:");
+		const client = fakeClient({ StopLogging: [{ id: "e1", user: "mallory" }] });
+		const out = await checkWatchlist(client, state, { now: NOW, events: ["StopLogging", "StopLogging"] });
+		expect(out).toHaveLength(1);
+	});
+
 	test("quiet estate produces nothing", async () => {
 		const state = new MonitorState(":memory:");
 		const out = await checkWatchlist(fakeClient({}), state, { now: NOW, events: ["StopLogging"] });

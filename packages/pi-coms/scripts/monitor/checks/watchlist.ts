@@ -52,6 +52,7 @@ export async function checkWatchlist(
 	const events = opts.events ?? DEFAULT_WATCHLIST;
 	const since = state.getWatermark(WATERMARK_KEY) ?? now - FIRST_LOOKBACK_MS;
 	const findings: Finding[] = [];
+	const seen = new Set<string>();
 	const at = new Date(now).toISOString();
 
 	// LookupEvents takes exactly one attribute per call, so it is one
@@ -72,7 +73,10 @@ export async function checkWatchlist(
 			for (const e of resp.Events ?? []) {
 				const id: string = e.EventId ?? "unknown";
 				const key = `watch:${name}:${id}`;
-				if (!state.shouldAlert(key)) continue;
+				// The fingerprint is written after the pass, so a name listed twice
+				// would otherwise report its events twice.
+				if (seen.has(key) || !state.shouldAlert(key)) continue;
+				seen.add(key);
 				let detail: { sourceIPAddress?: string; userIdentity?: { arn?: string } } = {};
 				try {
 					detail = JSON.parse(e.CloudTrailEvent ?? "{}");
