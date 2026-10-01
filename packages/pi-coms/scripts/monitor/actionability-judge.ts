@@ -202,9 +202,18 @@ export async function judgeActionability(
 		// is not a degraded classifier, so unlike a failed REQUEST it does not void
 		// the round -- the caller sends anything missing from the map.
 		if (triage?.type !== "choice") continue;
+		// SIO-1914: a verdict exists only when EVERY question that was asked was
+		// answered. Its existence is now journaled as "judged actionable", so a
+		// defaulted 0 -- a choice with no `routine` probability, or a duplicate
+		// question that came back unanswered -- would vouch for a finding nobody
+		// fully judged. The only 0 left is a duplicate question that was never
+		// asked, because there was nothing to compare against.
+		const routine = triage.probabilities.routine;
+		if (typeof routine !== "number") continue;
 		const dup = result.value.answers[DUPLICATE_Q];
+		if (DUPLICATE_Q in questions && dup?.type !== "noul") continue;
 		verdicts.set(finding.dedup_key, {
-			routine: triage.probabilities.routine ?? 0,
+			routine,
 			duplicate: dup?.type === "noul" ? dup.noul : 0,
 		});
 	}
