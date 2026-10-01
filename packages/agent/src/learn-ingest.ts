@@ -137,8 +137,14 @@ export async function ingestCandidates(drafts: unknown[], agent: string, deps: I
 			report.skipped.push({ name: d.skill_name, reason: `rubric:${quality.reason}` });
 			continue;
 		}
+		// SIO-1914: a draft that arrives with a confirmed success (the fleet's own
+		// actionability verdict) outranks the Jev estimate, exactly as a thumbs does:
+		// it REPLACES Jev's task_success in the gate. Jev reads a few summary lines,
+		// the monitor ran the investigation. The mean over all three questions still
+		// applies, so a draft with no reusable lesson or no evidence is still dropped.
 		const verdict = await gate({
 			events: [d.title, d.applicability, ...d.body.split("\n"), ...d.evidence.map((e) => e.excerpt)],
+			...(d.task_success === "1" ? { thumbs: 1 as const } : {}),
 		});
 		if (verdict.outcome === "applied" && !verdict.verdict.qualifies) {
 			report.skipped.push({ name: d.skill_name, reason: `jev:${verdict.verdict.reason}` });
