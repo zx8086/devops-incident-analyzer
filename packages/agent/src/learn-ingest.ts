@@ -91,6 +91,12 @@ async function defaultExists(agent: string, kind: string, skillName: string): Pr
 	return hits.length > 0;
 }
 
+// SIO-1914: the task_success sources that outrank the Jev estimate (the
+// precedence on LearningCandidateSchema: feedback > hil > turn-outcome /
+// fleet-verdict > jev). A draft claiming success with source "jev" or none is
+// only an older estimate, and must not overrule the gate's fresh one.
+const CONFIRMED_SUCCESS_SOURCES: ReadonlySet<string> = new Set(["feedback", "hil", "turn-outcome", "fleet-verdict"]);
+
 function taskSuccessFor(
 	d: CandidateDraft,
 	gate: LearningGateResult,
@@ -144,7 +150,7 @@ export async function ingestCandidates(drafts: unknown[], agent: string, deps: I
 		// applies, so a draft with no reusable lesson or no evidence is still dropped.
 		const verdict = await gate({
 			events: [d.title, d.applicability, ...d.body.split("\n"), ...d.evidence.map((e) => e.excerpt)],
-			...(d.task_success === "1" ? { thumbs: 1 as const } : {}),
+			...(d.task_success === "1" && CONFIRMED_SUCCESS_SOURCES.has(d.task_success_source) ? { thumbs: 1 as const } : {}),
 		});
 		if (verdict.outcome === "applied" && !verdict.verdict.qualifies) {
 			report.skipped.push({ name: d.skill_name, reason: `jev:${verdict.verdict.reason}` });

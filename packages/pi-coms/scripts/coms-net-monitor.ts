@@ -394,6 +394,10 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 		// SIO-1883: report-only families. A warn there is reported, not investigated.
 		const reportOnly = deps.reportOnlyFamilies;
 		const reportOnlyKeys = new Set<string>();
+		// SIO-1914: findings the Jev gate looked at and let through in THIS cycle.
+		// Carried on the finding's own journal row below, so a reader never has to
+		// match a verdict to a finding by time.
+		const judgedActionableKeys = new Set<string>();
 		const toInvestigate = findings.filter((f) => {
 			if (f.severity === "info" || f.family === "spoke-health") return false;
 			if (reportOnly?.has(f.family) && f.severity !== "critical") {
@@ -457,6 +461,7 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 						enforced: deps.actionability.enforcing,
 					});
 				}
+				for (const f of plan.judgedActionable) judgedActionableKeys.add(f.dedup_key);
 				if (plan.wouldSkip.length > 0) {
 					const verb = deps.actionability.enforcing ? "held back" : "would hold back (shadow)";
 					deps.log(`actionability: ${plan.wouldSkip.length} finding(s) ${verb}, ${batch.length} sent`);
@@ -504,6 +509,12 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 				// Greptile PR #912: lets the digest tell a deliberate report-only skip
 				// from a finding that still needs somebody to look at it.
 				...(reportOnlyKeys.has(f.dedup_key) ? { report_only: true } : {}),
+				// SIO-1914: the gate journals only its HOLDS (actionability_verdict), so
+				// "not held back" cannot tell a finding it judged worth a turn from one
+				// nothing judged (gate off, gate failed, or a critical finding, which is
+				// never gated). The positive verdict is recorded here, on the row it is
+				// about; the fleet harvest reads it to decide what is fleet-verified.
+				...(judgedActionableKeys.has(f.dedup_key) ? { judged_actionable: true } : {}),
 			});
 		}
 		const text = formatIncidentReport(

@@ -154,6 +154,21 @@ describe("ingestCandidates", () => {
 			expect(h.writes).toHaveLength(0);
 		});
 
+		// Codex: only a source that outranks Jev may override it. A draft claiming
+		// success from an older Jev estimate, or from no source, is judged afresh.
+		test("a success claim whose source does not outrank Jev is not an override", async () => {
+			for (const source of ["jev", ""]) {
+				const h = harness();
+				const report = await ingestCandidates(
+					[draft({ task_success: "1", task_success_source: source })],
+					"incident-analyzer",
+					{ ...h.deps, ...jev(measured) },
+				);
+				expect(report.skipped).toEqual([{ name: "rds-storage-nearly-full", reason: "jev:task_success" }]);
+				expect(h.writes).toHaveLength(0);
+			}
+		});
+
 		test("a fleet verdict does not rescue a draft with no reusable lesson: the mean still applies", async () => {
 			const h = harness();
 			const report = await ingestCandidates([draft()], "incident-analyzer", {

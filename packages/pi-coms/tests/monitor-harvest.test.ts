@@ -6,11 +6,13 @@ import { describe, expect, test } from "bun:test";
 import { monitorName, parseHarvestArgs } from "../scripts/fleet-harvest.ts";
 import {
 	groupDiagnoses,
+	type HarvestedDiagnosis,
 	harvest,
 	harvestJournal,
 	originId,
 	selectGroups,
 	slug,
+	succeeded,
 	toCandidateDraft,
 } from "../scripts/monitor/harvest.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
@@ -44,11 +46,21 @@ function finding(dedupKey: string, extra: Record<string, unknown> = {}) {
 	};
 }
 
-function journalFor(account: string, findings: Record<string, unknown>[], verdicts: Record<string, unknown>[] = []) {
+// `passes`: dedup keys the monitor's gate judged worth a turn (SIO-1914),
+// recorded on the finding row itself. A finding with neither a hold nor that
+// flag was never judged.
+function journalFor(
+	account: string,
+	findings: Record<string, unknown>[],
+	verdicts: Record<string, unknown>[] = [],
+	passes: string[] = [],
+) {
 	const state = new MonitorState(":memory:");
 	// The monitor's order: verdicts during triage, finding rows after investigation.
 	for (const v of verdicts) state.journal("actionability_verdict", v);
-	for (const f of findings) state.journal("finding", f);
+	for (const f of findings) {
+		state.journal("finding", passes.includes(String(f.dedup_key)) ? { ...f, judged_actionable: true } : f);
+	}
 	const rows = state.journalRows(24 * 60 * 60 * 1000);
 	state.close();
 	return { rows, origin: { account, agent: "aws-spoke" } };
@@ -131,6 +143,46 @@ describe("verdict join and origin (Greptile PR #920)", () => {
 		expect(after[0]?.skippedReason).toBeUndefined();
 	});
 
+	// SIO-1914: the pass sits on the finding row, so it can only ever vouch for
+	// the diagnosis of its own cycle; without it a confident diagnosis has no
+	// fleet verdict (the gate was off or failed).
+	test("a pass on the finding row verifies that diagnosis and no other", () => {
+		const origin = { account: ACCOUNT_A, agent: "aws-spoke" };
+		const at = "2026-09-28T10:05:00.000Z";
+		const row = (extra: Record<string, unknown> = {}, ts = at) => ({
+			ts,
+			kind: "finding",
+			payload: JSON.stringify({ ...finding("k"), ...extra }),
+		});
+		const hold = (ts: string) => ({
+			ts,
+			kind: "actionability_verdict",
+			payload: JSON.stringify({ dedup_key: "k", family: "rds", severity: "warn", resource: "r", reason: "routine" }),
+		});
+		const judged = harvestJournal([row({ judged_actionable: true })], origin);
+		expect(judged[0]).toMatchObject({ judgedActionable: true });
+		expect(succeeded(judged[0] as HarvestedDiagnosis)).toBe(true);
+		// no flag: the gate was off or failed, so nothing judged the finding
+		const unjudged = harvestJournal([row()], origin);
+		expect(unjudged[0]?.judgedActionable).toBeUndefined();
+		expect(succeeded(unjudged[0] as HarvestedDiagnosis)).toBe(false);
+		// Codex: an earlier cycle's pass cannot vouch for a later, unjudged diagnosis
+		// of the same finding, because the flag never leaves the row it was set on
+		const twoCycles = harvestJournal(
+			[row({ judged_actionable: true, diagnosis: null }, "2026-09-28T09:50:00.000Z"), row()],
+			origin,
+		);
+		expect(twoCycles).toHaveLength(1);
+		expect(succeeded(twoCycles[0] as HarvestedDiagnosis)).toBe(false);
+		// the row's own pass is authoritative: a hold from an earlier cycle inside
+		// the hour does not taint it, while an unjudged row still takes that hold
+		const passed = harvestJournal([hold("2026-09-28T09:50:00.000Z"), row({ judged_actionable: true })], origin);
+		expect(passed[0]?.skippedReason).toBeUndefined();
+		expect(succeeded(passed[0] as HarvestedDiagnosis)).toBe(true);
+		const tainted = harvestJournal([hold("2026-09-28T09:50:00.000Z"), row()], origin);
+		expect(tainted[0]).toMatchObject({ skippedReason: "routine" });
+	});
+
 	test("the monitor's fallback peer name never leaks the account id through the origin", () => {
 		const id = originId({ account: ACCOUNT_A, agent: `monitor-aws-${ACCOUNT_A}` });
 		expect(id).not.toContain(ACCOUNT_A);
@@ -148,11 +200,12 @@ describe("verdict join and origin (Greptile PR #920)", () => {
 			diagnosis: { ...(finding("x").diagnosis as object), suggested_action: "Reboot it and hope", confidence: 0.3 },
 		});
 		const strong = finding("k2");
-		const { rows } = journalFor(ACCOUNT_A, [
-			weak,
-			strong,
-			finding("k3", { diagnosis: { ...(finding("x").diagnosis as object), confidence: 0.2 } }),
-		]);
+		const { rows } = journalFor(
+			ACCOUNT_A,
+			[weak, strong, finding("k3", { diagnosis: { ...(finding("x").diagnosis as object), confidence: 0.2 } })],
+			[],
+			["k1", "k2", "k3"],
+		);
 		const group = groupDiagnoses(harvestJournal(rows, origin))[0];
 		if (!group) throw new Error("no group");
 		const draft = toCandidateDraft(group);
@@ -189,8 +242,8 @@ describe("grouping and selection", () => {
 
 describe("toCandidateDraft", () => {
 	test("emits a redacted runbook draft with provenance and the fleet verdict", () => {
-		const a = journalFor(ACCOUNT_A, [finding("rds:orders:1")]);
-		const b = journalFor(ACCOUNT_B, [finding("rds:orders:2")]);
+		const a = journalFor(ACCOUNT_A, [finding("rds:orders:1")], [], ["rds:orders:1"]);
+		const b = journalFor(ACCOUNT_B, [finding("rds:orders:2")], [], ["rds:orders:2"]);
 		const group = groupDiagnoses([...harvestJournal(a.rows, a.origin), ...harvestJournal(b.rows, b.origin)])[0];
 		if (!group) throw new Error("no group");
 		const draft = toCandidateDraft(group);
@@ -213,6 +266,17 @@ describe("toCandidateDraft", () => {
 		expect(everything).not.toMatch(/\b\d{12}\b/);
 		expect(everything).not.toContain("arn:aws");
 		expect(draft.learned_from.startsWith("fleet:")).toBe(true);
+	});
+
+	// SIO-1914: confident diagnoses from cycles where nothing judged them (the
+	// gate was off or failed) used to be stamped "fleet-verdict". They are not.
+	test("a confident diagnosis the gate never judged carries no fleet verdict", () => {
+		const a = journalFor(ACCOUNT_A, [finding("k1"), finding("k2"), finding("k3")]);
+		const group = groupDiagnoses(harvestJournal(a.rows, a.origin))[0];
+		if (!group) throw new Error("no group");
+		const draft = toCandidateDraft(group);
+		expect(draft.task_success).toBe("");
+		expect(draft.task_success_source).toBe("");
 	});
 
 	test("a routine-classified or low-confidence diagnosis carries no fleet verdict", () => {

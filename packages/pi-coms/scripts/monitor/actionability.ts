@@ -47,6 +47,11 @@ export interface ActionabilityDecision {
 	// What the gate WOULD have skipped while shadowing. Always populated, so a
 	// journal replay can measure the gate without it changing anything.
 	wouldSkip: { finding: Finding; reason: string }[];
+	// SIO-1914: findings the gate LOOKED AT and found worth a turn. Not the same
+	// as `send`: a critical finding is sent unjudged, and so is a finding the
+	// judge returned no verdict for. Journaled so a reader can tell "judged
+	// actionable" from "never judged".
+	judgedActionable: Finding[];
 }
 
 function reasonFor(v: ActionabilityVerdict): string | undefined {
@@ -77,6 +82,7 @@ export function planActionability(
 	const send: Finding[] = [];
 	const skipped: { finding: Finding; reason: string }[] = [];
 	const wouldSkip: { finding: Finding; reason: string }[] = [];
+	const judgedActionable: Finding[] = [];
 
 	for (const finding of findings) {
 		// A critical finding is never gated. The whole point of the severity is
@@ -89,6 +95,7 @@ export function planActionability(
 		const reason = verdict ? reasonFor(verdict) : undefined;
 		if (!reason) {
 			send.push(finding);
+			if (verdict) judgedActionable.push(finding);
 			continue;
 		}
 		wouldSkip.push({ finding, reason });
@@ -96,5 +103,5 @@ export function planActionability(
 		else send.push(finding);
 	}
 
-	return { send, skipped, wouldSkip };
+	return { send, skipped, wouldSkip, judgedActionable };
 }

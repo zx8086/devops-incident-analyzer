@@ -44,6 +44,12 @@ export interface HarvestedDiagnosis {
 	// The Jev gate's reason when the monitor skipped this finding (routine /
 	// duplicate): such a diagnosis never counts as a successful investigation.
 	skippedReason?: string;
+	// SIO-1914: the monitor's gate judged this finding worth a turn in the cycle
+	// that produced this row (`judged_actionable` on the finding row itself, so
+	// there is nothing to match by time). Absent when the gate was off, failed,
+	// or the finding was critical and never gated: nothing judged it, so there
+	// is no fleet verdict to claim.
+	judgedActionable?: boolean;
 }
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -101,7 +107,11 @@ export function harvestJournal(rows: JournalRow[], origin: HarvestOrigin): Harve
 		const probableCause = str(d.probable_cause).trim();
 		if (!probableCause) continue;
 		const dedupKey = str(p.dedup_key);
-		const skippedReason = skippedReasonFor(dedupKey, row.ts);
+		// SIO-1914: the row's own pass is authoritative for its cycle. A hold is
+		// still matched by time (the monitor writes it in a row of its own), so it
+		// is consulted only for a finding the gate did not pass.
+		const judgedActionable = p.judged_actionable === true;
+		const skippedReason = judgedActionable ? undefined : skippedReasonFor(dedupKey, row.ts);
 		out.push({
 			origin: id,
 			ts: row.ts,
@@ -115,6 +125,7 @@ export function harvestJournal(rows: JournalRow[], origin: HarvestOrigin): Harve
 			evidence,
 			confidence: typeof d.confidence === "number" ? d.confidence : 0,
 			...(skippedReason ? { skippedReason } : {}),
+			...(judgedActionable ? { judgedActionable: true } : {}),
 		});
 	}
 	return out;
@@ -217,10 +228,13 @@ function sentence(s: string): string {
 
 // Every string is redacted here, once, before it leaves the box; the ingest
 // side treats the draft as data and never sends it to a model unredacted.
-// A diagnosis the fleet itself would stand behind: confident, and not
-// classified routine or duplicate by the monitor's gate in its cycle.
+// A diagnosis the fleet itself stands behind: confident, AND the monitor's gate
+// judged the finding worth a turn in its cycle. SIO-1914: "not held back" is
+// not enough. The gate journals only its holds, so a diagnosis from a cycle
+// where the gate was off or failed has no hold either, and counting that as a
+// verdict stamped "fleet-verdict" on findings nothing had judged.
 export function succeeded(m: HarvestedDiagnosis): boolean {
-	return m.confidence >= 0.7 && !m.skippedReason;
+	return m.confidence >= 0.7 && m.judgedActionable === true;
 }
 
 export function toCandidateDraft(group: HarvestGroup, targetDir = DEFAULT_TARGET_DIR): CandidateDraft {
@@ -249,7 +263,7 @@ export function toCandidateDraft(group: HarvestGroup, targetDir = DEFAULT_TARGET
 		const m = members[0];
 		if (m) evidence.push({ ref: `journal:${m.origin}#0`, excerpt: cap(r(m.summary || m.probableCause), EXCERPT_MAX) });
 	}
-	// Task success comes from the fleet's own verdict (succeeded above).
+	// Task success comes from the fleet's own POSITIVE verdict (succeeded above).
 	const anySucceeded = members.some(succeeded);
 	return {
 		kind: "runbook",

@@ -93,10 +93,13 @@ describe("planActionability", () => {
 		const out = planActionability(findings, verdicts, { enforcing: true });
 		expect(out.send.map((f) => f.dedup_key)).toEqual(["keep-low", "crit", "no-verdict"]);
 		expect(out.skipped.map((s) => s.finding.dedup_key)).toEqual(["skip-me"]);
+		// SIO-1914: only the finding the gate looked at AND let through was judged
+		// actionable. The critical one is sent unjudged; so is the one with no verdict.
+		expect(out.judgedActionable.map((f) => f.dedup_key)).toEqual(["keep-low"]);
 	});
 
 	test("an empty batch is empty, not an error", () => {
 		const out = planActionability([], new Map(), { enforcing: true });
-		expect(out).toEqual({ send: [], skipped: [], wouldSkip: [] });
+		expect(out).toEqual({ send: [], skipped: [], wouldSkip: [], judgedActionable: [] });
 	});
 });
