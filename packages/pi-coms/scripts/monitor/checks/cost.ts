@@ -17,6 +17,11 @@ export function settledCostDate(now: Date): string {
 	return new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10);
 }
 
+// The digest reports only what a check run actually judged. Re-reading the
+// costs table instead would print the day's earlier partial figure as settled
+// whenever the check failed or the monitor was paused.
+export const COST_JUDGED_SNAPSHOT = "cost-judged";
+
 // SIO-1819: Bedrock bills per MODEL, so the SERVICE dimension never returns a
 // value called "Bedrock" -- the live names are "Claude Sonnet 4.6 (Amazon
 // Bedrock Edition)" and similar. Matching the parenthetical is what separates
@@ -122,6 +127,11 @@ export async function checkCost(
 	const usd = totals.get(day);
 	if (usd === undefined) return [];
 	const baseline = state.costBaseline(day, 14);
+	state.setSnapshot(COST_JUDGED_SNAPSHOT, {
+		date: day,
+		usd: String(usd),
+		baseline: baseline === null ? "" : String(baseline),
+	});
 	if (baseline === null) return [];
 
 	// Alert only when over by BOTH thresholds: pct filters noise on small

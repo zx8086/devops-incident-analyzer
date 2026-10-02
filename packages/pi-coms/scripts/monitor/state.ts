@@ -115,10 +115,6 @@ export class MonitorState {
 		// would sit on the upper one and hide a rise near the threshold.
 		return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 	}
-	costOn(date: string): number | null {
-		const r = this.db.query("SELECT usd FROM costs WHERE date = ?").get(date) as { usd: number } | null;
-		return r ? Number(r.usd) : null;
-	}
 	latestCost(): { date: string; usd: number } | null {
 		const r = this.db.query("SELECT date, usd FROM costs ORDER BY date DESC LIMIT 1").get() as {
 			date: string;

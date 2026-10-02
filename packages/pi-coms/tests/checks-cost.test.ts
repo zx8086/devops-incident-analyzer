@@ -1,6 +1,6 @@
 // tests/checks-cost.test.ts
 import { describe, expect, test } from "bun:test";
-import { checkCost } from "../scripts/monitor/checks/cost.ts";
+import { COST_JUDGED_SNAPSHOT, checkCost } from "../scripts/monitor/checks/cost.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
 
 function fakeClient(daily: { date: string; usd: number }[]) {
@@ -93,7 +93,20 @@ describe("checkCost", () => {
 		const quiet = new MonitorState(":memory:");
 		const spikeOnlyYesterday = [...days(1000, 1000), { date: "2026-08-30", usd: 5000 }];
 		expect(await checkCost(fakeClient(spikeOnlyYesterday), quiet, { now: NOW })).toHaveLength(0);
-		expect(quiet.costOn("2026-08-30")).toBe(5000);
+		expect(quiet.latestCost()).toEqual({ date: "2026-08-30", usd: 5000 });
+		expect(quiet.getSnapshot(COST_JUDGED_SNAPSHOT)).toEqual({ date: "2026-08-29", usd: "1000", baseline: "1000" });
+	});
+
+	// Codex on #937: the digest must report only what a run judged. A run whose
+	// response lacks the settled day records nothing, so no stale partial figure
+	// can be labelled settled.
+	test("SIO-1923: the judged snapshot is written only for a day the response returned", async () => {
+		const state = new MonitorState(":memory:");
+		await checkCost(fakeClient(days(10, 13)), state, { now: NOW });
+		expect(state.getSnapshot(COST_JUDGED_SNAPSHOT)).toEqual({ date: "2026-08-29", usd: "13", baseline: "10" });
+		const later = new Date(NOW.getTime() + 86_400_000);
+		await checkCost(fakeClient([{ date: "2026-08-31", usd: 0 }]), state, { now: later });
+		expect(state.getSnapshot(COST_JUDGED_SNAPSHOT)?.date).toBe("2026-08-29");
 	});
 
 	test("no baseline yet stays quiet but records costs", async () => {
