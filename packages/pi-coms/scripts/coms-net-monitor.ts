@@ -836,7 +836,7 @@ function main(): void {
 		log,
 	};
 
-	const buildDigest = async (): Promise<string> => {
+	const buildDigest = async (runNow: Date = new Date()): Promise<string> => {
 		const day = 86_400_000;
 		// SIO-1698 follow-up: a journal row that does not parse -- or parses but is
 		// not a Finding -- is skipped, never thrown. The digest is the daily report
@@ -862,7 +862,7 @@ function main(): void {
 		} catch {
 			// digest still ships
 		}
-		const spendDate = settledCostDate(new Date());
+		const spendDate = settledCostDate(runNow);
 		const spendUsd = state.costOn(spendDate);
 		return formatDigest({
 			accountId: ACCOUNT_ID,
@@ -906,10 +906,13 @@ function main(): void {
 	};
 
 	const dailyDigest = async (): Promise<void> => {
+		// SIO-1923: one instant for the run, so the digest's spend line names the
+		// same settled day the cost check judged even if the run crosses midnight.
+		const runNow = new Date();
 		const dailyDeps: CycleDeps = {
 			gate,
 			checks: [
-				{ name: "cost", run: () => checkCost(ce, state, { pct: COST_PCT, abs: COST_ABS }) },
+				{ name: "cost", run: () => checkCost(ce, state, { now: runNow, pct: COST_PCT, abs: COST_ABS }) },
 				{ name: "trail", run: () => checkTrail(cloudtrail, state) },
 				{
 					name: "certs",
@@ -937,7 +940,7 @@ function main(): void {
 		const pruned = state.pruneJournal(JOURNAL_RETAIN_MS);
 		if (pruned > 0) log(`journal pruned: ${pruned} row(s) past retention`);
 		// The digest ships even when quiet; a missing digest is the dead-man signal.
-		const text = await buildDigest();
+		const text = await buildDigest(runNow);
 		try {
 			await reportAndEmail(text);
 		} catch (e) {
