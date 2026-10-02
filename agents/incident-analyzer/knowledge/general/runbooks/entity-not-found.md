@@ -81,7 +81,7 @@ produced, not at the point that fails.
 ## Step 3: routing fallthrough
 Use `gitlab_recent_deploys` on the service around the first occurrence and
 `aws_ecs_describe_task_definition` to identify the revision in service at that time. Use
-`gitlab_get_merge_request` with `include: ["diffs"]` on the release to look specifically for changes to route
+`gitlab_get_merge_request` with `include: ["diffs"], detail: "full_patch"` on the release to look specifically for changes to route
 annotations, path prefixes or a catch-all handler. A path that quietly stopped matching
 produces a constant 404 rate that begins at a deployment boundary and never recovers.
 

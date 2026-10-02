@@ -57,7 +57,8 @@ maps to a deterministic tool path (SIO-1320, distilled from the 2026-07-31
 - What does it say now? -- `gitlab_get_file_content`
 - Who/when last changed it? -- `gitlab_get_blame`, `gitlab_list_commits`
 - What exactly changed? -- `gitlab_get_commit_diff`, `gitlab_get_merge_request`
-  with `include: ["diffs"]`
+  with `include: ["diffs"], detail: "full_patch"` (without that detail level the
+  response carries no patch text, only change counts)
 - Did the shipping pipeline succeed? -- `gitlab_get_merge_request` with
   `include: ["pipelines"]`, then `gitlab_get_pipeline` with `include: ["jobs"]`
   and `gitlab_get_job` with `include: ["log"]` (every `include` takes ONE facet
@@ -159,9 +160,10 @@ itself):
 1. `gitlab_list_merge_requests` with state merged and the incident window --
    filter client-side to MRs whose merge time falls inside the window.
 2. For at most the 3 MRs merged closest before onset: `gitlab_get_merge_request`
-   for details and authors, the same tool with `include: ["diffs"]` for exactly
-   what changed, and again with `include: ["pipelines"]` to verify the pipeline
-   that shipped it (one facet per call).
+   for details and authors, the same tool with `include: ["diffs"], detail:
+   "full_patch"` for exactly what changed (the default detail level returns
+   change counts and NO patch text), and again with `include: ["pipelines"]` to
+   verify the pipeline that shipped it (one facet per call).
 3. In the diffs, look for: changed error handling, modified timeouts or
    connection settings, new dependencies or API call patterns, configuration
    and feature-flag changes.

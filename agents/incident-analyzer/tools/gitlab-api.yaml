@@ -85,6 +85,8 @@ tool_mapping:
   #   gitlab_get_work_item      include: notes | related_merge_requests
   #   gitlab_get_merge_request  include: diffs | commits | notes | pipelines |
   #                             discussions | approvals | conflicts
+  #                             (diffs carries patch text ONLY with detail:
+  #                             full_patch; the default returns change counts)
   #   gitlab_get_pipeline       include: jobs | downstream_pipelines | bridge_jobs | artifacts
   #   gitlab_get_job            include: log | artifacts
   #   gitlab_get_commit         include: diff | notes

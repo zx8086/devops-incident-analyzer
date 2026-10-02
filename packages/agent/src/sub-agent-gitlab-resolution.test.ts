@@ -242,6 +242,32 @@ describe("SIO-1178: gitlab-api.yaml action map carries the critical tools", () =
 		expect(allMapped.filter((name) => !served.has(name))).toEqual([]);
 	});
 
+	// SIO-1918 (Codex adversarial review): the diffs facet is not a like-for-like
+	// replacement for the unlisted gitlab_get_merge_request_diffs. Verified live on
+	// 2026-10-02: with the default detail level the response's `diffs` is null (change
+	// counts only), and only detail: "full_patch" returns patch text. Every instruction
+	// that sends the model to an MR's diffs is there to READ the change, so each one
+	// must ask for the patch.
+	test("every instruction that reads an MR's diffs asks for the patch text", () => {
+		const sources = [
+			"../../../agents/incident-analyzer/agents/gitlab-agent/skills/code-change-correlation/SKILL.md",
+			"../../../agents/incident-analyzer/knowledge/general/runbooks/code-change-correlation.md",
+			"../../../agents/incident-analyzer/knowledge/general/runbooks/entity-not-found.md",
+			"./correlation/rules.ts",
+		];
+		let seen = 0;
+		for (const rel of sources) {
+			const text = readFileSync(new URL(rel, import.meta.url), "utf8");
+			for (const match of text.matchAll(/include: \["diffs"\]/g)) {
+				seen += 1;
+				const after = text.slice(match.index, match.index + 60);
+				expect({ file: rel, after, asksForPatch: after.includes("full_patch") }).toMatchObject({ asksForPatch: true });
+			}
+		}
+		// Guards the guard: if the phrasing changes and nothing matches, this must not pass vacuously.
+		expect(seen).toBeGreaterThanOrEqual(5);
+	});
+
 	test("none of the tools GitLab unlisted in 19.4/19.5 is mapped", () => {
 		const unlisted = [
 			"gitlab_get_issue",

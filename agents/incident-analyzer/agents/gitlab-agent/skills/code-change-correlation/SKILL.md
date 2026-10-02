@@ -21,7 +21,9 @@ in order; every id comes from the PREVIOUS call's response, never guessed.
 2. Rank the in-window MRs by merge time and pick AT MOST the 3 closest before
    the incident as candidates. For each candidate:
    `gitlab_get_merge_request` (pass `project_id` and `merge_request_iid`), then
-   the SAME tool with `include: ["diffs"]` (what changed) and with
+   the SAME tool with `include: ["diffs"], detail: "full_patch"` (what changed;
+   the default detail level returns change counts and NO patch text, so
+   without `full_patch` there is nothing to read) and with
    `include: ["pipelines"]` (capture the pipeline id: each pipeline's `id` is a
    global id such as `gid://gitlab/Ci::Pipeline/2719503800`, and the number at
    its end is the `pipeline_id` step 4 needs).
