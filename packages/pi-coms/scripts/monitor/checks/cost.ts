@@ -8,6 +8,20 @@ import type { AwsClient } from "./alarms.ts";
 // filter off (pct 0 disables it). The monitor reads env overrides against these.
 export const COST_DEFAULTS = { pct: 0, abs: 100 } as const;
 
+// SIO-1923: Cost Explorer posts a day's charges over the following day, so at
+// the 06:15Z daily run "yesterday" is only partly posted (eu-shared-services-prd
+// 2026-10-01 read $0.00: Bedrock absent, a daily Data Transfer credit cancelling
+// the rest). Judging it alerts on a partial number, and a day is judged only
+// once, so a spike posted late was never alerted. Judge the day before instead.
+export function settledCostDate(now: Date): string {
+	return new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10);
+}
+
+// The digest reports only what a check run actually judged. Re-reading the
+// costs table instead would print the day's earlier partial figure as settled
+// whenever the check failed or the monitor was paused.
+export const COST_JUDGED_SNAPSHOT = "cost-judged";
+
 // SIO-1819: Bedrock bills per MODEL, so the SERVICE dimension never returns a
 // value called "Bedrock" -- the live names are "Claude Sonnet 4.6 (Amazon
 // Bedrock Edition)" and similar. Matching the parenthetical is what separates
@@ -65,15 +79,17 @@ export async function checkCost(
 	const abs = opts.abs ?? COST_DEFAULTS.abs;
 
 	const end = now.toISOString().slice(0, 10); // exclusive
-	const start = new Date(now.getTime() - 15 * 86_400_000).toISOString().slice(0, 10);
+	// 16 days: the judged day (D-2) plus its 14-day baseline, plus D-1 so the
+	// partial day is still recorded for the next run.
+	const start = new Date(now.getTime() - 16 * 86_400_000).toISOString().slice(0, 10);
 	// GetCostAndUsage pages. Measured live on eu-shared-services-prd (15 days,
 	// ~30 service groups/day) it returns no NextPageToken today -- confirmed with
 	// the raw CLI and --no-paginate -- but an account with more services will
 	// page, and BOTH failure modes are silent: a day split across pages records
 	// an understated total (flattening the baseline), and a final page that never
-	// arrives makes the `latest.date !== yesterday` guard suppress the alert
-	// entirely. Accumulate every page, then record once per date.
-	const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+	// arrives would make the judged day missing. Accumulate every page, then
+	// record once per date.
+	const day = settledCostDate(now);
 	const totals = new Map<string, number>();
 	const byDate = new Map<string, Record<string, number>>();
 	let nextPageToken: string | undefined;
@@ -104,21 +120,28 @@ export async function checkCost(
 	} while (nextPageToken);
 
 	for (const [date, total] of totals) state.recordCost(date, total);
-	const yesterdayByService = byDate.get(yesterday) ?? {};
+	const dayByService = byDate.get(day) ?? {};
 
-	const latest = state.latestCost();
-	if (!latest || latest.date !== yesterday) return [];
-	const baseline = state.costBaseline(yesterday, 14);
+	// Judge only a day this response returned: a stored figure from an earlier
+	// run may predate the day's late postings.
+	const usd = totals.get(day);
+	if (usd === undefined) return [];
+	const baseline = state.costBaseline(day, 14);
+	state.setSnapshot(COST_JUDGED_SNAPSHOT, {
+		date: day,
+		usd: String(usd),
+		baseline: baseline === null ? "" : String(baseline),
+	});
 	if (baseline === null) return [];
 
 	// Alert only when over by BOTH thresholds: pct filters noise on small
 	// accounts, abs filters noise on near-zero baselines. A pct of 0 or less
 	// turns the percentage gate off explicitly, so abs alone decides (SIO-1680).
-	const overPct = pct <= 0 || latest.usd > baseline * (1 + pct / 100);
-	const overAbs = latest.usd > baseline + abs;
+	const overPct = pct <= 0 || usd > baseline * (1 + pct / 100);
+	const overAbs = usd > baseline + abs;
 	if (!(overPct && overAbs)) return [];
 
-	const key = `cost:${yesterday}`;
+	const key = `cost:${day}`;
 	if (!state.shouldAlert(key)) return [];
 	state.markAlerted(key, "cost");
 	// SIO-1819: name the driver. Without this a rise is just a number, and the
@@ -126,8 +149,8 @@ export async function checkCost(
 	// spend. `resource` stays "account" deliberately: making it per-service would
 	// split one account's spend across several per-resource investigation budget
 	// buckets (budget.ts keys on finding.resource), which is a different change.
-	const top = topService(yesterdayByService);
-	const bedrockUsd = bedrockSpend(yesterdayByService);
+	const top = topService(dayByService);
+	const bedrockUsd = bedrockSpend(dayByService);
 	const attribution = top ? `; top service ${top.name} $${top.usd.toFixed(2)}` : "";
 	return [
 		{
@@ -135,17 +158,17 @@ export async function checkCost(
 			severity: "warn",
 			resource: "account",
 			// A zero baseline (fresh account) has no meaningful percentage.
-			summary: `Spend ${yesterday} was $${latest.usd.toFixed(2)} vs 14d baseline $${baseline.toFixed(2)}${baseline > 0 ? ` (+${((latest.usd / baseline - 1) * 100).toFixed(0)} pct)` : " (no prior spend)"}${attribution}`,
+			summary: `Spend ${day} was $${usd.toFixed(2)} vs 14d baseline $${baseline.toFixed(2)}${baseline > 0 ? ` (+${((usd / baseline - 1) * 100).toFixed(0)} pct)` : " (no prior spend)"}${attribution}`,
 			dedup_key: key,
 			evidence: {
-				date: yesterday,
-				usd: latest.usd,
+				date: day,
+				usd,
 				baseline,
 				...(top ? { topService: top } : {}),
 				// Always present when grouped, including 0: "no Bedrock spend" is
 				// the answer to the question this field exists for, and an absent
 				// key reads as "unknown" instead.
-				...(Object.keys(yesterdayByService).length > 0 ? { bedrockUsd, byService: yesterdayByService } : {}),
+				...(Object.keys(dayByService).length > 0 ? { bedrockUsd, byService: dayByService } : {}),
 			},
 			at: now.toISOString(),
 		},

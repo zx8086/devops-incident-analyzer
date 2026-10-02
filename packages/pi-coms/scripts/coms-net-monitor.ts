@@ -47,7 +47,7 @@ import { checkAlarms, describeAllAlarms, isScalingTrigger } from "./monitor/chec
 import { certRegions, checkCerts, checkListenerCerts } from "./monitor/checks/certs.ts";
 import { parseChurnRulePatterns, parseChurnTagKeys } from "./monitor/checks/churn-tags.ts";
 import { checkCompliance } from "./monitor/checks/compliance.ts";
-import { COST_DEFAULTS, checkCost } from "./monitor/checks/cost.ts";
+import { COST_DEFAULTS, COST_JUDGED_SNAPSHOT, checkCost, settledCostDate } from "./monitor/checks/cost.ts";
 import { checkDbEvents } from "./monitor/checks/db-events.ts";
 import { checkDrift } from "./monitor/checks/drift.ts";
 import { checkGuardDuty } from "./monitor/checks/guardduty.ts";
@@ -836,7 +836,7 @@ function main(): void {
 		log,
 	};
 
-	const buildDigest = async (): Promise<string> => {
+	const buildDigest = async (runNow: Date = new Date()): Promise<string> => {
 		const day = 86_400_000;
 		// SIO-1698 follow-up: a journal row that does not parse -- or parses but is
 		// not a Finding -- is skipped, never thrown. The digest is the daily report
@@ -862,7 +862,9 @@ function main(): void {
 		} catch {
 			// digest still ships
 		}
-		const latest = state.latestCost();
+		const spendDate = settledCostDate(runNow);
+		const judged = state.getSnapshot(COST_JUDGED_SNAPSHOT);
+		const fresh = judged?.date === spendDate;
 		return formatDigest({
 			accountId: ACCOUNT_ID,
 			accountName: ACCOUNT_NAME,
@@ -872,8 +874,9 @@ function main(): void {
 			checkErrorsByCheck: errsByCheck,
 			activeAlarms,
 			scalingTriggersInAlarm,
-			yesterdayUsd: latest?.usd ?? null,
-			baselineUsd: latest ? state.costBaseline(latest.date, 14) : null,
+			spendUsd: fresh ? Number(judged.usd) : null,
+			spendDate,
+			baselineUsd: fresh && judged.baseline !== "" ? Number(judged.baseline) : null,
 			bundleVersion: await bundleVersion(),
 			suppressedCount: state.journalRows(day, "suppressed_finding").length,
 			notables: notablesFromJournal(findingRows),
@@ -904,10 +907,13 @@ function main(): void {
 	};
 
 	const dailyDigest = async (): Promise<void> => {
+		// SIO-1923: one instant for the run, so the digest's spend line names the
+		// same settled day the cost check judged even if the run crosses midnight.
+		const runNow = new Date();
 		const dailyDeps: CycleDeps = {
 			gate,
 			checks: [
-				{ name: "cost", run: () => checkCost(ce, state, { pct: COST_PCT, abs: COST_ABS }) },
+				{ name: "cost", run: () => checkCost(ce, state, { now: runNow, pct: COST_PCT, abs: COST_ABS }) },
 				{ name: "trail", run: () => checkTrail(cloudtrail, state) },
 				{
 					name: "certs",
@@ -935,7 +941,7 @@ function main(): void {
 		const pruned = state.pruneJournal(JOURNAL_RETAIN_MS);
 		if (pruned > 0) log(`journal pruned: ${pruned} row(s) past retention`);
 		// The digest ships even when quiet; a missing digest is the dead-man signal.
-		const text = await buildDigest();
+		const text = await buildDigest(runNow);
 		try {
 			await reportAndEmail(text);
 		} catch (e) {

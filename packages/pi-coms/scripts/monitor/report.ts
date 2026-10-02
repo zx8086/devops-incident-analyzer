@@ -479,7 +479,9 @@ export type DigestInput = {
 	activeAlarms: string[];
 	// SIO-1754: scaling-trigger alarms in ALARM, counted but not listed.
 	scalingTriggersInAlarm?: number;
-	yesterdayUsd: number | null;
+	// SIO-1923: the settled day (D-2) the cost check judged, not yesterday.
+	spendUsd: number | null;
+	spendDate?: string | null;
 	baselineUsd: number | null;
 	bundleVersion?: string | null;
 	suppressedCount?: number;
@@ -563,17 +565,19 @@ export function formatDigest(d: DigestInput): string {
 			? `- alarms: none in ALARM${scalingNote}`
 			: `- alarms in ALARM: ${d.activeAlarms.join(", ")}${scalingNote}`,
 	);
-	if (d.yesterdayUsd != null) {
+	if (d.spendUsd != null) {
 		// A ratio is the thing an operator reacts to; "$2.18 vs $0.58" makes them
 		// do the division. Guarded on a POSITIVE baseline: a zero or absent one
 		// (a first-run account) would print Infinity.
 		const base =
 			d.baselineUsd != null && d.baselineUsd > 0
-				? ` (${(d.yesterdayUsd / d.baselineUsd).toFixed(1)}x the 14d baseline of $${d.baselineUsd.toFixed(2)})`
+				? ` (${(d.spendUsd / d.baselineUsd).toFixed(1)}x the 14d baseline of $${d.baselineUsd.toFixed(2)})`
 				: d.baselineUsd != null
 					? ` vs 14d baseline $${d.baselineUsd.toFixed(2)}`
 					: "";
-		lines.push(`- spend yesterday: $${d.yesterdayUsd.toFixed(2)}${base}`);
+		// The label stays "spend:" (letters only) so the web inbox still bolds it
+		// (apps/web/src/lib/digest-emphasis.ts LABEL); the date follows the value.
+		lines.push(`- spend: $${d.spendUsd.toFixed(2)}${d.spendDate ? ` on ${d.spendDate}` : ""}${base}`);
 	} else {
 		lines.push("- spend: no cost data yet");
 	}

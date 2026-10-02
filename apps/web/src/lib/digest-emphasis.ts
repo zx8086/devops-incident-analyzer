@@ -2,7 +2,7 @@
 // SIO-1720: a monitor report is a wall of same-weight lines. Two things carry the
 // structure an operator scans for -- the check family on a finding line
 // ((critical/alarm), (warn/logs), ...) and the label on a summary line
-// (findings:, alarms:, spend yesterday:) -- so those are emphasised and nothing
+// (findings:, alarms:, spend:) -- so those are emphasised and nothing
 // else is.
 //
 // Deliberately NOT "everything before the first colon": on a finding line that

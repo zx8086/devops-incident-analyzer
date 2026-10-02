@@ -139,7 +139,7 @@ describe("triage counts (SIO-1883)", () => {
 			findingCounts: {},
 			checkErrors: 0,
 			activeAlarms: [],
-			yesterdayUsd: null,
+			spendUsd: null,
 			baselineUsd: null,
 		};
 		expect(formatDigest({ ...base, triage: { turns: 0, heldBack: 0 } })).not.toContain("- investigation:");
