@@ -7,6 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { waitForOAuthCallback } from "../oauth-callback.ts";
 import { OAUTH_CALLBACK_PATH } from "./base-provider.ts";
+import { OAuthRefreshChainExpiredError } from "./errors.ts";
 
 interface SeedClientLike {
 	connect(transport: Transport): Promise<void>;
@@ -72,7 +73,23 @@ export async function seedOAuth(options: SeedOAuthOptions): Promise<void> {
 			return;
 		}
 	} catch (error) {
-		if (!(error instanceof UnauthorizedError)) {
+		// SIO-1917: a dead refresh chain is the state this CLI exists to repair,
+		// and every OAuthRefreshChainExpiredError hint names it as the remedy.
+		// The stored credentials make the provider throw before the SDK can start
+		// an authorization, so wipe them and connect again: with nothing stored
+		// that connect fires onRedirect and throws UnauthorizedError, the same as
+		// a fresh seed. Not retried: if the wipe did not clear it, it propagates.
+		if (error instanceof OAuthRefreshChainExpiredError && !options.force) {
+			log.warn("Stored OAuth credentials can no longer be refreshed; discarding them and re-authorizing.");
+			await provider.invalidateCredentials?.("all");
+			client = makeClient();
+			transport = makeTransport(mcpUrl, { authProvider: provider });
+			try {
+				await client.connect(transport);
+			} catch (retryError) {
+				if (!(retryError instanceof UnauthorizedError)) throw retryError;
+			}
+		} else if (!(error instanceof UnauthorizedError)) {
 			throw error;
 		}
 	}
