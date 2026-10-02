@@ -75,10 +75,13 @@ export function buildEvalMcpConfig(env: NodeJS.ProcessEnv = process.env): Parame
 	};
 }
 
-// SIO-1379: the A/B leg this process runs -- the sub-agent override is the eval's only
-// per-leg variable, so it doubles as the fixture namespace for recorded outputs/tool calls.
-function currentLeg(env: NodeJS.ProcessEnv = process.env): string {
-	return env.EVAL_SUB_AGENT_MODEL_OVERRIDE ?? "manifest-default";
+// SIO-1379: the A/B leg this process runs, which doubles as the fixture namespace for recorded
+// outputs/tool calls. SIO-1919: --root-model is a second per-leg variable, so it joins the name;
+// without it the name is unchanged and previously recorded fixtures still resolve.
+export function currentLeg(env: NodeJS.ProcessEnv = process.env): string {
+	const sub = env.EVAL_SUB_AGENT_MODEL_OVERRIDE ?? "manifest-default";
+	const root = env.EVAL_ROOT_MODEL_OVERRIDE;
+	return root ? `${sub}__root-${root}` : sub;
 }
 
 // SIO-1379: replay-outputs re-parses each recorded output instead of trusting the JSONL
