@@ -33,7 +33,7 @@ const log = createContextLogger("orbit-tools");
 // "embeddings not ready" guidance so the LLM drops to the REST/semantic path.
 const UNAVAILABLE_GUIDANCE =
 	"The GitLab Orbit knowledge graph is not available (disabled, still indexing, or the feature is off for this group). " +
-	"Fall back to gitlab_semantic_code_search for symbol resolution and gitlab_get_repository_tree / gitlab_list_commits " +
+	"Fall back to gitlab_semantic_search for symbol resolution and gitlab_get_repository_tree / gitlab_list_commits " +
 	"for per-project investigation. Do NOT fabricate cross-project import edges.";
 
 // SIO-1294: a compile error means Orbit is UP and rejected this query's shape --
@@ -86,7 +86,7 @@ function unavailableResult() {
 const AUTH_DENIED_GUIDANCE =
 	"GitLab Orbit rejected this server's credentials (HTTP 401/403) -- this is an auth problem, NOT an indexing state. " +
 	"Orbit uses the same GITLAB_PERSONAL_ACCESS_TOKEN as the other gitlab tools; the token is likely expired, rotated, " +
-	"or missing scopes. Fix the token and restart the server. Fall back to gitlab_semantic_code_search / " +
+	"or missing scopes. Fix the token and restart the server. Fall back to gitlab_semantic_search / " +
 	"gitlab_get_repository_tree for now, and do NOT fabricate cross-project import edges.";
 
 function authDeniedResult(statusCode: number | undefined) {

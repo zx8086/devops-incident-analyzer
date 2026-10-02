@@ -689,7 +689,10 @@ export function expectedToolsFired(run: Run, example?: Example): { key: string; 
 			satisfied.push(`${viaSubResource} via composite`);
 			continue;
 		}
-		missing.push(`[${group.anyOf.join(" | ")}] (${group.why})`);
+		// SIO-1918: a facet-only group has no tool names to show; name the facet it wanted.
+		const wanted =
+			group.anyOf.length > 0 ? group.anyOf.join(" | ") : `${(group.anySubResourceOf ?? []).join(" | ")} facet`;
+		missing.push(`[${wanted}] (${group.why})`);
 	}
 
 	const forbiddenCalled = (expected.forbiddenTools ?? []).filter((name) => called.has(name));

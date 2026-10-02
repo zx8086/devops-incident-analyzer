@@ -31,7 +31,7 @@ tools:
   - konnect_get_route
   - konnect_list_routes
   - gitlab_recent_deploys
-  - gitlab_get_merge_request_diffs
+  - gitlab_get_merge_request
   - gitlab_get_file_content
   - aws_ecs_describe_task_definition
   - aws_logs_start_query
@@ -81,7 +81,7 @@ produced, not at the point that fails.
 ## Step 3: routing fallthrough
 Use `gitlab_recent_deploys` on the service around the first occurrence and
 `aws_ecs_describe_task_definition` to identify the revision in service at that time. Use
-`gitlab_get_merge_request_diffs` on the release to look specifically for changes to route
+`gitlab_get_merge_request` with `include: ["diffs"], detail: "full_patch"` on the release to look specifically for changes to route
 annotations, path prefixes or a catch-all handler. A path that quietly stopped matching
 produces a constant 404 rate that begins at a deployment boundary and never recovers.
 
@@ -121,4 +121,4 @@ backlog item, not a page.
 - A 404 rate that predates the reported window: correct the ticket's framing before proposing any fix
 
 ## All Tools Used Are Read-Only
-capella_get_document_by_id, capella_run_sql_plus_plus_query, capella_get_scopes_and_collections, capella_analyze_document_structure, elasticsearch_search, elasticsearch_count_documents, elasticsearch_esql_query, konnect_query_api_requests, konnect_get_route, konnect_list_routes, gitlab_recent_deploys, gitlab_get_merge_request_diffs, gitlab_get_file_content, aws_ecs_describe_task_definition, aws_logs_start_query, aws_logs_get_query_results
+capella_get_document_by_id, capella_run_sql_plus_plus_query, capella_get_scopes_and_collections, capella_analyze_document_structure, elasticsearch_search, elasticsearch_count_documents, elasticsearch_esql_query, konnect_query_api_requests, konnect_get_route, konnect_list_routes, gitlab_recent_deploys, gitlab_get_merge_request, gitlab_get_file_content, aws_ecs_describe_task_definition, aws_logs_start_query, aws_logs_get_query_results

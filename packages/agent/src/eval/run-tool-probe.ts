@@ -56,11 +56,16 @@ const PROBE_ARGS: ProbeArgs = {
 	gitlab_get_repository_tree: { project_id: LIVE_ANCHORS.gitlab.projectId }, // string
 	gitlab_get_file_content: { project_id: LIVE_ANCHORS.gitlab.projectId, file_path: "README.md" },
 	gitlab_get_blame: { project_id: LIVE_ANCHORS.gitlab.projectId, file_path: "README.md" },
-	gitlab_get_merge_request: { id: LIVE_ANCHORS.gitlab.projectId, merge_request_iid: 383 },
-	gitlab_get_merge_request_diffs: { id: LIVE_ANCHORS.gitlab.projectId, merge_request_iid: 383 },
+	// SIO-1918: GitLab 19.4/19.5 unlisted the per-facet tools; each shape below was run
+	// against gitlab.com on 2026-10-02. The consolidated tools name the project `project_id`
+	// (get_pipeline and get_job still use `id`) and take ONE `include` facet per call.
+	gitlab_get_merge_request: {
+		project_id: LIVE_ANCHORS.gitlab.projectId,
+		merge_request_iid: LIVE_ANCHORS.gitlab.mergeRequestIid,
+		include: ["pipelines"],
+	},
 	gitlab_get_merge_request_notes: { project_id: LIVE_ANCHORS.gitlab.projectId, merge_request_iid: 383 },
-	gitlab_get_merge_request_pipelines: { id: LIVE_ANCHORS.gitlab.projectId, merge_request_iid: 383 },
-	gitlab_semantic_code_search: { id: LIVE_ANCHORS.gitlab.projectId, q: "styles" },
+	gitlab_semantic_search: { scope: "code", q: "styles", project_id: LIVE_ANCHORS.gitlab.projectId },
 	// Orbit's `query` is a DSL OBJECT, not Cypher. Single-node `traversal` is the search shape
 	// (Orbit has no `search` query_type); filters take operator objects. Verified live: row_count
 	// 3, format_version 5.0.1. An earlier probe sent a Cypher string and got -32602, which is why
@@ -78,9 +83,19 @@ const PROBE_ARGS: ProbeArgs = {
 	gitlab_cross_project_callers: { fqn: "main" },
 	gitlab_search: { scope: "projects", search: LIVE_ANCHORS.gitlab.searchableNamespace },
 	gitlab_get_commit_diff: { project_id: LIVE_ANCHORS.gitlab.projectId, sha: LIVE_ANCHORS.gitlab.commitSha },
-	gitlab_get_issue: { id: LIVE_ANCHORS.gitlab.projectId, issue_iid: 1 },
-	gitlab_get_job_log: { id: LIVE_ANCHORS.gitlab.projectId, job_id: LIVE_ANCHORS.gitlab.jobId },
-	gitlab_get_pipeline_jobs: { id: LIVE_ANCHORS.gitlab.projectId, pipeline_id: LIVE_ANCHORS.gitlab.pipelineId },
+	gitlab_get_work_item: { project_id: LIVE_ANCHORS.gitlab.projectId, work_item_iid: 1 },
+	gitlab_get_job: {
+		id: LIVE_ANCHORS.gitlab.projectId,
+		job_id: LIVE_ANCHORS.gitlab.jobId,
+		include: ["log"],
+		byte_limit: 2000,
+	},
+	gitlab_get_pipeline: {
+		id: LIVE_ANCHORS.gitlab.projectId,
+		pipeline_id: LIVE_ANCHORS.gitlab.pipelineId,
+		include: ["jobs"],
+	},
+	gitlab_list_pipelines: { id: LIVE_ANCHORS.gitlab.projectId, per_page: 5 },
 	gitlab_recent_deploys: { since: "2026-07-01" },
 	gitlab_pipeline_failures: { since: "2026-07-01" },
 	// atlassian

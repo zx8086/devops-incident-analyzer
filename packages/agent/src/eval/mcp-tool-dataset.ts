@@ -563,8 +563,9 @@ const EXAMPLES: EvalExample[] = [
 				requiredToolGroups: [
 					{
 						dataSource: "gitlab",
-						anyOf: ["gitlab_get_merge_request", "gitlab_get_merge_request_diffs"],
-						why: "MR detail drill-down -- both runbook-cited (code-change-correlation) and both need merge_request_iid, which is why a list-only question never reaches them",
+						// SIO-1918: GitLab unlisted the dedicated _diffs tool; diffs are a facet of this one.
+						anyOf: ["gitlab_get_merge_request"],
+						why: "MR detail drill-down -- runbook-cited (code-change-correlation) and needs merge_request_iid, which is why a list-only question never reaches it",
 					},
 					{
 						dataSource: "gitlab",
@@ -575,7 +576,10 @@ const EXAMPLES: EvalExample[] = [
 					},
 					{
 						dataSource: "gitlab",
-						anyOf: ["gitlab_get_merge_request_pipelines", "gitlab_get_pipeline_jobs"],
+						// SIO-1918: the dedicated tools this group named (_merge_request_pipelines,
+						// _pipeline_jobs) were unlisted by GitLab 19.5; pipeline state now comes from the
+						// pipeline tools or the MR's pipelines facet below.
+						anyOf: ["gitlab_get_pipeline", "gitlab_list_pipelines"],
 						// SIO-1866: the case that exposed this. Observed 2026-09-21 in experiment
 						// mcp-tool-eval-e20fc19c-2a916eff: the sub-agent called
 						// gitlab_get_merge_request{include:["pipelines"]} and got the IDENTICAL
@@ -642,26 +646,30 @@ const EXAMPLES: EvalExample[] = [
 				requiredToolGroups: [
 					{
 						dataSource: "gitlab",
-						anyOf: ["gitlab_get_pipeline_jobs"],
-						// SIO-1866: gitlab_get_pipeline{include:["jobs"]} returns the same jobs.
+						// SIO-1918: gitlab_get_pipeline_jobs was unlisted; gitlab_get_pipeline with
+						// include:["jobs"] is the only route now. Facet-only (empty anyOf): a bare
+						// gitlab_get_pipeline call returns no jobs and must not earn the credit.
+						anyOf: [],
 						anySubResourceOf: ["jobs"],
 						why: "pipelines action group -- needs pipeline_id, so it is only reachable when one is named or discovered",
 					},
 					{
 						dataSource: "gitlab",
-						anyOf: ["gitlab_get_job_log"],
-						// SIO-1866: gitlab_get_job{include:["log"]} returns the same log.
+						// SIO-1918: gitlab_get_job_log was renamed gitlab_get_job, and the log is now
+						// the include:["log"] facet. Facet-only for the same reason as the jobs group.
+						anyOf: [],
 						anySubResourceOf: ["log"],
 						why: "job logs are the actual failure evidence in a CI incident; runbook-cited and never exercised",
 					},
 					{
 						dataSource: "gitlab",
-						anyOf: ["gitlab_semantic_code_search", "gitlab_cross_project_callers"],
+						anyOf: ["gitlab_semantic_search", "gitlab_cross_project_callers"],
 						why: "code_analysis -- semantic search is the embedding-backed path (distinct from gitlab_search's keyword path) and cross_project_callers is in TYPED_FINDING_TOOLS",
 					},
 				],
-				forbiddenTools: ["gitlab_manage_pipeline", "gitlab_create_issue"],
-				knownGoodAnchors: [{ toolName: "gitlab_get_pipeline_jobs", mustReturnRows: true }],
+				forbiddenTools: ["gitlab_manage_pipeline", "gitlab_save_pipeline", "gitlab_save_work_item"],
+				// No anchor: the jobs group above already requires a NON-EMPTY jobs facet, which is
+				// stricter than "the tool returned rows" and needs no tool name to hang it on.
 			},
 		},
 		metadata: { ticketKey: "SIO-1398-gitlab-pipeline-and-code", queryProvenance: "reconstructed", era: "2026-08" },
@@ -680,13 +688,13 @@ const EXAMPLES: EvalExample[] = [
 				requiredToolGroups: [
 					{
 						dataSource: "gitlab",
-						anyOf: ["gitlab_get_issue"],
-						// SIO-1866: gitlab_get_work_item{include:["notes"]} returns the same issue.
+						// SIO-1918: gitlab_get_issue was unlisted, superseded by gitlab_get_work_item.
+						anyOf: ["gitlab_get_work_item"],
 						anySubResourceOf: ["notes"],
 						why: "issues action group -- the only uncovered member, runbook-cited, and needs issue_iid so a generic question never reaches it. Single-tool group so a miss isolates tool selection",
 					},
 				],
-				forbiddenTools: ["gitlab_create_issue", "gitlab_create_workitem_note"],
+				forbiddenTools: ["gitlab_save_work_item", "gitlab_save_note"],
 				// No anchor: issue #1 may legitimately not exist in this project, and that is a
 				// valid answer. The point here is that the tool FIRES, not what it returns.
 			},
@@ -739,7 +747,7 @@ const EXAMPLES: EvalExample[] = [
 				requiredToolGroups: [
 					{
 						dataSource: "gitlab",
-						anyOf: ["gitlab_search", "gitlab_semantic_code_search"],
+						anyOf: ["gitlab_search", "gitlab_semantic_search"],
 						why: "search action group -- gitlab_search is force-included via RESOLUTION and goes through the OAuth proxy rather than the REST client, so it exercises the OTHER gitlab auth path (the split that made SIO-1401 look like a code bug)",
 					},
 					{

@@ -191,6 +191,34 @@ describe("expectedToolsFired", () => {
 			expect(feedback?.comment).toContain("pipeline state for a SPECIFIC MR");
 		});
 
+		// SIO-1918: once the dedicated tool is gone the facet is the only evidence. A group that
+		// named the composite in anyOf would pass on a base call that returned no jobs at all.
+		describe("facet-only group (empty anyOf)", () => {
+			const jobsExpected = {
+				requiredToolGroups: [
+					{ dataSource: "gitlab", anyOf: [], anySubResourceOf: ["jobs"] as const, why: "the pipeline's jobs" },
+				],
+			};
+
+			test("the base call without the facet does not satisfy it, and the miss names the facet", () => {
+				const [feedback] = expectedToolsFired(
+					runWith([call({ dataSourceId: "gitlab", toolName: "gitlab_get_pipeline" })]),
+					exampleWith(jobsExpected),
+				);
+				expect(feedback?.score).toBe(0);
+				expect(feedback?.comment).toContain("jobs facet");
+			});
+
+			test("the call that returned the facet satisfies it", () => {
+				const [feedback] = expectedToolsFired(
+					runWith([call({ dataSourceId: "gitlab", toolName: "gitlab_get_pipeline", subResources: ["jobs"] })]),
+					exampleWith(jobsExpected),
+				);
+				expect(feedback?.score).toBe(1);
+				expect(feedback?.comment).toContain("jobs via composite");
+			});
+		});
+
 		test("a DIFFERENT sub-resource does not satisfy the group", () => {
 			// include:["notes"] retrieves review discussion, not pipeline state.
 			const [feedback] = expectedToolsFired(

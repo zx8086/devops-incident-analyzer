@@ -789,7 +789,7 @@ describe("parseFirstIssueIid", () => {
 	});
 });
 
-// gitlab_get_issue response shape: a single issue object with a `description` field.
+// gitlab_get_work_item response shape: a single work item object with a `description` field.
 describe("parseIssueDescription", () => {
 	test("returns the description field", () => {
 		const raw = JSON.stringify({ iid: 11, description: "## Awaiting Schedule\n\n - [ ] ..." });

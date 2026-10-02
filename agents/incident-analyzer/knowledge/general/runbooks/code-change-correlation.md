@@ -15,15 +15,13 @@ tools:
   - gitlab_recent_vulnerabilities
   - gitlab_graph_schema
   - gitlab_orbit_query_graph
-  - gitlab_semantic_code_search
+  - gitlab_semantic_search
   - gitlab_list_merge_requests
   - gitlab_get_merge_request
-  - gitlab_get_merge_request_diffs
-  - gitlab_get_merge_request_pipelines
   - gitlab_get_merge_request_notes
-  - gitlab_get_pipeline_jobs
-  - gitlab_get_job_log
-  - gitlab_get_issue
+  - gitlab_get_pipeline
+  - gitlab_get_job
+  - gitlab_get_work_item
   - gitlab_list_commits
   - gitlab_get_commit_diff
   - gitlab_get_file_content
@@ -54,13 +52,17 @@ maps to a deterministic tool path (SIO-1320, distilled from the 2026-07-31
 
 - What shipped recently? -- `gitlab_list_merge_requests` (project) /
   `gitlab_recent_deploys` (group-wide or project_path-scoped)
-- Where does the implicated code/config live? -- `gitlab_semantic_code_search`,
+- Where does the implicated code/config live? -- `gitlab_semantic_search`,
   `gitlab_get_repository_tree` (discovery first; never guess paths)
 - What does it say now? -- `gitlab_get_file_content`
 - Who/when last changed it? -- `gitlab_get_blame`, `gitlab_list_commits`
-- What exactly changed? -- `gitlab_get_commit_diff`, `gitlab_get_merge_request_diffs`
-- Did the shipping pipeline succeed? -- `gitlab_get_merge_request_pipelines`,
-  `gitlab_get_pipeline_jobs`, `gitlab_get_job_log`
+- What exactly changed? -- `gitlab_get_commit_diff`, `gitlab_get_merge_request`
+  with `include: ["diffs"], detail: "full_patch"` (without that detail level the
+  response carries no patch text, only change counts)
+- Did the shipping pipeline succeed? -- `gitlab_get_merge_request` with
+  `include: ["pipelines"]`, then `gitlab_get_pipeline` with `include: ["jobs"]`
+  and `gitlab_get_job` with `include: ["log"]` (every `include` takes ONE facet
+  per call)
 - Are pipelines failing group-wide? -- `gitlab_pipeline_failures`
 - What did reviewers flag pre-merge? -- `gitlab_get_merge_request_notes`
   (strongest candidate only; at most 2 cited notes)
@@ -71,8 +73,8 @@ maps to a deterministic tool path (SIO-1320, distilled from the 2026-07-31
   `gitlab_orbit_query_graph` grounded by `gitlab_graph_schema`
 - Prior art in GitLab issues? -- `gitlab_search` with `scope: "issues"` (NOT
   scope projects) using ERROR-CLASS vocabulary, never service names, +
-  `gitlab_get_issue` for any hit (its two required parameters are the
-  project id and the hit's iid). Run this whenever the incident names a
+  `gitlab_get_work_item` for any hit (it needs the project id and the
+  hit's iid). Run this whenever the incident names a
   distinctive error class; only skip it for a genuinely vague report with
   no exception/rule name. Jira owns incident history, so zero hits is the
   normal outcome
@@ -158,9 +160,10 @@ itself):
 1. `gitlab_list_merge_requests` with state merged and the incident window --
    filter client-side to MRs whose merge time falls inside the window.
 2. For at most the 3 MRs merged closest before onset: `gitlab_get_merge_request`
-   for details and authors, `gitlab_get_merge_request_diffs` for exactly what
-   changed, `gitlab_get_merge_request_pipelines` to verify the pipeline that
-   shipped it.
+   for details and authors, the same tool with `include: ["diffs"], detail:
+   "full_patch"` for exactly what changed (the default detail level returns
+   change counts and NO patch text), and again with `include: ["pipelines"]` to
+   verify the pipeline that shipped it (one facet per call).
 3. In the diffs, look for: changed error handling, modified timeouts or
    connection settings, new dependencies or API call patterns, configuration
    and feature-flag changes.
@@ -196,7 +199,7 @@ Use when Orbit is disabled or still indexing, the symbol lives on a
 non-default branch, or the code is Terraform/YAML (Orbit indexes the default
 branch only and excludes HCL/YAML):
 
-1. `gitlab_semantic_code_search` with the extracted anchors -- finds code by
+1. `gitlab_semantic_search` with the extracted anchors -- finds code by
    meaning, not exact text; focus on scores above 0.75.
 2. `gitlab_get_file_content` to read the implicated file; `gitlab_get_blame`
    to identify who last modified the failing lines.
@@ -211,7 +214,7 @@ A change is CONFIRMED as root cause only when three things line up: a
 code-level link (blast-radius importer, or a diff touching the failing
 surface), deployment evidence that the change actually shipped (a deploy from
 `gitlab_recent_deploys` or a passed deploy pipeline from
-`gitlab_get_merge_request_pipelines`), and error onset AFTER that deploy
+`gitlab_get_merge_request` with `include: ["pipelines"]`), and error onset AFTER that deploy
 timestamp. With any leg missing, report the change as a CANDIDATE correlation,
 not a cause.
 
@@ -247,4 +250,4 @@ not a cause.
 
 ## All Tools Used Are Read-Only
 
-gitlab_blast_radius, gitlab_cross_project_callers, gitlab_recent_deploys, gitlab_pipeline_failures, gitlab_recent_vulnerabilities, gitlab_graph_schema, gitlab_orbit_query_graph, gitlab_semantic_code_search, gitlab_list_merge_requests, gitlab_get_merge_request, gitlab_get_merge_request_diffs, gitlab_get_merge_request_pipelines, gitlab_get_merge_request_notes, gitlab_get_pipeline_jobs, gitlab_get_job_log, gitlab_get_issue, gitlab_list_commits, gitlab_get_commit_diff, gitlab_get_file_content, gitlab_get_blame, gitlab_search, gitlab_get_repository_tree
+gitlab_blast_radius, gitlab_cross_project_callers, gitlab_recent_deploys, gitlab_pipeline_failures, gitlab_recent_vulnerabilities, gitlab_graph_schema, gitlab_orbit_query_graph, gitlab_semantic_search, gitlab_list_merge_requests, gitlab_get_merge_request, gitlab_get_merge_request_notes, gitlab_get_pipeline, gitlab_get_job, gitlab_get_work_item, gitlab_list_commits, gitlab_get_commit_diff, gitlab_get_file_content, gitlab_get_blame, gitlab_search, gitlab_get_repository_tree

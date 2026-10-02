@@ -20,8 +20,13 @@ in order; every id comes from the PREVIOUS call's response, never guessed.
    truncated at 100" in the finding instead of assuming completeness.
 2. Rank the in-window MRs by merge time and pick AT MOST the 3 closest before
    the incident as candidates. For each candidate:
-   `gitlab_get_merge_request` -> `gitlab_get_merge_request_diffs` (what changed)
-   and `gitlab_get_merge_request_pipelines` (capture the pipeline id).
+   `gitlab_get_merge_request` (pass `project_id` and `merge_request_iid`), then
+   the SAME tool with `include: ["diffs"], detail: "full_patch"` (what changed;
+   the default detail level returns change counts and NO patch text, so
+   without `full_patch` there is nothing to read) and with
+   `include: ["pipelines"]` (capture the pipeline id: each pipeline's `id` is a
+   global id such as `gid://gitlab/Ci::Pipeline/2719503800`, and the number at
+   its end is the `pipeline_id` step 4 needs).
    `gitlab_get_merge_request`'s `include` takes ONE facet per call (GitLab
    rejects `["diffs","pipelines"]` with "include cannot contain more than 1
    items"). If a combined call is rejected, re-issue it ONCE PER FACET --
@@ -37,10 +42,13 @@ in order; every id comes from the PREVIOUS call's response, never guessed.
    even if the pipeline is green -- a passing pipeline does not mean the
    review discussion is uninformative.
 4. If the strongest candidate's pipeline is failing (not merely present):
-   `gitlab_get_pipeline_jobs(pipeline_id)` -> capture the failing/suspicious
-   job ids -> `gitlab_get_job_log(job_id)` for at most 2 jobs. Job logs are
-   large and contain ANSI escape codes; extract the failure lines, do not
-   quote whole logs. Skip this step outright when the pipeline is green --
+   `gitlab_get_pipeline(id, pipeline_id, include: ["jobs"], job_status:
+   "failed")` -> capture the failing/suspicious job ids ->
+   `gitlab_get_job(id, job_id, include: ["log"])` for at most 2 jobs. The jobs
+   facet lists name, stage and status only; `gitlab_get_job` is where a job's
+   detail and log are. Job logs are large and contain ANSI escape codes: pass a
+   `byte_limit`, page with `byte_offset` when the response says it was
+   truncated, extract the failure lines, and do not quote whole logs. Skip this step outright when the pipeline is green --
    there is nothing to extract.
 5. Report the MR iid, merge timestamp (ISO 8601), changed files, and the pipeline
    evidence together -- the orchestrator correlates timing against runtime
@@ -62,9 +70,9 @@ service names; a service-name search proves nothing either way, and a
 WorkItem-only fields -- either scope is fine; `issues` is the narrower,
 issue-shaped result.) Jira owns incident history (the atlassian agent
 queries it); this check only surfaces scanner/bot-created GitLab issues.
-For a hit, fetch detail via `gitlab_get_issue` -- its two required
-parameters are `id` (the numeric project id) and `issue_iid` (the hit's
-iid). Zero hits is the NORMAL outcome -- move on without retrying synonyms.
+For a hit, fetch detail via `gitlab_get_work_item` -- pass `project_id`
+(the numeric project id) and `work_item_iid` (the hit's iid); add
+`include: ["notes"]` only when the discussion matters. Zero hits is the NORMAL outcome -- move on without retrying synonyms.
 
 ## Blast radius workflow
 When the incident implicates a symbol or a changed shared file:
@@ -76,7 +84,7 @@ When the incident implicates a symbol or a changed shared file:
    different anchor (a symbol likelier to appear in import paths -- the module
    name rather than a method name). If still empty, say "no cross-project
    importers found for <symbol> in the Orbit index" and fall back to
-   `gitlab_semantic_code_search` -- NEVER conclude "nothing depends on this"
+   `gitlab_semantic_search` -- NEVER conclude "nothing depends on this"
    from a single empty call.
 3. For an exact known definition, prefer `gitlab_cross_project_callers(fqn:
    "<fqn from a blast-radius def row>")` -- the fqn must be exact (`eq` match),

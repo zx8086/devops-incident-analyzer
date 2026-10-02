@@ -235,7 +235,7 @@ Anchors removed for the same reason: `kafka_list_consumer_groups` (`filter`/`sta
 `kafka_list_topics` (`filter`/`prefix`), `elasticsearch_list_indices` (`indexPattern`).
 
 Anchors kept are keyed on an **exact identifier** (`gitlab_get_commit_diff` by sha,
-`gitlab_get_merge_request` by iid, `gitlab_get_pipeline_jobs` by pipeline id) or take no
+`gitlab_get_merge_request` by iid, `gitlab_get_pipeline` by pipeline id) or take no
 narrowing argument at all (couchbase current-state tools, `connect_list_connectors`).
 `mcp-tool-dataset.test.ts` now fails if a filterable-list anchor is reintroduced.
 

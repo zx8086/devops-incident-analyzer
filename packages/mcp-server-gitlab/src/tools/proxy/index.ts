@@ -17,7 +17,11 @@ export const TOOL_PREFIX = "gitlab_";
 const EMBEDDINGS_NOT_READY_PATTERN =
 	/no embeddings|indexing has been started|indexing is still ongoing|try again in a few minutes/i;
 const TIMEOUT_PATTERN = /timed?\s*out|request timeout|ETIMEDOUT|-32001/i;
-const SEMANTIC_SEARCH_TOOL = "semantic_code_search";
+// SIO-1918: GitLab 19.4 renamed semantic_code_search to semantic_search (scope + q +
+// project_id) and unlisted the old name, which stays callable as an alias. Both are
+// matched so an older self-managed instance that still lists the old name keeps the
+// embeddings retry.
+const SEMANTIC_SEARCH_TOOLS: ReadonlySet<string> = new Set(["semantic_search", "semantic_code_search"]);
 const SEMANTIC_SEARCH_TIMEOUT_MS = 120_000; // 2 min per call (default MCP timeout is 60s)
 const EMBEDDINGS_MAX_RETRIES = 1; // Single retry -- embeddings take 10-20 min, not seconds
 const EMBEDDINGS_RETRY_DELAY_MS = 15_000; // 15s wait before the single retry
@@ -185,7 +189,10 @@ export async function callWithEmbeddingsRetry(
 	retryDelayMs: number = EMBEDDINGS_RETRY_DELAY_MS,
 ): Promise<ProxyCallResult> {
 	const callOpts = { timeout: SEMANTIC_SEARCH_TIMEOUT_MS };
-	const projectId = typeof args.id === "string" || typeof args.id === "number" ? String(args.id) : undefined;
+	// semantic_search names the project `project_id`; the old semantic_code_search used `id`.
+	const rawProjectId = args.project_id ?? args.id;
+	const projectId =
+		typeof rawProjectId === "string" || typeof rawProjectId === "number" ? String(rawProjectId) : undefined;
 
 	for (let attempt = 0; attempt <= EMBEDDINGS_MAX_RETRIES; attempt++) {
 		if (attempt > 0) {
@@ -290,7 +297,7 @@ export function registerProxyTools(
 	for (const tool of remoteTools) {
 		const prefixedName = tool.name.startsWith(TOOL_PREFIX) ? tool.name : `${TOOL_PREFIX}${tool.name}`;
 		const zodShape = buildZodShapeFromJsonSchema(tool.inputSchema, tool.name);
-		const isSemanticSearch = tool.name === SEMANTIC_SEARCH_TOOL;
+		const isSemanticSearch = SEMANTIC_SEARCH_TOOLS.has(tool.name);
 
 		const handler = async (args: Record<string, unknown>) => {
 			return traceToolCall(prefixedName, async () => {
