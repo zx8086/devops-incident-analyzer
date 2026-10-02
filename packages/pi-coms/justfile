@@ -44,7 +44,14 @@ coms first *rest:
           ;;
       esac
     done
-    # SIO-1916: from Pi 0.99.0 --no-extensions also switches off the BUILT-IN
+    # SIO-1916: the built-in extensions named below exist from Pi 0.99.0. An older
+    # Pi would fail on them with the adapter already gone, so say what to do.
+    PI_VERSION="$(pi --version 2>/dev/null | tail -1 || true)"
+    if [ "$(printf '%s\n' "0.99.0" "$PI_VERSION" | sort -V | head -1)" != "0.99.0" ]; then
+      echo "just coms needs Pi 0.99.0 or newer (found: ${PI_VERSION:-none}); upgrade: npm install -g @earendil-works/pi-coding-agent" >&2
+      exit 1
+    fi
+    # From Pi 0.99.0 --no-extensions also switches off the BUILT-IN
     # extensions, so the two this console needs are named back in. builtin:mcp
     # reads ~/.pi/agent/mcp.json (it replaced pi-mcp-adapter, SIO-1915);
     # builtin:tool-search is the only way to reach a server whose exposure is
