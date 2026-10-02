@@ -67,6 +67,17 @@ export interface ToolCallRecord {
 export const SUB_RESOURCES = ["pipelines", "notes", "diffs", "commits", "jobs", "log", "diff"] as const;
 export type SubResource = (typeof SUB_RESOURCES)[number];
 
+// SIO-1922: where a tool's payload key is not the sub-resource it stands for. "diff" is ONE
+// commit's diff and "diffs" a merge request's, and the eval has to keep them apart because
+// sub-resources are matched by name across every call in a run. But "diff" is only GitLab's
+// `include` VALUE: gitlab_get_commit returns the patch under `diffs` (verified live
+// 2026-10-02, and only with diff_detail: "full_patch"; the default returns diffStats). Read
+// as a bare key, "diff" could never be detected and "diffs" would have let an MR's diffs
+// stand in for a commit's.
+const PAYLOAD_KEY_MEANS: Readonly<Record<string, Partial<Record<SubResource, SubResource>>>> = {
+	gitlab_get_commit: { diffs: "diff" },
+};
+
 export interface ToolTrajectory {
 	calls: ToolCallRecord[];
 	byDataSource: { [dataSourceId: string]: { total: number; errors: number } };
@@ -103,15 +114,16 @@ export function extractHallucinatedToolName(message: string): string | undefined
 // pipeline, and scoring that as "pipeline state retrieved" would turn this fix into a way
 // to pass the check with no data. A sub-resource counts only when it is NON-EMPTY, which is
 // the same rule the empty-anchor response-health check applies.
-export function detectSubResources(rawJson: unknown): SubResource[] {
+export function detectSubResources(rawJson: unknown, toolName?: string): SubResource[] {
 	if (!isRecord(rawJson)) return [];
+	const means = toolName === undefined ? undefined : PAYLOAD_KEY_MEANS[toolName];
 	const found: SubResource[] = [];
 	for (const name of SUB_RESOURCES) {
 		const value = rawJson[name];
 		if (value === undefined || value === null) continue;
 		// GraphQL connection ({nodes:[...]}) or a plain array -- both appear across these tools.
 		const rows = isRecord(value) && Array.isArray(value.nodes) ? value.nodes : value;
-		if (Array.isArray(rows) ? rows.length > 0 : true) found.push(name);
+		if (Array.isArray(rows) ? rows.length > 0 : true) found.push(means?.[name] ?? name);
 	}
 	return found;
 }
@@ -130,7 +142,7 @@ export function buildToolTrajectory(results: DataSourceResult[]): ToolTrajectory
 		// only by the response-health checks below and by detectSubResources (SIO-1866), and
 		// never copied onto the record.
 		for (const output of result.toolOutputs ?? []) {
-			const subResources = detectSubResources(output.rawJson);
+			const subResources = detectSubResources(output.rawJson, output.toolName);
 			calls.push({
 				...base,
 				toolName: output.toolName,
