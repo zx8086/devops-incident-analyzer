@@ -1,10 +1,9 @@
 // packages/agent/src/eval/run-incident-replay-eval.ts
 //
-// A/B harness for comparing sub-agent models on real-incident replays (7 sub-agents; root
-// incident-analyzer orchestrator is unaffected by --sub-agent-model and always resolves from
-// its own manifest). This harness exposes ONLY --sub-agent-model, applied via
-// EVAL_SUB_AGENT_MODEL_OVERRIDE (see llm.ts's applyEvalModelOverride) -- read at call time inside
-// resolveRoleModelConfig, no agent.yaml edit and no restart needed between runs.
+// A/B harness for comparing models on real-incident replays. --sub-agent-model swaps the 7
+// sub-agents (EVAL_SUB_AGENT_MODEL_OVERRIDE); --root-model swaps every OTHER role, light tier
+// included (EVAL_ROOT_MODEL_OVERRIDE, SIO-1919). Both are read at call time inside
+// resolveRoleModelConfig (llm.ts applyEvalModelOverride) -- no agent.yaml edit, no restart.
 //
 // Experiments land in LangSmith against the "incident-replay-eval" dataset, directly comparable
 // in LangSmith's UI (Datasets -> incident-replay-eval -> Compare). The experiment name is always
@@ -15,6 +14,7 @@
 //
 //   bun run eval:incident-replay                                    # sub-agent model from agent.yaml as-is
 //   bun run eval:incident-replay -- --sub-agent-model claude-opus-5  # explicit override
+//   bun run eval:incident-replay -- --root-model claude-sonnet-5-5   # SIO-1919 root swap
 
 import { spawnSync } from "node:child_process";
 import { loadAgent } from "@devops-agent/gitagent-bridge";
@@ -32,6 +32,8 @@ import {
 	subagentEvidenceJudge,
 } from "./evaluators.ts";
 import { filterExamplesByTicket } from "./example-ticket-filter.ts";
+import { jevCitationGrounding } from "./jev-citation-evaluator.ts";
+import { jevEvalMetadata } from "./jev-metadata.ts";
 import { runAgent } from "./run-function.ts";
 import { runbookSelectionVsUsage } from "./runbook-selection-evaluator.ts";
 
@@ -72,6 +74,10 @@ const subAgentOverride = opt("sub-agent-model");
 if (subAgentOverride) {
 	process.env.EVAL_SUB_AGENT_MODEL_OVERRIDE = subAgentOverride;
 }
+const rootOverride = opt("root-model");
+if (rootOverride) {
+	process.env.EVAL_ROOT_MODEL_OVERRIDE = rootOverride;
+}
 
 // SIO-1372: resolve the ACTUAL model this run will use (override or agent.yaml default) so the
 // experiment name always reflects reality, never a stale "current"/"reverted" label from
@@ -83,6 +89,10 @@ const resolvedSubAgentModel =
 	subAgentOverride ??
 	resolveRoleModelConfig("subAgent", orchestrator, "elastic-agent").modelConfig?.preferred ??
 	"unknown";
+// aggregator is a non-light root-manifest role, so it shows what the root resolves to.
+const resolvedRootModel =
+	rootOverride ?? resolveRoleModelConfig("aggregator", orchestrator).modelConfig?.preferred ?? "unknown";
+const jevMetadata = jevEvalMetadata();
 
 const repetitions = intOpt("repetitions") ?? 1;
 
@@ -100,10 +110,10 @@ if (ticketFilter) {
 	for await (const example of client.listExamples({ datasetName: DATASET_NAME })) {
 		allExamples.push(example);
 	}
-	const { matched, availableTicketKeys } = filterExamplesByTicket(allExamples, ticketFilter);
-	if (matched.length === 0) {
+	const { matched, availableTicketKeys, unmatchedKeys } = filterExamplesByTicket(allExamples, ticketFilter);
+	if (matched.length === 0 || unmatchedKeys.length > 0) {
 		console.error(
-			`--ticket "${ticketFilter}" matched no examples in ${DATASET_NAME}. Known ticketKeys: ${availableTicketKeys.join(", ")}`,
+			`--ticket "${ticketFilter}": no examples for ${unmatchedKeys.join(", ") || ticketFilter} in ${DATASET_NAME}. Known ticketKeys: ${availableTicketKeys.join(", ")}`,
 		);
 		process.exit(1);
 	}
@@ -113,7 +123,10 @@ if (ticketFilter) {
 
 console.log("WARNING: this hits the systems your .env points at (Bedrock, OpenAI, all 7 MCP servers).");
 console.log(
-	`Sub-agent model: ${resolvedSubAgentModel} | judge: ${judgeModelConfig().model} | repetitions: ${repetitions}`,
+	`Sub-agent model: ${resolvedSubAgentModel} | root model: ${resolvedRootModel} | judge: ${judgeModelConfig().model} | repetitions: ${repetitions}`,
+);
+console.log(
+	`Jev: ${jevMetadata.jev ? "ON" : "OFF"} (${jevMetadata.jevModel}; selector=${jevMetadata.jevActionSelector}, rerank=${jevMetadata.jevAtlassianRerank})`,
 );
 console.log("Estimated cost: $0.50-1.50 and ~5-10min PER repetition. Continue in 5s or Ctrl-C.");
 await new Promise((r) => setTimeout(r, 5000));
@@ -135,7 +148,7 @@ if (process.env.EVAL_FIXTURE_MODE === "replay-outputs") {
 // eval even starts -- a placeholder keeps the experiment name well-formed instead.
 const gitRev = spawnSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf-8" });
 const gitSha = gitRev.status === 0 && gitRev.stdout ? gitRev.stdout.trim() : "nogit";
-const experimentPrefix = `agent-eval-${gitSha}-subagent-${resolvedSubAgentModel}`;
+const experimentPrefix = `agent-eval-${gitSha}-subagent-${resolvedSubAgentModel}-root-${resolvedRootModel}`;
 console.log(`Starting evaluation, experiment prefix: ${experimentPrefix}`);
 
 // SIO-1378: the SIO-680 `as any` cast is gone -- langsmith@0.6.3's EvaluatorT accepts the
@@ -161,6 +174,9 @@ const results = await evaluate(
 			// OpenAI call per example when the response cites a runbook by name/title.
 			runbookSelectionVsUsage,
 			citationGrounding,
+			// SIO-1919: Jev twin of citationGrounding, run alongside it to measure agreement
+			// before the OpenAI judge could be retired. Skips without TYPESAFE_API_KEY.
+			jevCitationGrounding,
 		],
 		experimentPrefix,
 		maxConcurrency: 1,
@@ -168,6 +184,10 @@ const results = await evaluate(
 		metadata: {
 			gitSha,
 			subAgentModel: resolvedSubAgentModel,
+			rootModel: resolvedRootModel,
+			// SIO-1919: Jev runs inside the graph during live evals; a leg with it on and a leg
+			// with it off differ in two variables, so stamp it.
+			...jevMetadata,
 			judgeModel: judgeModelConfig().model,
 			repetitions,
 			fixtureMode: process.env.EVAL_FIXTURE_MODE ?? "live",

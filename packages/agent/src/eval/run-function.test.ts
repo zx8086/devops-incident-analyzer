@@ -1,6 +1,6 @@
 // packages/agent/src/eval/run-function.test.ts
 import { describe, expect, test } from "bun:test";
-import { buildEvalMcpConfig, FrozenOutputSchema } from "./run-function.ts";
+import { buildEvalMcpConfig, currentLeg, FrozenOutputSchema } from "./run-function.ts";
 
 // SIO-1375 follow-up: run-function.ts's ensureMcpConnected() builds the McpClientConfig passed to
 // createMcpClient. Every AWS eval run in the SIO-1374/SIO-1375 A/B legs (both before AND after the
@@ -171,5 +171,19 @@ describe("FrozenOutputSchema knowledgeSnapshot backward compatibility (SIO-1442)
 		expect(parsed.knowledgeSnapshot).toEqual([
 			{ filename: "database-slow-queries.md", content: "...", title: "Couchbase Slow Query Investigation" },
 		]);
+	});
+});
+
+describe("currentLeg fixture namespace (SIO-1919)", () => {
+	test("unchanged without a root override, so existing fixtures still resolve", () => {
+		expect(currentLeg({})).toBe("manifest-default");
+		expect(currentLeg({ EVAL_SUB_AGENT_MODEL_OVERRIDE: "claude-sonnet-5-5" })).toBe("claude-sonnet-5-5");
+	});
+
+	test("two root-model legs get distinct namespaces instead of overwriting each other", () => {
+		const a = currentLeg({ EVAL_ROOT_MODEL_OVERRIDE: "claude-opus-5-5" });
+		const b = currentLeg({ EVAL_ROOT_MODEL_OVERRIDE: "claude-sonnet-5-5" });
+		expect(a).not.toBe(b);
+		expect(a).not.toBe(currentLeg({}));
 	});
 });

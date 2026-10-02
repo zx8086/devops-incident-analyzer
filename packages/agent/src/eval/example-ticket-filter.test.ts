@@ -30,4 +30,16 @@ describe("SIO-1454: filterExamplesByTicket", () => {
 		expect(matched).toHaveLength(0);
 		expect(availableTicketKeys).toEqual(["DEVOPS-1354", "DEVOPS-1386"]);
 	});
+
+	test("SIO-1919: a comma-separated list matches every listed key", () => {
+		const { matched, unmatchedKeys } = filterExamplesByTicket(examples, "DEVOPS-1386, DEVOPS-1354");
+		expect(matched).toHaveLength(3);
+		expect(unmatchedKeys).toEqual([]);
+	});
+
+	test("SIO-1919: a typo in one key of a list is reported, not silently dropped", () => {
+		const { matched, unmatchedKeys } = filterExamplesByTicket(examples, "DEVOPS-1386,DEVOPS-1345");
+		expect(matched).toHaveLength(2);
+		expect(unmatchedKeys).toEqual(["DEVOPS-1345"]);
+	});
 });

@@ -18,13 +18,25 @@ function parsedTicketKey(example: TicketFilterableExample): string | undefined {
 	return parsed.success ? parsed.data : undefined;
 }
 
+// SIO-1919: ticketKey may be a comma-separated list so a screen can run on a fixed subset.
+// unmatchedKeys lets the caller refuse a typo instead of silently running on fewer tickets.
 export function filterExamplesByTicket<T extends TicketFilterableExample>(
 	examples: T[],
 	ticketKey: string,
-): { matched: T[]; availableTicketKeys: string[] } {
-	const matched = examples.filter((e) => parsedTicketKey(e) === ticketKey);
+): { matched: T[]; availableTicketKeys: string[]; unmatchedKeys: string[] } {
+	const wanted = new Set(
+		ticketKey
+			.split(",")
+			.map((k) => k.trim())
+			.filter((k) => k !== ""),
+	);
+	const matched = examples.filter((e) => {
+		const key = parsedTicketKey(e);
+		return key !== undefined && wanted.has(key);
+	});
 	const availableTicketKeys = [
 		...new Set(examples.map((e) => parsedTicketKey(e)).filter((k): k is string => k !== undefined)),
 	].sort();
-	return { matched, availableTicketKeys };
+	const unmatchedKeys = [...wanted].filter((k) => !availableTicketKeys.includes(k));
+	return { matched, availableTicketKeys, unmatchedKeys };
 }

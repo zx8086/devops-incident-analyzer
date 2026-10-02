@@ -28,6 +28,7 @@ import {
 	toolNameValidity,
 	toolResponseHealth,
 } from "./evaluators.ts";
+import { jevEvalMetadata } from "./jev-metadata.ts";
 import { coveredDatasources } from "./mcp-tool-dataset.ts";
 import { runAgent } from "./run-function.ts";
 
@@ -141,6 +142,9 @@ const results = await evaluate(
 			gitSha,
 			datasource: datasource ?? "all",
 			fixtureMode: process.env.EVAL_FIXTURE_MODE ?? "live",
+			// SIO-1919: the action selector changes which tools a sub-agent can call, which is
+			// exactly what this eval scores.
+			...jevEvalMetadata(),
 		},
 	},
 );

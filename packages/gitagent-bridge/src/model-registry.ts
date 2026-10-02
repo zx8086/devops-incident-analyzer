@@ -201,6 +201,42 @@ export const MODEL_REGISTRY = {
 		verifiedRegion: "eu-central-1",
 		probeReport: "docs/reference/model-probes/claude-opus-5.md",
 	},
+	// SIO-1919: eval bake-off candidates, probed 2026-10-02. contentShapeWithTools kept "blocks"
+	// over the measured "string" for the same reason as claude-sonnet-5-5 below. The subAgent
+	// budget of 8192 truncated 2/3 large-prompt samples (Sonnet 5.5: 1/3), so a subAgent swap
+	// to this model is expected to lose output on long tool contexts.
+	"claude-opus-5-5": {
+		bedrockId: "eu.anthropic.claude-opus-5-5",
+		acceptsTemperature: false,
+		contentShapeWithoutTools: "blocks",
+		contentShapeWithTools: "blocks",
+		observedBlockTypes: ["reasoning", "text"],
+		emitsReasoningContent: true,
+		observedRawControlCharsInJson: false,
+		longFormMinTokens: 16384,
+		observedLatencyMs: { p50: 4992, max: 124321 },
+		verifiedAt: "2026-10-02",
+		verifiedRegion: "eu-central-1",
+		probeReport: "docs/reference/model-probes/claude-opus-5-5.md",
+	},
+	// Probed 2026-10-02. P3 measured contentShapeWithTools "string" this run; kept "blocks" on the
+	// claude-sonnet-5 precedent (P3-with-tools is stochastic, and a "blocks" consumer tolerates a
+	// "string" response but not the reverse). Same 16384 large-prompt floor as Sonnet 5: the
+	// subAgent budget of 8192 truncated 1/3 large-prompt samples.
+	"claude-sonnet-5-5": {
+		bedrockId: "eu.anthropic.claude-sonnet-5-5",
+		acceptsTemperature: false,
+		contentShapeWithoutTools: "blocks",
+		contentShapeWithTools: "blocks",
+		observedBlockTypes: ["reasoning", "text"],
+		emitsReasoningContent: true,
+		observedRawControlCharsInJson: false,
+		longFormMinTokens: 16384,
+		observedLatencyMs: { p50: 4113, max: 80804 },
+		verifiedAt: "2026-10-02",
+		verifiedRegion: "eu-central-1",
+		probeReport: "docs/reference/model-probes/claude-sonnet-5-5.md",
+	},
 	// SIO-872: the valid EU inference profile is ...-4-6-v1; the bare ...-4-6 is not a real
 	// Bedrock id and was rejected at invoke time, silently forcing the fallback.
 	"claude-opus-4-6": {
