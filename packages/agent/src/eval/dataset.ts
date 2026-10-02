@@ -31,6 +31,10 @@ export interface ExpectedToolUse {
 		// ground truth is "pipeline state was retrieved", and one call carrying it is strictly
 		// better than two. Matched against the non-empty sub-resources detectSubResources read
 		// from the payload, so an empty {"pipelines":{"nodes":[]}} does NOT satisfy it.
+		// SIO-1918: when the dedicated tool no longer exists, the facet is the ONLY evidence, and
+		// naming the composite in anyOf would credit a base call that never asked for it
+		// (gitlab_get_pipeline without include:["jobs"] returns no jobs). Such a group leaves
+		// anyOf EMPTY and is satisfied by the returned sub-resource alone.
 		anySubResourceOf?: readonly SubResource[];
 		// Required: forces the curator to justify the group. When it later goes red, a reader can
 		// tell "genuinely required" from "transcribed whatever ran that day".

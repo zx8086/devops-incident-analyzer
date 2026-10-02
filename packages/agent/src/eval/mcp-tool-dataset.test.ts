@@ -34,7 +34,8 @@ describe("mcp-tool dataset shape", () => {
 			expect(expected).toBeDefined();
 			expect(expected?.requiredToolGroups.length).toBeGreaterThan(0);
 			for (const group of expected?.requiredToolGroups ?? []) {
-				expect(group.anyOf.length).toBeGreaterThan(0);
+				// SIO-1918: a facet-only group names no tool; it must then name a sub-resource.
+				expect(group.anyOf.length + (group.anySubResourceOf?.length ?? 0)).toBeGreaterThan(0);
 				// `why` is mandatory so a future red group is distinguishable from a group that
 				// merely transcribed whatever the agent happened to do that day.
 				expect(group.why.trim().length).toBeGreaterThan(0);

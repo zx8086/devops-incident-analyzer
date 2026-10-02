@@ -647,15 +647,17 @@ const EXAMPLES: EvalExample[] = [
 					{
 						dataSource: "gitlab",
 						// SIO-1918: gitlab_get_pipeline_jobs was unlisted; gitlab_get_pipeline with
-						// include:["jobs"] is the only route now (SIO-1866 already counted its facet).
-						anyOf: ["gitlab_get_pipeline"],
+						// include:["jobs"] is the only route now. Facet-only (empty anyOf): a bare
+						// gitlab_get_pipeline call returns no jobs and must not earn the credit.
+						anyOf: [],
 						anySubResourceOf: ["jobs"],
 						why: "pipelines action group -- needs pipeline_id, so it is only reachable when one is named or discovered",
 					},
 					{
 						dataSource: "gitlab",
-						// SIO-1918: gitlab_get_job_log was renamed gitlab_get_job (include:["log"]).
-						anyOf: ["gitlab_get_job"],
+						// SIO-1918: gitlab_get_job_log was renamed gitlab_get_job, and the log is now
+						// the include:["log"] facet. Facet-only for the same reason as the jobs group.
+						anyOf: [],
 						anySubResourceOf: ["log"],
 						why: "job logs are the actual failure evidence in a CI incident; runbook-cited and never exercised",
 					},
@@ -666,7 +668,8 @@ const EXAMPLES: EvalExample[] = [
 					},
 				],
 				forbiddenTools: ["gitlab_manage_pipeline", "gitlab_save_pipeline", "gitlab_save_work_item"],
-				knownGoodAnchors: [{ toolName: "gitlab_get_pipeline", mustReturnRows: true }],
+				// No anchor: the jobs group above already requires a NON-EMPTY jobs facet, which is
+				// stricter than "the tool returned rows" and needs no tool name to hang it on.
 			},
 		},
 		metadata: { ticketKey: "SIO-1398-gitlab-pipeline-and-code", queryProvenance: "reconstructed", era: "2026-08" },
