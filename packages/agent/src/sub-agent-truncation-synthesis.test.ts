@@ -58,8 +58,8 @@ describe("SIO-1260: buildTruncationEvidenceDigest", () => {
 	test("a tight budget still represents every distinct tool at least once", () => {
 		const big = JSON.stringify(Array.from({ length: 400 }, (_, i) => ({ i, blob: "x".repeat(80) })));
 		const evidence: SynthesisEvidenceEntry[] = [
-			{ toolName: "gitlab_semantic_code_search", content: big },
-			{ toolName: "gitlab_semantic_code_search", content: big },
+			{ toolName: "gitlab_semantic_search", content: big },
+			{ toolName: "gitlab_semantic_search", content: big },
 			{ toolName: "gitlab_list_commits", content: big },
 			{ toolName: "gitlab_pipeline_failures", content: big },
 		];
@@ -68,7 +68,7 @@ describe("SIO-1260: buildTruncationEvidenceDigest", () => {
 		expect(digest.includedTools.sort()).toEqual([
 			"gitlab_list_commits",
 			"gitlab_pipeline_failures",
-			"gitlab_semantic_code_search",
+			"gitlab_semantic_search",
 		]);
 		expect(digest.droppedTools).toEqual([]);
 	});

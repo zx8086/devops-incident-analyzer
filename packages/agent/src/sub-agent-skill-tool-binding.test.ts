@@ -15,8 +15,8 @@ const gitlabToolDef: ToolDefinition = ToolDefinitionSchema.parse({
 		mcp_server: "gitlab",
 		mcp_patterns: ["gitlab_*"],
 		action_tool_map: {
-			pipelines: ["gitlab_get_pipeline_jobs", "gitlab_get_job_log"],
-			search: ["gitlab_search", "gitlab_semantic_code_search"],
+			pipelines: ["gitlab_get_pipeline", "gitlab_get_job"],
+			search: ["gitlab_search", "gitlab_semantic_search"],
 			code_analysis: ["gitlab_get_file_content", "gitlab_get_blame", "gitlab_get_repository_tree"],
 		},
 	},
@@ -30,10 +30,10 @@ function fakeTools(names: string[]): StructuredToolInterface[] {
 function buildGitlabTools(): StructuredToolInterface[] {
 	return fakeTools([
 		...Array.from({ length: 26 }, (_, i) => `gitlab_filler_${i}`),
-		"gitlab_get_pipeline_jobs",
-		"gitlab_get_job_log",
+		"gitlab_get_pipeline",
+		"gitlab_get_job",
 		"gitlab_search",
-		"gitlab_semantic_code_search",
+		"gitlab_semantic_search",
 		"gitlab_get_file_content",
 		"gitlab_get_blame",
 		"gitlab_get_repository_tree",
@@ -64,7 +64,7 @@ describe("SIO-1228: tools named in skill prose are always bound", () => {
 		expect(names).toContain("gitlab_get_file_content");
 		expect(names).toContain("gitlab_get_repository_tree");
 		// The action-selected tools are still there -- skill tools are unioned, not substituted.
-		expect(names).toContain("gitlab_get_pipeline_jobs");
+		expect(names).toContain("gitlab_get_pipeline");
 		expect(tools.length).toBeLessThanOrEqual(25);
 	});
 

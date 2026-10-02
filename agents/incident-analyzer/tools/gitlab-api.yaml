@@ -67,46 +67,67 @@ tool_mapping:
   mcp_server: gitlab
   mcp_patterns:
     - "gitlab_*"
-  # SIO-1178: read-only map (annotations.read_only: true). Write tools
-  # (gitlab_create_issue, gitlab_create_workitem_note, gitlab_create_merge_request,
-  # gitlab_create_merge_request_note, gitlab_link_work_items,
-  # gitlab_attach_scan_profile) are deliberately unmapped -- the incident analyzer
+  # SIO-1178: read-only map (annotations.read_only: true). The incident analyzer
   # investigates, it does not mutate GitLab; ticket creation runs through the
-  # atlassian-backed create-ticket tool. gitlab_manage_pipeline is unmapped too
-  # (CodeRabbit, PR #441): despite its list action it also creates/retries/
-  # cancels/deletes pipelines; pipeline reads stay covered by
-  # gitlab_get_merge_request_pipelines, gitlab_get_pipeline_jobs, and
-  # gitlab_pipeline_failures. Also deliberately unmapped:
+  # atlassian-backed create-ticket tool. Deliberately unmapped WRITE tools:
+  # gitlab_save_work_item, gitlab_save_merge_request, gitlab_save_note,
+  # gitlab_save_merge_request_review, gitlab_save_pipeline, gitlab_manage_pipeline
+  # (CodeRabbit, PR #441: creates/retries/cancels/deletes despite its list action),
+  # gitlab_accept_merge_request, gitlab_add_branch, gitlab_add_commit,
+  # gitlab_fork_repository, gitlab_link_work_items.
+  #
+  # SIO-1918: GitLab 19.4/19.5 consolidated its MCP surface. The per-facet tools
+  # (get_issue, get_workitem_notes, get_merge_request_commits/_diffs/_pipelines/
+  # _conflicts, get_pipeline_jobs, get_job_log, semantic_code_search) were UNLISTED:
+  # still callable upstream "while callers migrate", but no longer in tools/list, so
+  # this server does not register them and a name mapped here would resolve to
+  # nothing. Their replacements take an `include` facet, ONE per call:
+  #   gitlab_get_work_item      include: notes | related_merge_requests
+  #   gitlab_get_merge_request  include: diffs | commits | notes | pipelines |
+  #                             discussions | approvals | conflicts
+  #   gitlab_get_pipeline       include: jobs | downstream_pipelines | bridge_jobs | artifacts
+  #   gitlab_get_job            include: log | artifacts
+  #   gitlab_get_commit         include: diff | notes
+  # The `jobs` facet carries no failure_reason, duration or timestamps per job;
+  # gitlab_get_job (one job) and gitlab_pipeline_failures (ours) do.
+  #
+  # Also deliberately unmapped, all read-only: gitlab_get_repository_file and
+  # gitlab_list_repository_tree (the custom gitlab_get_file_content and
+  # gitlab_get_repository_tree cover them), gitlab_list_projects, gitlab_list_groups,
+  # gitlab_list_branches, gitlab_get_user, gitlab_list_project_members (org
+  # discovery, not incident evidence; gitlab_search resolves projects),
   # gitlab_get_mcp_server_version (diagnostic) and gitlab_get_work_item_types
   # (creation-flow metadata).
   action_tool_map:
     issues:
-      - gitlab_get_issue
-      - gitlab_get_workitem_notes
+      - gitlab_get_work_item
+      - gitlab_list_work_items
       - gitlab_get_saved_view_work_items
     merge_requests:
       - gitlab_list_merge_requests
       - gitlab_get_merge_request
-      - gitlab_get_merge_request_commits
-      - gitlab_get_merge_request_diffs
-      - gitlab_get_merge_request_pipelines
-      - gitlab_get_merge_request_conflicts
       - gitlab_get_merge_request_notes
     pipelines:
-      - gitlab_get_pipeline_jobs
-      - gitlab_get_job_log
+      - gitlab_list_pipelines
+      - gitlab_get_pipeline
+      - gitlab_get_job
+      - gitlab_get_artifact_file
       - gitlab_pipeline_failures
     search:
       - gitlab_search
       - gitlab_search_labels
-      - gitlab_semantic_code_search
+      - gitlab_semantic_search
+      - gitlab_get_project
       - gitlab_recent_deploys
     code_analysis:
       - gitlab_get_file_content
       - gitlab_get_blame
+      - gitlab_get_commit
       - gitlab_get_commit_diff
       - gitlab_list_commits
       - gitlab_get_repository_tree
+      - gitlab_list_tags
+      - gitlab_list_releases
     graph_analysis:
       - gitlab_graph_schema
       - gitlab_blast_radius
@@ -114,11 +135,20 @@ tool_mapping:
       - gitlab_recent_vulnerabilities
       - gitlab_orbit_query_graph
   action_descriptions:
-    issues: when querying GitLab issues, comments, labels, or saved views in a project
-    merge_requests: when listing or querying merge requests, their commits/diffs/pipelines/conflicts, or MR notes (gitlab_list_merge_requests is the primary code-change correlation path)
-    pipelines: when checking CI/CD pipeline status, jobs, or job logs, or recent pipeline failures for a project (or ranking pipeline failures group-wide via Orbit)
-    search: when running global text or semantic search across GitLab projects (issues, MRs, commits, blobs), or listing recent deploy MRs group-wide via Orbit
-    code_analysis: when reading file content, blame, commit diffs, commit listings, or repository tree (custom REST tools, not the proxied search)
+    issues: when reading or listing GitLab work items (issues, incidents, tasks, epics), their notes, or saved views in a project
+    merge_requests: >
+      when listing or querying merge requests, their commits/diffs/pipelines/conflicts
+      (gitlab_get_merge_request with one include facet per call), or MR notes
+      (gitlab_list_merge_requests is the primary code-change correlation path)
+    pipelines: when checking CI/CD pipeline status, a pipeline's jobs, a job's log or artifacts, or recent pipeline failures for a project (or ranking pipeline failures group-wide via Orbit)
+    search: >
+      when running global text or semantic search across GitLab projects (work items,
+      MRs, commits, blobs), resolving a project's id and default branch, or listing
+      recent deploy MRs group-wide via Orbit
+    code_analysis: >
+      when reading file content, blame, a commit and its diff, commit listings, the
+      repository tree, or which tags and releases shipped (custom REST tools plus
+      GitLab's commit, tag and release reads)
     graph_analysis: >
       when tracing cross-project impact -- who calls a changed definition across
       repos, the blast radius of a file/symbol, or group-wide vulnerabilities

@@ -13,7 +13,7 @@ service or repo name.
 Any of these count as discovery -- pick with the decision table below:
 - `gitlab_blast_radius` (Orbit) -- an exact stack-trace symbol; its definition
   row carries the exact project/file/line. Prefer it for that case.
-- `gitlab_semantic_code_search` -- fuzzy "code that resembles this error".
+- `gitlab_semantic_search` -- fuzzy "code that resembles this error".
 - `gitlab_search` with blob scope -- literal strings.
 - `gitlab_get_repository_tree` -- LISTS what exists, so it is discovery too, not
   guessing; use it to enumerate when the searches come back empty.
@@ -39,8 +39,9 @@ orchestrator provides error context from logs, extract search anchors:
 - Endpoint patterns: `/api/v1/delivery-dates`
 - Domain concepts: "delivery date calculation", "consumer retry logic"
 
-Use these as `semantic_query` in `gitlab_semantic_code_search`. Results
-are scored 0-1. Focus on scores above 0.75. When results point to
+Use these as `q` in `gitlab_semantic_search` (with `scope: "code"` and the
+project as `project_id`). Results are grouped by file and scored 0-1, with an
+overall `confidence`. Focus on scores above 0.75. When results point to
 exception handlers or error handlers, follow up with `get_file_content`
 and `get_blame` to identify who last modified the code and whether a
 recent change introduced the fault.
@@ -69,8 +70,8 @@ search.
 | Where is this stack-trace symbol DEFINED? (exact project/file/line) | `gitlab_blast_radius` FIRST (`gitlab_cross_project_callers` only with an exact fqn taken from a prior blast-radius def row -- its `eq` match fails on hand-composed names) | semantic (ranked guess) |
 | WHO IMPORTS/CALLS this function across repos? / blast radius | Orbit graph tools (`IMPORTS` traversal) | semantic (single-project, can't traverse) |
 | Reading a `gitlab_blast_radius` result: `importSiteCount: 0` / empty `importedByProjects` | An empty IMPORTS join does NOT mean unused/contained -- Java same-package and cross-service REST coupling produce no import statement, so the tool falls back to a Definition name-sweep (payload marked `radiusMode: "definition-name-match"`). Treat those rows as "this symbol exists here" (a candidate location), never as a confirmed cross-project blast radius. | claiming the symbol is unused or safe to change |
-| Find code that SEMANTICALLY RESEMBLES this error/behaviour | `gitlab_semantic_code_search` (Duo embeddings) | Orbit (structural, no fuzzy match) |
-| Symbol on a NON-DEFAULT branch, or Terraform/YAML | `gitlab_semantic_code_search` + REST reads | Orbit (default-branch source only; no HCL/YAML) |
+| Find code that SEMANTICALLY RESEMBLES this error/behaviour | `gitlab_semantic_search` (Duo embeddings) | Orbit (structural, no fuzzy match) |
+| Symbol on a NON-DEFAULT branch, or Terraform/YAML | `gitlab_semantic_search` + REST reads | Orbit (default-branch source only; no HCL/YAML) |
 
 Orbit answers structural, cross-project code questions (where defined, who
 imports, blast radius) deterministically and group-wide; semantic search answers
@@ -82,7 +83,7 @@ When a graph tool returns an ERROR or guidance result, act on the structured
 ("Reading structured tool errors"): `bad-query` gets exactly one corrected
 retry, `throttled` stops ALL further graph calls this turn, and every other
 kind (`no-index`, network, server, auth) goes straight to the fallback. The
-fallback is always `gitlab_semantic_code_search` + `gitlab_list_commits` for
+fallback is always `gitlab_semantic_search` + `gitlab_list_commits` for
 the same question -- and SAY SO in the finding (state which fallback you used
 and why). In every case, do NOT fabricate cross-project import edges from an
 unavailable graph. Orbit indexes the DEFAULT BRANCH only and excludes

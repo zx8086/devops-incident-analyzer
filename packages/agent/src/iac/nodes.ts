@@ -181,7 +181,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 	}
 }
 
-// Renovate on-demand MR automation: the native GitLab MCP's get_issue tool is not in
+// Renovate on-demand MR automation: the native GitLab MCP's work-item read tool is not in
 // mcp-server-elastic-iac's own tool set (that server has no issue-read tool) -- it
 // belongs to the separately-routed "gitlab" data source (gitlab-mcp), reached today only
 // by the main incident-analyzer graph. Cross-datasource read, following the exact
@@ -324,8 +324,9 @@ export function parseFirstIssueIid(raw: string): number | null {
 	}
 }
 
-// gitlab_get_issue response: a single issue object with a `description` field.
-// (Pure; unit-tested.)
+// gitlab_get_work_item response: a single work item object with a top-level `description`
+// field (captured live 2026-10-02; the unlisted gitlab_get_issue it replaced, SIO-1918,
+// had the same field). (Pure; unit-tested.)
 export function parseIssueDescription(raw: string): string {
 	try {
 		const parsed = JSON.parse(raw) as { description?: unknown };
@@ -340,8 +341,8 @@ export function parseIssueDescription(raw: string): string {
 // brainstorming): mcp-server-elastic-iac's own config already targets exactly this repo
 // via ELASTIC_IAC_GITLAB_PROJECT/_PROJECT_ID (mcp-server-elastic-iac/src/config.ts:126,131),
 // but that config is server-side and not reachable from packages/agent. The native
-// gitlab_get_issue/gitlab_search proxy tools need a project id/path supplied by the
-// CALLER (verified live: gitlab_get_issue's schema requires both `id` and `issue_iid`),
+// gitlab_get_work_item/gitlab_search proxy tools need a project id/path supplied by the
+// CALLER (verified live: gitlab_get_work_item wants `project_id` with `work_item_iid`),
 // so this small mirror read is unavoidable -- read directly via process.env inside the
 // function body (nodes.ts has no existing helper for a non-numeric env value; this
 // follows the same "read inside the node, not module scope" discipline every
@@ -361,7 +362,7 @@ export const RENOVATE_DASHBOARD_TITLE = "Elastic Fleet & Agent Dependency Dashbo
 
 // Discovers the Dependency Dashboard issue by title (never hardcoded -- its iid has
 // already changed once when the title changed, per the original handover), fetches its
-// description via the native gitlab_get_issue proxy tool, and resolves the extracted
+// description via the native gitlab_get_work_item proxy tool, and resolves the extracted
 // {deployment, integration} target to a live marker. Exactly one match -> renovateMarker
 // set, proceeds to the approval gate. 0 or 2+ matches -> renovateCandidates set (possibly
 // empty), the turn ends with a disambiguation/no-match message (routed by
@@ -386,10 +387,16 @@ export async function resolveRenovateMarker(state: IacStateType): Promise<Partia
 		};
 	}
 
-	// gitlab_get_issue requires BOTH `id` (project) and `issue_iid` (verified live against
-	// the native tool's schema -- issue_iid alone is not sufficient, a common mistake when
+	// SIO-1918: GitLab 19.4 unlisted get_issue (superseded by get_work_item), so the proxy no
+	// longer registers gitlab_get_issue and the old call returned "unavailable", which parsed
+	// as an empty description and ended every Renovate turn in "no match".
+	// gitlab_get_work_item needs BOTH `project_id` and `work_item_iid` (verified live against
+	// the native tool's schema -- the iid alone is not sufficient, a common mistake when
 	// assuming the elastic-iac-mcp tool shapes, which resolve project server-side).
-	const issueRes = await callGitlabProxyTool("gitlab_get_issue", { id: projectId, issue_iid: issueIid });
+	const issueRes = await callGitlabProxyTool("gitlab_get_work_item", {
+		project_id: projectId,
+		work_item_iid: issueIid,
+	});
 	const description = parseIssueDescription(issueRes);
 	const entries = parseRenovateDashboardEntries(description);
 	const candidates = filterDashboardMatches(entries, target.deployment, target.integration);

@@ -864,7 +864,7 @@ Sample error/log messages from the affected service(s) (may contain a stack trac
 ${logLines || "  (none captured)"}
 
 Steps:
-1. Identify the most likely changed symbol (function/class/module) from the log samples above -- a stack trace frame, exception class, or method name. If the samples name no clear symbol, fall back to inspecting the deploy MR's diff (gitlab_get_merge_request_diffs or gitlab_get_commit_diff) for the changed definitions.
+1. Identify the most likely changed symbol (function/class/module) from the log samples above -- a stack trace frame, exception class, or method name. If the samples name no clear symbol, fall back to inspecting the deploy MR's diff (gitlab_get_merge_request with include: ["diffs"], or gitlab_get_commit_diff) for the changed definitions.
 2. Run gitlab_blast_radius on that symbol. This is a targeted fetch -- do NOT re-investigate the focus service from scratch.
 3. If gitlab_blast_radius returns a definition row with an exact fqn, follow up with gitlab_cross_project_callers on that fqn for confirmed cross-project importers.
 4. Report the blast radius found (or, if genuinely nothing traceable, say so explicitly rather than fabricating a symbol).`;

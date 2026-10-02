@@ -11,8 +11,10 @@ import { selectToolsByAction } from "./sub-agent.ts";
 // gitlab_search lives in the `search` action group, separate from the project-scoped
 // `code_analysis` group -- the split that caused the search tool to be filtered out.
 // SIO-1178: mirror updated -- merge_requests carries list_merge_requests + notes,
-// pipelines carries get_job_log (see the fixture-drift test below, which parses the
+// pipelines carries job-log reading (see the fixture-drift test below, which parses the
 // real YAML so this mirror can never silently diverge on the critical names).
+// SIO-1918: names follow GitLab's consolidated tools (get_job with include: log replaced
+// get_job_log, semantic_search replaced semantic_code_search, and so on).
 const gitlabToolDef: ToolDefinition = ToolDefinitionSchema.parse({
 	name: "gitlab-api",
 	description: "test fixture",
@@ -21,14 +23,9 @@ const gitlabToolDef: ToolDefinition = ToolDefinitionSchema.parse({
 		mcp_server: "gitlab",
 		mcp_patterns: ["gitlab_*"],
 		action_tool_map: {
-			merge_requests: [
-				"gitlab_list_merge_requests",
-				"gitlab_get_merge_request",
-				"gitlab_get_merge_request_commits",
-				"gitlab_get_merge_request_notes",
-			],
-			pipelines: ["gitlab_get_pipeline_jobs", "gitlab_get_job_log"],
-			search: ["gitlab_search", "gitlab_search_labels", "gitlab_semantic_code_search"],
+			merge_requests: ["gitlab_list_merge_requests", "gitlab_get_merge_request", "gitlab_get_merge_request_notes"],
+			pipelines: ["gitlab_get_pipeline", "gitlab_get_job"],
+			search: ["gitlab_search", "gitlab_search_labels", "gitlab_semantic_search"],
 			code_analysis: [
 				"gitlab_get_file_content",
 				"gitlab_get_blame",
@@ -51,7 +48,7 @@ function buildGitlabTools(): StructuredToolInterface[] {
 		...filler,
 		"gitlab_search",
 		"gitlab_search_labels",
-		"gitlab_semantic_code_search",
+		"gitlab_semantic_search",
 		"gitlab_get_file_content",
 		"gitlab_get_blame",
 		"gitlab_get_commit_diff",
@@ -172,7 +169,92 @@ describe("SIO-1178: gitlab-api.yaml action map carries the critical tools", () =
 	});
 
 	test("pipelines exposes job-log reading", () => {
-		expect(actionMap.pipelines).toContain("gitlab_get_job_log");
+		// SIO-1918: gitlab_get_job with include: ["log"] is what replaced gitlab_get_job_log.
+		expect(actionMap.pipelines).toContain("gitlab_get_job");
+		expect(actionMap.pipelines).toContain("gitlab_get_pipeline");
+	});
+
+	// SIO-1918: a mapped name the server does not serve resolves to nothing, silently --
+	// nine of twenty-seven entries were in that state after GitLab unlisted its per-facet
+	// tools. UPSTREAM_LISTED is GitLab's tools/list on 2026-10-02 (gitlab.com, 38 tools;
+	// regenerate by calling GitLabMcpProxy.listTools() and prefixing gitlab_); OWN_TOOLS are
+	// the 13 this server registers itself (code-analysis + orbit). The list goes stale when
+	// GitLab changes its surface, which is the point: update it from a fresh capture, and
+	// this test then names every mapped tool that no longer exists.
+	const UPSTREAM_LISTED = [
+		"accept_merge_request",
+		"add_branch",
+		"add_commit",
+		"fork_repository",
+		"get_artifact_file",
+		"get_commit",
+		"get_job",
+		"get_mcp_server_version",
+		"get_merge_request",
+		"get_merge_request_notes",
+		"get_pipeline",
+		"get_project",
+		"get_repository_file",
+		"get_saved_view_work_items",
+		"get_user",
+		"get_work_item",
+		"get_work_item_types",
+		"link_work_items",
+		"list_branches",
+		"list_commits",
+		"list_groups",
+		"list_merge_requests",
+		"list_pipelines",
+		"list_project_members",
+		"list_projects",
+		"list_releases",
+		"list_repository_tree",
+		"list_tags",
+		"list_work_items",
+		"manage_pipeline",
+		"save_merge_request",
+		"save_merge_request_review",
+		"save_note",
+		"save_pipeline",
+		"save_work_item",
+		"search",
+		"search_labels",
+		"semantic_search",
+	].map((n) => `gitlab_${n}`);
+	const OWN_TOOLS = [
+		"gitlab_get_file_content",
+		"gitlab_get_blame",
+		"gitlab_get_commit_diff",
+		"gitlab_list_commits",
+		"gitlab_get_repository_tree",
+		"gitlab_list_merge_requests",
+		"gitlab_graph_schema",
+		"gitlab_blast_radius",
+		"gitlab_cross_project_callers",
+		"gitlab_recent_deploys",
+		"gitlab_pipeline_failures",
+		"gitlab_recent_vulnerabilities",
+		"gitlab_orbit_query_graph",
+	];
+
+	test("every mapped tool is one the server serves", () => {
+		const served = new Set([...UPSTREAM_LISTED, ...OWN_TOOLS]);
+		expect(allMapped.filter((name) => !served.has(name))).toEqual([]);
+	});
+
+	test("none of the tools GitLab unlisted in 19.4/19.5 is mapped", () => {
+		const unlisted = [
+			"gitlab_get_issue",
+			"gitlab_get_workitem_notes",
+			"gitlab_get_merge_request_commits",
+			"gitlab_get_merge_request_diffs",
+			"gitlab_get_merge_request_pipelines",
+			"gitlab_get_merge_request_conflicts",
+			"gitlab_get_pipeline_jobs",
+			"gitlab_get_job_log",
+			"gitlab_semantic_code_search",
+		];
+		for (const name of unlisted) expect(allMapped).not.toContain(name);
 	});
 
 	test("read_only map exposes no write tools", () => {
@@ -186,6 +268,16 @@ describe("SIO-1178: gitlab-api.yaml action map carries the critical tools", () =
 			// CodeRabbit (PR #441): manage_pipeline creates/retries/cancels/deletes
 			// pipelines despite its list action -- write-capable, so unmapped.
 			"gitlab_manage_pipeline",
+			// SIO-1918: the write tools GitLab serves today.
+			"gitlab_save_work_item",
+			"gitlab_save_merge_request",
+			"gitlab_save_merge_request_review",
+			"gitlab_save_note",
+			"gitlab_save_pipeline",
+			"gitlab_accept_merge_request",
+			"gitlab_add_branch",
+			"gitlab_add_commit",
+			"gitlab_fork_repository",
 		];
 		for (const name of writeTools) {
 			expect(allMapped).not.toContain(name);
