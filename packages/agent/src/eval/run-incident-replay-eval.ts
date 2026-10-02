@@ -23,7 +23,6 @@ import { evaluate } from "langsmith/evaluation";
 import type { Example } from "langsmith/schemas";
 import { resolveRoleModelConfig } from "../llm.ts";
 import { getAgentsDir } from "../paths.ts";
-import { citationGrounding } from "./citation-grounding-evaluator.ts";
 import {
 	confidenceThreshold,
 	datasourcesCovered,
@@ -170,12 +169,10 @@ const results = await evaluate(
 			subagentEvidenceJudge,
 			// SIO-1442: tier 3 of the OKF spec audit -- grounds grading in whether the agent
 			// actually USED the right knowledge, not just whether the final prose sounds
-			// plausible. runbookSelectionVsUsage is deterministic; citationGrounding makes one
-			// OpenAI call per example when the response cites a runbook by name/title.
+			// plausible. runbookSelectionVsUsage is deterministic. SIO-1935: Jev is the citation
+			// judge (citation_grounding_jev); the gpt-4o-mini citation_grounding judge was retired
+			// after catching 1/8 planted contradictions to Jev's 8/8. Skips without TYPESAFE_API_KEY.
 			runbookSelectionVsUsage,
-			citationGrounding,
-			// SIO-1919: Jev twin of citationGrounding, run alongside it to measure agreement
-			// before the OpenAI judge could be retired. Skips without TYPESAFE_API_KEY.
 			jevCitationGrounding,
 		],
 		experimentPrefix,

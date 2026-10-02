@@ -5,7 +5,7 @@ import { jevCitationFeedback, jevCitationGrounding, jevJudgeCitations } from "./
 import { jevEvalMetadata } from "./jev-metadata.ts";
 
 describe("jevCitationFeedback", () => {
-	test("one weak citation fails the whole response, like citationGrounding", () => {
+	test("one weak citation fails the whole response", () => {
 		const [fb] = jevCitationFeedback(
 			{
 				ok: true,

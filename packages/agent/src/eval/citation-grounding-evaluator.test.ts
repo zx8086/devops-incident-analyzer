@@ -6,22 +6,18 @@
 // back). findCitedRunbooks is therefore a best-effort filename/title match, deliberately over-
 // inclusive (false positives here just mean "graded a citation that wasn't really one" -- safe;
 // false negatives mean "missed a real citation" -- also safe, just fewer graded citations). The
-// misrepresentation check (does the claim match the runbook's real content) is semantic and not
-// regex-able, so it's an LLM judge -- tested only via the pure extraction/feedback-shaping
-// pieces here, same split as SIO-1440's spec-contradiction-judge.ts.
+// misrepresentation check itself is Jev's (jev-citation-evaluator.ts, SIO-1935); this file tests
+// the shared detection and output-reading pieces.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Run } from "langsmith/schemas";
 import {
-	citationGrounding,
-	citationJudgeFeedback,
 	deriveTitleFromContent,
 	findCitedRunbooks,
 	findUnknownMdCitations,
 	readCitationGroundingOutput,
-	validateVerdictCoverage,
 } from "./citation-grounding-evaluator.ts";
 
 const AGENTS_DIR = join(import.meta.dir, "../../../../agents/incident-analyzer");
@@ -165,147 +161,6 @@ describe("deriveTitleFromContent", () => {
 	});
 });
 
-// CodeRabbit (PR #633): the LLM is asked (in prose only) for "one verdict per runbook provided,
-// in the order given," but nothing enforced that contract -- a response with zero verdicts, a
-// subset, duplicates, or verdicts for unrelated filenames still passed CitationGradeSchema's
-// shape check and would have been silently trusted as a complete, correct grading. Same class of
-// "structurally valid JSON that doesn't actually answer the question" risk as tier 1's .catch()
-// false-clean-pass bugs. Require exact ordered coverage; anything else is treated as a failure.
-describe("validateVerdictCoverage", () => {
-	const cited = [
-		{ filename: "database-slow-queries.md", content: "..." },
-		{ filename: "kafka-consumer-lag.md", content: "..." },
-	];
-
-	test("exact ordered coverage is valid", () => {
-		const verdicts = [
-			{ filename: "database-slow-queries.md", grounded: true, reasoning: "ok" },
-			{ filename: "kafka-consumer-lag.md", grounded: true, reasoning: "ok" },
-		];
-		expect(validateVerdictCoverage(verdicts, cited)).toBe(true);
-	});
-
-	test("empty verdicts against a non-empty cited set is invalid", () => {
-		expect(validateVerdictCoverage([], cited)).toBe(false);
-	});
-
-	test("a partial verdict list (missing one runbook) is invalid", () => {
-		const verdicts = [{ filename: "database-slow-queries.md", grounded: true, reasoning: "ok" }];
-		expect(validateVerdictCoverage(verdicts, cited)).toBe(false);
-	});
-
-	test("a duplicate verdict for the same filename is invalid", () => {
-		const verdicts = [
-			{ filename: "database-slow-queries.md", grounded: true, reasoning: "ok" },
-			{ filename: "database-slow-queries.md", grounded: true, reasoning: "ok" },
-		];
-		expect(validateVerdictCoverage(verdicts, cited)).toBe(false);
-	});
-
-	test("a verdict for an unrelated filename is invalid", () => {
-		const verdicts = [
-			{ filename: "database-slow-queries.md", grounded: true, reasoning: "ok" },
-			{ filename: "some-other-file.md", grounded: true, reasoning: "ok" },
-		];
-		expect(validateVerdictCoverage(verdicts, cited)).toBe(false);
-	});
-
-	test("reordered but complete coverage is still valid (order within the set does not matter)", () => {
-		const verdicts = [
-			{ filename: "kafka-consumer-lag.md", grounded: true, reasoning: "ok" },
-			{ filename: "database-slow-queries.md", grounded: true, reasoning: "ok" },
-		];
-		expect(validateVerdictCoverage(verdicts, cited)).toBe(true);
-	});
-});
-
-describe("citationJudgeFeedback", () => {
-	test("no citations and no unknown filenames yields no verdict (nothing to grade)", () => {
-		const feedback = citationJudgeFeedback({ ok: true, verdicts: [] }, []);
-		expect(feedback).toEqual([]);
-	});
-
-	test("all citations grounded, no unknown filenames scores 1", () => {
-		const feedback = citationJudgeFeedback(
-			{
-				ok: true,
-				verdicts: [
-					{ filename: "database-slow-queries.md", grounded: true, reasoning: "claim matches runbook content" },
-				],
-			},
-			[],
-		);
-		expect(feedback).toEqual([
-			{ key: "citation_grounding", score: 1, comment: "1/1 citation(s) grounded in real runbook content" },
-		]);
-	});
-
-	test("a misrepresented citation scores 0 and names the offending filename", () => {
-		const feedback = citationJudgeFeedback(
-			{
-				ok: true,
-				verdicts: [
-					{ filename: "database-slow-queries.md", grounded: true, reasoning: "ok" },
-					{
-						filename: "kafka-consumer-lag.md",
-						grounded: false,
-						reasoning: "response claims this runbook covers Couchbase index tuning; it does not",
-					},
-				],
-			},
-			[],
-		);
-		expect(feedback).toHaveLength(1);
-		expect(feedback[0]?.score).toBe(0);
-		expect(feedback[0]?.comment).toContain("kafka-consumer-lag.md");
-	});
-
-	// CodeRabbit precedent from tier 1 (PR #630/#632): a failed judge call must not collapse to
-	// the same shape as "the judge ran and found everything grounded" -- score must be omitted,
-	// not defaulted to 1, so a broken judge call cannot silently read as a passing grade.
-	test("a failed judge call yields neither a pass nor a fail score", () => {
-		const feedback = citationJudgeFeedback({ ok: false, reason: "OpenAI request failed" }, []);
-		expect(feedback).toHaveLength(1);
-		expect(feedback[0]?.score).toBeUndefined();
-		expect(feedback[0]?.comment).toContain("OpenAI request failed");
-	});
-
-	// CodeRabbit (PR #633): a citation to a completely invented filename must score 0 even when
-	// there were no KNOWN citations to send to the judge at all (cited.length === 0 -> judge is
-	// never even called, per judgeCitationGrounding's short-circuit) -- the hallucination itself
-	// is the finding, independent of whether the judge ran.
-	test("an unknown/hallucinated filename scores 0 even with no judge verdicts to grade", () => {
-		const feedback = citationJudgeFeedback({ ok: true, verdicts: [] }, ["invented-runbook.md"]);
-		expect(feedback).toHaveLength(1);
-		expect(feedback[0]?.score).toBe(0);
-		expect(feedback[0]?.comment).toContain("invented-runbook.md");
-	});
-
-	test("an unknown filename is reported alongside real grounding verdicts, not instead of them", () => {
-		const feedback = citationJudgeFeedback(
-			{
-				ok: true,
-				verdicts: [{ filename: "database-slow-queries.md", grounded: true, reasoning: "ok" }],
-			},
-			["invented-runbook.md"],
-		);
-		expect(feedback).toHaveLength(1);
-		expect(feedback[0]?.score).toBe(0);
-		expect(feedback[0]?.comment).toContain("invented-runbook.md");
-	});
-
-	// CodeRabbit (PR #633, round 3): an unknown filename is detected independently of the judge
-	// (findUnknownMdCitations needs no judge call at all), but a FAILED judge call for a separate,
-	// real citation used to mask it -- !result.ok short-circuited before unknownFilenames was ever
-	// checked, so a flaky/errored OpenAI call silently swallowed a certain hallucination finding.
-	test("an unknown filename still scores 0 even when the judge call for other citations failed", () => {
-		const feedback = citationJudgeFeedback({ ok: false, reason: "OpenAI request failed" }, ["invented-runbook.md"]);
-		expect(feedback).toHaveLength(1);
-		expect(feedback[0]?.score).toBe(0);
-		expect(feedback[0]?.comment).toContain("invented-runbook.md");
-	});
-});
-
 // CodeRabbit (PR #633, round 3): the previous Array.isArray(...) check validated the array
 // wrapper but not element shape -- a malformed knowledgeSnapshot element (e.g. {} missing
 // filename/content/title) passed through and crashed findCitedRunbooks downstream
@@ -357,34 +212,5 @@ describe("readCitationGroundingOutput", () => {
 	test("missing response entirely yields undefined", () => {
 		const run = { outputs: { output: { knowledgeSnapshot: [] } } } as unknown as Run;
 		expect(readCitationGroundingOutput(run)).toBeUndefined();
-	});
-});
-
-// SIO-1921: through the entrypoint, not just the helper -- the false positive lived in how
-// citationGrounding wired its inputs, so the helper test alone would not catch a regression there.
-describe("citationGrounding entrypoint", () => {
-	const knowledgeSnapshot = [
-		{ filename: "high-error-rate.md", content: "# High Error Rate", title: "High Error Rate" },
-	];
-	const response = "The last change, MR !392, touched `Product.java` and `CHANGELOG.md`.";
-
-	test("an evidence-quoted .md file yields no verdict instead of a 0", async () => {
-		const run = {
-			outputs: {
-				output: {
-					response,
-					knowledgeSnapshot,
-					subagentReports: { gitlab: "MR !392 files: Product.java, CHANGELOG.md" },
-				},
-			},
-		} as unknown as Run;
-		expect(await citationGrounding(run)).toEqual([]);
-	});
-
-	test("the same response without that evidence is still flagged", async () => {
-		const run = { outputs: { output: { response, knowledgeSnapshot } } } as unknown as Run;
-		const [fb] = await citationGrounding(run);
-		expect(fb?.score).toBe(0);
-		expect(fb?.comment).toContain("CHANGELOG.md");
 	});
 });

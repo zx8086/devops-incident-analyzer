@@ -160,7 +160,7 @@ export const FrozenOutputSchema = z.object({
 	// CodeRabbit (PR #633): same fix, same reason, for the citation-grounding evaluator -- it
 	// originally called getAgent() live to read runbook knowledge for citation matching, which
 	// broke replay-outputs identically. Snapshotted here at record time; defaults to [] on a
-	// pre-SIO-1442 fixture, which is inert (citationGrounding finds nothing to match against).
+	// pre-SIO-1442 fixture, which is inert (the citation evaluator finds nothing to match against).
 	knowledgeSnapshot: z.array(z.object({ filename: z.string(), content: z.string(), title: z.string() })).default([]),
 });
 

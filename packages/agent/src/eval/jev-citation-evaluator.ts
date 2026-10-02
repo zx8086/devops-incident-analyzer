@@ -1,8 +1,9 @@
 // packages/agent/src/eval/jev-citation-evaluator.ts
-// SIO-1919: Jev twin of citationGrounding. Same citation detection and the same per-runbook
-// question, asked as a Noul instead of an OpenAI JSON judge, so the two can run side by side and
-// their agreement can be measured before either is trusted alone. Feedback key is distinct
-// (citation_grounding_jev) so LangSmith Compare shows both columns.
+// SIO-1919/SIO-1935: the runbook-citation judge. One Noul per cited runbook: does every claim
+// the report makes about it match the runbook's real content? It replaced a gpt-4o-mini JSON
+// judge (key citation_grounding) that caught 1/8 planted contradictions to this one's 8/8 and
+// failed 9/9 user-labelled real citations on relevance. The key stays citation_grounding_jev so
+// old citation_grounding history never mixes with these scores in LangSmith Compare.
 import type { Example, Run } from "langsmith/schemas";
 import { askSystemOne, asNoul, resolveTypeSafeApiKey } from "../typesafe-client.ts";
 import {
@@ -14,20 +15,21 @@ import {
 
 const KEY = "citation_grounding_jev";
 
-// Mirrors CITATION_GROUNDING_SYSTEM_PROMPT's rule, phrased as one statement to be true or false.
+// A citation by name alone is grounded: only an active misrepresentation fails.
 export const GROUNDED_INSTRUCTIONS =
 	"Every claim the report makes about what this runbook says or covers is supported by the runbook's real content. A report that only names the runbook without claiming anything about its content counts as supported.";
 
-// The LLM judge passes a runbook when grounded is true; a Noul at or above this is the same call.
+// At or above this the runbook counts as grounded. Planted contradictions scored 0.05-0.41 and real
+// citations 0.58-0.85 (SIO-1935), so 0.5 sits in the gap.
 export const GROUNDED_THRESHOLD = 0.5;
 
 export type JevCitationResult =
 	| { ok: true; probabilities: { filename: string; p: number }[] }
 	| { ok: false; reason: string };
 
-// Pure, unit-testable. Score is the MIN probability, not the mean: citationGrounding fails the
-// whole response on one misrepresented runbook, and agreement is only measurable if both
-// evaluators share that all-or-nothing shape. The raw probabilities go in the comment.
+// Pure, unit-testable. Score is the MIN probability, not the mean: one misrepresented runbook
+// fails the whole response, so a well-cited report cannot average away a bad citation. The raw
+// probabilities go in the comment.
 export function jevCitationFeedback(
 	result: JevCitationResult,
 	unknownFilenames: string[],
@@ -88,7 +90,7 @@ export async function jevCitationGrounding(
 	if (!input) return [];
 
 	const cited = findCitedRunbooks(input.response, input.candidates);
-	// SIO-1921: same evidence exemption as citationGrounding, so the two stay comparable.
+	// SIO-1921: a .md name quoted from sub-agent evidence is not an invented runbook.
 	const unknownFilenames = findUnknownMdCitations(
 		input.response,
 		input.candidates.map((c) => c.filename),
