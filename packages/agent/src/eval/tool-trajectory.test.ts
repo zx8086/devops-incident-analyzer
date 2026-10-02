@@ -358,6 +358,55 @@ describe("detectSubResources", () => {
 		expect(detectSubResources(undefined)).toEqual([]);
 	});
 
+	// SIO-1922. Shapes captured live from gitlab.com on 2026-10-02 (commit d5864951 of the
+	// anchor project), trimmed. "diff" is GitLab's include VALUE; the patch comes back under
+	// `diffs`, and only with diff_detail: "full_patch".
+	const COMMIT_WITH_PATCH = {
+		id: "gid://gitlab/Commit/d586495171757e4bbfa0fe3526fd0899030c3844",
+		sha: "d586495171757e4bbfa0fe3526fd0899030c3844",
+		title: "a commit",
+		diffs: [{ oldPath: "src/a.json", newPath: "src/a.json", diff: "@@ -568,7 +568,6 @@\n ]\n" }],
+	};
+	const COMMIT_STATS_ONLY = {
+		id: "gid://gitlab/Commit/d586495171757e4bbfa0fe3526fd0899030c3844",
+		sha: "d586495171757e4bbfa0fe3526fd0899030c3844",
+		title: "a commit",
+		diffStatsSummary: { additions: 0, deletions: 1, fileCount: 1 },
+		diffStats: [{ path: "src/a.json", additions: 0, deletions: 1 }],
+	};
+
+	test("a commit's patch, returned under `diffs`, is the commit `diff` sub-resource", () => {
+		expect(detectSubResources(COMMIT_WITH_PATCH, "gitlab_get_commit")).toEqual(["diff"]);
+	});
+
+	test("the same key from a merge request stays `diffs`: the two must not stand in for each other", () => {
+		const mr = { iid: "383", diffs: { nodes: [{ oldPath: "a", newPath: "a", diff: "@@ -1 +1 @@" }] } };
+		expect(detectSubResources(mr, "gitlab_get_merge_request")).toEqual(["diffs"]);
+		expect(detectSubResources(mr)).toEqual(["diffs"]);
+	});
+
+	test("a commit fetched at the default detail level carries no diff at all", () => {
+		// diffStats is line counts, not the change. Crediting it would repeat the SIO-1918 mistake
+		// of treating "the facet was requested" as "the patch was retrieved".
+		expect(detectSubResources(COMMIT_STATS_ONLY, "gitlab_get_commit")).toEqual([]);
+	});
+
+	test("buildToolTrajectory passes the tool name through, so the mapping reaches the record", () => {
+		const trajectory = buildToolTrajectory([
+			result({
+				dataSourceId: "gitlab",
+				toolOutputs: [
+					{ toolName: "gitlab_get_commit", rawJson: COMMIT_WITH_PATCH },
+					{ toolName: "gitlab_get_merge_request", rawJson: { iid: "1", diffs: { nodes: [{ diff: "@@" }] } } },
+				],
+			}),
+		]);
+		expect(trajectory.calls.map((c) => [c.toolName, c.subResources])).toEqual([
+			["gitlab_get_commit", ["diff"]],
+			["gitlab_get_merge_request", ["diffs"]],
+		]);
+	});
+
 	test("buildToolTrajectory attaches them, and omits the field when there are none", () => {
 		const trajectory = buildToolTrajectory([
 			result({

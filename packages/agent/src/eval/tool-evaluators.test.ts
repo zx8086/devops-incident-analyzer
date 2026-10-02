@@ -14,6 +14,7 @@ import {
 	UtilizationGradeSchema,
 	utilizationFeedback,
 } from "./evaluators.ts";
+import { MCP_TOOL_DATASET } from "./mcp-tool-dataset.ts";
 import type { ToolCallRecord } from "./tool-trajectory.ts";
 
 function call(partial: Partial<ToolCallRecord> & { toolName: string }): ToolCallRecord {
@@ -216,6 +217,44 @@ describe("expectedToolsFired", () => {
 				);
 				expect(feedback?.score).toBe(1);
 				expect(feedback?.comment).toContain("jobs via composite");
+			});
+		});
+
+		// SIO-1922: the REAL commit-and-file expectation from the dataset, against the calls the
+		// agent made in experiment mcp-tool-eval-d8952904-gitlab-bae152fb. It scored 0.667 there:
+		// the commit's patch had been fetched through gitlab_get_commit, but the detector looked
+		// for a `diff` payload key that GitLab never returns.
+		describe("commit diff through the composite tool", () => {
+			const commitExample = MCP_TOOL_DATASET.find((e) => e.metadata?.ticketKey === "SIO-1398-gitlab-commit-and-file");
+			const expected = commitExample?.outputs.expectedToolUse;
+			const others = [
+				call({ dataSourceId: "gitlab", toolName: "gitlab_get_file_content" }),
+				call({ dataSourceId: "gitlab", toolName: "gitlab_get_blame" }),
+			];
+
+			test("the example exists and still names the commit diff", () => {
+				expect(expected?.requiredToolGroups.some((g) => g.anySubResourceOf?.includes("diff"))).toBe(true);
+			});
+
+			test("a commit call that returned the patch satisfies the group", () => {
+				const [feedback] = expectedToolsFired(
+					runWith([call({ dataSourceId: "gitlab", toolName: "gitlab_get_commit", subResources: ["diff"] }), ...others]),
+					exampleWith(expected),
+				);
+				expect(feedback?.score).toBe(1);
+				expect(feedback?.comment).toContain("diff via composite");
+			});
+
+			test("a merge request's diffs do not stand in for the commit's", () => {
+				const [feedback] = expectedToolsFired(
+					runWith([
+						call({ dataSourceId: "gitlab", toolName: "gitlab_get_merge_request", subResources: ["diffs"] }),
+						...others,
+					]),
+					exampleWith(expected),
+				);
+				expect(feedback?.score).toBeLessThan(1);
+				expect(feedback?.comment).toContain("gitlab_get_commit_diff");
 			});
 		});
 
