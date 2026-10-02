@@ -78,8 +78,9 @@ describe("coms recipe operator-token read", () => {
 });
 
 // SIO-1916: the console's extension set is fixed by the recipe (--no-extensions),
-// and from Pi 0.99.0 that flag also disables the built-ins. Pin the two that
-// carry MCP, and that the adapter Pi's built-in support replaced is not loaded:
+// and from Pi 0.99.0 that flag also disables the built-ins. Pin the three that
+// make up MCP support (one per way a tool can reach the model: direct, deferred,
+// codemode), and that the adapter Pi's built-in support replaced is not loaded:
 // an extension that registers /mcp takes the built-in's place.
 describe("coms recipe extension set", () => {
 	const flagsStart = JUSTFILE.indexOf("    PI_RESOURCE_FLAGS=(");
@@ -94,9 +95,10 @@ describe("coms recipe extension set", () => {
 		expect(flags).toContain("--no-extensions");
 	});
 
-	test("names Pi's built-in MCP and tool search back in", () => {
+	test("names all three MCP built-ins back in, so no exposure is unreachable", () => {
 		expect(flags).toContain("-e builtin:mcp");
 		expect(flags).toContain("-e builtin:tool-search");
+		expect(flags).toContain("-e builtin:codemode");
 	});
 
 	test("does not load pi-mcp-adapter", () => {

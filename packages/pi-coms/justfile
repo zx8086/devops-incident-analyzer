@@ -52,16 +52,20 @@ coms first *rest:
       exit 1
     fi
     # From Pi 0.99.0 --no-extensions also switches off the BUILT-IN
-    # extensions, so the two this console needs are named back in. builtin:mcp
-    # reads ~/.pi/agent/mcp.json (it replaced pi-mcp-adapter, SIO-1915);
-    # builtin:tool-search is the only way to reach a server whose exposure is
-    # "deferred". codemode is left off on purpose.
+    # extensions, so the three that make up Pi's MCP support are named back in
+    # and the console treats ~/.pi/agent/mcp.json exactly as stock Pi does.
+    # builtin:mcp reads the file (it replaced pi-mcp-adapter, SIO-1915). The
+    # other two are how non-direct tools are reached: tool-search for a
+    # "deferred" server, codemode for the default exposure. Pi activates each
+    # only when a connected server uses that exposure; leaving one out makes
+    # that exposure unreachable.
     PI_RESOURCE_FLAGS=(
       --no-extensions
       --no-skills
       --no-prompt-templates
       -e builtin:mcp
       -e builtin:tool-search
+      -e builtin:codemode
       -e "$HOME/.pi/agent/extensions/atuin.ts"
       -e "{{justfile_directory()}}/extensions/coms-net.ts"
       -e "$HOME/.pi/agent/npm/node_modules/context-mode/build/adapters/pi/extension.js"
