@@ -1,4 +1,5 @@
 // packages/agent/src/eval/run-function.ts
+import { getRecursionLimit } from "@devops-agent/gitagent-bridge";
 import { ToolErrorCategorySchema, ToolErrorKindSchema } from "@devops-agent/shared";
 import { HumanMessage } from "@langchain/core/messages";
 import { z } from "zod";
@@ -223,7 +224,13 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 				targetDeployments: parsed.uiSelectedElasticDeployments ?? [],
 				uiAwsEstates: parsed.uiSelectedAwsEstates ?? [],
 			},
-			{ configurable: { thread_id: `eval-${crypto.randomUUID()}` } },
+			{
+				configurable: { thread_id: `eval-${crypto.randomUUID()}` },
+				// SIO-1919: production passes max_turns * 2 (apps/web agent.ts getGraphRecursionLimit).
+				// Without it LangGraph's default of 25 applied, and 7/32 baseline runs died with
+				// GraphRecursionError -- a harness failure scored as if it were the model's.
+				recursionLimit: getRecursionLimit(getAgent().manifest.runtime?.max_turns),
+			},
 		);
 		const lastMessage = finalState.messages.at(-1);
 		// SIO-1222: was JSON.stringify for the array case, which handed LangSmith's output.response
