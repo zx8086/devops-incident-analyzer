@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import { OAuthRefreshChainExpiredError } from "../../oauth/errors.ts";
 import { seedOAuth } from "../../oauth/seed.ts";
 
 function makeProvider(): OAuthClientProvider {
@@ -204,6 +205,119 @@ describe("seedOAuth", () => {
 		// The redirect-driving connect must precede the callback wait.
 		expect(events.indexOf("connect:1")).toBeGreaterThanOrEqual(0);
 		expect(events.indexOf("connect:1")).toBeLessThan(events.indexOf("awaitCallback"));
+	});
+
+	// SIO-1917: the stored refresh_token is dead, so the provider throws before
+	// the SDK can start an authorization. The seed is the documented remedy and
+	// must not need --force to do its job.
+	test("an expired refresh chain is wiped and re-authorized without --force", async () => {
+		const warnings: string[] = [];
+		const log = {
+			messages: [] as string[],
+			info: (m: string) => log.messages.push(m),
+			warn: (m: string) => warnings.push(m),
+		};
+		const order: string[] = [];
+		let connectCalls = 0;
+		const provider = makeProvider();
+		provider.invalidateCredentials = (scope) => {
+			order.push(`invalidate:${scope}`);
+		};
+
+		await seedOAuth({
+			provider,
+			mcpUrl: new URL("https://example.com/mcp"),
+			callbackPort: 9999,
+			clientName: "test-seed",
+			logger: log,
+			makeClient: () => ({
+				connect: async () => {
+					connectCalls += 1;
+					order.push(`connect:${connectCalls}`);
+					if (connectCalls === 1) {
+						throw new OAuthRefreshChainExpiredError("gitlab", "refresh_token rejected (HTTP 400)");
+					}
+					// Nothing stored any more: the SDK fires onRedirect, then throws.
+					if (connectCalls === 2) throw new UnauthorizedError("no token");
+				},
+			}),
+			makeTransport: () =>
+				stubTransport({
+					finishAuth: async (code) => {
+						order.push(`finishAuth:${code}`);
+					},
+				}) as unknown as ReturnType<NonNullable<Parameters<typeof seedOAuth>[0]["makeTransport"]>>,
+			awaitCallback: async () => {
+				order.push("awaitCallback");
+				return { code: "fresh-code" };
+			},
+		});
+
+		// The wipe comes before the connect that drives the browser, the callback
+		// after it, and the last connect verifies the new tokens.
+		expect(order).toEqual([
+			"connect:1",
+			"invalidate:all",
+			"connect:2",
+			"awaitCallback",
+			"finishAuth:fresh-code",
+			"connect:3",
+		]);
+		expect(warnings.some((m) => m.includes("can no longer be refreshed"))).toBe(true);
+		expect(log.messages.some((m) => m.toLowerCase().includes("already authorized"))).toBe(false);
+		expect(log.messages.some((m) => m.includes("Seeded OAuth tokens successfully"))).toBe(true);
+	});
+
+	test("an expired chain that survives the wipe propagates instead of looping", async () => {
+		let connectCalls = 0;
+		let callbackCalls = 0;
+		await expect(
+			seedOAuth({
+				provider: makeProvider(),
+				mcpUrl: new URL("https://example.com/mcp"),
+				callbackPort: 9999,
+				clientName: "test-seed",
+				logger: { info: () => {}, warn: () => {} },
+				makeClient: () => ({
+					connect: async () => {
+						connectCalls += 1;
+						throw new OAuthRefreshChainExpiredError("gitlab", "still dead");
+					},
+				}),
+				makeTransport: () =>
+					stubTransport() as unknown as ReturnType<NonNullable<Parameters<typeof seedOAuth>[0]["makeTransport"]>>,
+				awaitCallback: async () => {
+					callbackCalls += 1;
+					return { code: "never" };
+				},
+			}),
+		).rejects.toThrow(/still dead/);
+		expect(connectCalls).toBe(2);
+		expect(callbackCalls).toBe(0);
+	});
+
+	test("with --force an expired chain is not swallowed: the wipe already ran", async () => {
+		let connectCalls = 0;
+		await expect(
+			seedOAuth({
+				provider: makeProvider(),
+				mcpUrl: new URL("https://example.com/mcp"),
+				callbackPort: 9999,
+				clientName: "test-seed",
+				force: true,
+				logger: { info: () => {}, warn: () => {} },
+				makeClient: () => ({
+					connect: async () => {
+						connectCalls += 1;
+						throw new OAuthRefreshChainExpiredError("gitlab", "dead after force");
+					},
+				}),
+				makeTransport: () =>
+					stubTransport() as unknown as ReturnType<NonNullable<Parameters<typeof seedOAuth>[0]["makeTransport"]>>,
+				awaitCallback: async () => ({ code: "never" }),
+			}),
+		).rejects.toThrow(/dead after force/);
+		expect(connectCalls).toBe(1);
 	});
 
 	test("non-Unauthorized errors propagate untouched", async () => {
