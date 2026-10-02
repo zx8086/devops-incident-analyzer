@@ -1,6 +1,7 @@
 // packages/agent/src/eval/jev-citation-evaluator.test.ts
-import { describe, expect, test } from "bun:test";
-import { jevCitationFeedback } from "./jev-citation-evaluator.ts";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { Run } from "langsmith/schemas";
+import { jevCitationFeedback, jevCitationGrounding } from "./jev-citation-evaluator.ts";
 import { jevEvalMetadata } from "./jev-metadata.ts";
 
 describe("jevCitationFeedback", () => {
@@ -44,5 +45,34 @@ describe("jevEvalMetadata", () => {
 	test("a key with one gate killed reports the other", () => {
 		const m = jevEvalMetadata({ NODE_ENV: "production", TYPESAFE_API_KEY: "k", ACTION_SELECTOR_ENABLED: "false" });
 		expect(m).toMatchObject({ jev: true, jevActionSelector: false, jevAtlassianRerank: true });
+	});
+});
+
+// SIO-1921 parity. A dummy key gets past the early return; neither case calls Jev, because
+// with no known runbook cited only the shared unknown-filename pre-check runs.
+describe("jevCitationGrounding evidence parity (SIO-1921)", () => {
+	const saved = { NODE_ENV: process.env.NODE_ENV, TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY };
+	beforeEach(() => {
+		process.env.NODE_ENV = "production";
+		process.env.TYPESAFE_API_KEY = "dummy-key-never-sent";
+	});
+	afterEach(() => {
+		process.env.NODE_ENV = saved.NODE_ENV;
+		if (saved.TYPESAFE_API_KEY === undefined) delete process.env.TYPESAFE_API_KEY;
+		else process.env.TYPESAFE_API_KEY = saved.TYPESAFE_API_KEY;
+	});
+	const response = "MR !392 touched `Product.java` and `CHANGELOG.md`.";
+
+	test("an evidence-quoted .md file yields no verdict instead of a 0", async () => {
+		const run = {
+			outputs: { output: { response, subagentReports: { gitlab: "MR !392 files: Product.java, CHANGELOG.md" } } },
+		} as unknown as Run;
+		expect(await jevCitationGrounding(run)).toEqual([]);
+	});
+
+	test("the same response without that evidence is still flagged", async () => {
+		const run = { outputs: { output: { response } } } as unknown as Run;
+		const [fb] = await jevCitationGrounding(run);
+		expect(fb?.score).toBe(0);
 	});
 });

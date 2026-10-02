@@ -81,9 +81,11 @@ export async function jevCitationGrounding(
 	if (!input) return [];
 
 	const cited = findCitedRunbooks(input.response, input.candidates);
+	// SIO-1921: same evidence exemption as citationGrounding, so the two stay comparable.
 	const unknownFilenames = findUnknownMdCitations(
 		input.response,
 		input.candidates.map((c) => c.filename),
+		input.evidence,
 	);
 	if (cited.length === 0 && unknownFilenames.length === 0) return [];
 
