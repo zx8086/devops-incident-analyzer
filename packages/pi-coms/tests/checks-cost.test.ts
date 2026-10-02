@@ -17,11 +17,12 @@ function fakeClient(daily: { date: string; usd: number }[]) {
 	};
 }
 
-// now = 2026-08-30 anywhere in the day; yesterday = 2026-08-29
-const NOW = new Date("2026-08-30T08:00:00Z");
+// now = 2026-08-31 anywhere in the day; the judged settled day (D-2, SIO-1923)
+// is 2026-08-29, and its baseline is the 14 days before it.
+const NOW = new Date("2026-08-31T08:00:00Z");
 function days(baseline: number, yesterday: number) {
 	const out: { date: string; usd: number }[] = [];
-	for (let d = 15; d >= 2; d--) {
+	for (let d = 16; d >= 3; d--) {
 		const dt = new Date(NOW.getTime() - d * 86_400_000).toISOString().slice(0, 10);
 		out.push({ date: dt, usd: baseline });
 	}
@@ -80,6 +81,21 @@ describe("checkCost", () => {
 		expect(out[0].summary).not.toContain("Infinity");
 	});
 
+	// SIO-1923: at the 06:15Z run yesterday is only partly posted. The live case
+	// read $0.00 for a normal day; a spike on the settled day must still alert,
+	// and the partial day must not be judged at all.
+	test("SIO-1923: the settled day is judged, not the partly posted yesterday", async () => {
+		const state = new MonitorState(":memory:");
+		const partial = [...days(1000, 1101), { date: "2026-08-30", usd: 0 }];
+		const out = await checkCost(fakeClient(partial), state, { now: NOW });
+		expect(out).toHaveLength(1);
+		expect(out[0].dedup_key).toBe("cost:2026-08-29");
+		const quiet = new MonitorState(":memory:");
+		const spikeOnlyYesterday = [...days(1000, 1000), { date: "2026-08-30", usd: 5000 }];
+		expect(await checkCost(fakeClient(spikeOnlyYesterday), quiet, { now: NOW })).toHaveLength(0);
+		expect(quiet.costOn("2026-08-30")).toBe(5000);
+	});
+
 	test("no baseline yet stays quiet but records costs", async () => {
 		const state = new MonitorState(":memory:");
 		const out = await checkCost(fakeClient([{ date: "2026-08-29", usd: 5 }]), state, { now: NOW });
@@ -123,7 +139,7 @@ describe("checkCost with GroupBy SERVICE", () => {
 
 	function groupedDays(baseline: number, yesterdayServices: Record<string, number>) {
 		const out: { date: string; services: Record<string, number> }[] = [];
-		for (let d = 15; d >= 2; d--) {
+		for (let d = 16; d >= 3; d--) {
 			const dt = new Date(NOW.getTime() - d * 86_400_000).toISOString().slice(0, 10);
 			out.push({ date: dt, services: { [VPC]: baseline } });
 		}
@@ -218,7 +234,7 @@ describe("checkCost follows Cost Explorer pagination", () => {
 
 	function baselinePage() {
 		const out: { date: string; services: Record<string, number> }[] = [];
-		for (let d = 15; d >= 2; d--) {
+		for (let d = 16; d >= 3; d--) {
 			out.push({
 				date: new Date(NOW.getTime() - d * 86_400_000).toISOString().slice(0, 10),
 				services: { [VPC]: 1000 },

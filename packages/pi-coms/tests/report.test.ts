@@ -104,9 +104,11 @@ describe("report", () => {
 			findingCounts: {},
 			checkErrors: 0,
 			activeAlarms: [],
-			yesterdayUsd: 1.23,
+			spendUsd: 1.23,
+			spendDate: "2026-08-27",
 			baselineUsd: 1.1,
 		});
+		expect(text).toContain("- spend: $1.23 on 2026-08-27 (1.1x the 14d baseline of $1.10)");
 		expect(text).toContain("daily digest");
 		expect(text).toContain("no findings");
 		expect(text).toContain("1.23");
@@ -121,7 +123,7 @@ test("digest names the failing check family next to the error count", () => {
 		checkErrors: 26,
 		checkErrorsByCheck: { logs: 26 },
 		activeAlarms: [],
-		yesterdayUsd: null,
+		spendUsd: null,
 		baselineUsd: null,
 	});
 	expect(text).toContain("check errors: 26 (logs=26)");
@@ -134,7 +136,7 @@ test("digest flags DEGRADED in the header when checks errored", () => {
 		findingCounts: {},
 		checkErrors: 3,
 		activeAlarms: [],
-		yesterdayUsd: null,
+		spendUsd: null,
 		baselineUsd: null,
 	});
 	expect(text.split("\n")[0]).toContain("[warn]");
@@ -148,7 +150,7 @@ test("digest carries the bundle canary and suppressed count", () => {
 		findingCounts: {},
 		checkErrors: 0,
 		activeAlarms: [],
-		yesterdayUsd: null,
+		spendUsd: null,
 		baselineUsd: null,
 		bundleVersion: "5f5d7b2",
 		suppressedCount: 4,
@@ -161,7 +163,7 @@ test("digest carries the bundle canary and suppressed count", () => {
 		findingCounts: {},
 		checkErrors: 0,
 		activeAlarms: [],
-		yesterdayUsd: null,
+		spendUsd: null,
 		baselineUsd: null,
 	});
 	expect(unknown).toContain("bundle: unknown");
@@ -210,7 +212,7 @@ const quietDigest = {
 	findingCounts: {},
 	checkErrors: 0,
 	activeAlarms: [],
-	yesterdayUsd: null,
+	spendUsd: null,
 	baselineUsd: null,
 };
 
@@ -744,7 +746,7 @@ describe("SIO-1673 report markers", () => {
 			findingCounts: {},
 			checkErrors: 0,
 			activeAlarms: [],
-			yesterdayUsd: null,
+			spendUsd: null,
 			baselineUsd: null,
 			paused: { reason: "context storm", since: "2026-09-09T10:00:00Z" },
 		});
@@ -760,7 +762,7 @@ describe("SIO-1673 report markers", () => {
 			findingCounts: {},
 			checkErrors: 2,
 			activeAlarms: [],
-			yesterdayUsd: null,
+			spendUsd: null,
 			baselineUsd: null,
 			paused: { reason: "", since: "2026-09-09T10:00:00Z" },
 		});
@@ -829,7 +831,7 @@ test("SIO-1754: scaling triggers in ALARM are counted, not listed", () => {
 		since: "2026-09-16T00:00:00Z",
 		findingCounts: {},
 		checkErrors: 0,
-		yesterdayUsd: null,
+		spendUsd: null,
 		baselineUsd: null,
 	};
 	const some = formatDigest({
@@ -858,7 +860,7 @@ describe("SIO-1825: every formatter's header parses through the shared contract"
 		findingCounts: { logs: 2 },
 		checkErrors: 0,
 		activeAlarms: [],
-		yesterdayUsd: null,
+		spendUsd: null,
 		baselineUsd: null,
 	};
 
@@ -923,7 +925,7 @@ describe("account name in the header", () => {
 		findingCounts: { logs: 2 },
 		checkErrors: 0,
 		activeAlarms: [],
-		yesterdayUsd: null,
+		spendUsd: null,
 		baselineUsd: null,
 	};
 	const finding: Finding = {
@@ -1010,7 +1012,7 @@ describe("accountNameFromEnv", () => {
 		findingCounts: { logs: 2 },
 		checkErrors: 0,
 		activeAlarms: [],
-		yesterdayUsd: null,
+		spendUsd: null,
 		baselineUsd: null,
 	};
 

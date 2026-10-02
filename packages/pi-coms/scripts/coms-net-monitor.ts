@@ -47,7 +47,7 @@ import { checkAlarms, describeAllAlarms, isScalingTrigger } from "./monitor/chec
 import { certRegions, checkCerts, checkListenerCerts } from "./monitor/checks/certs.ts";
 import { parseChurnRulePatterns, parseChurnTagKeys } from "./monitor/checks/churn-tags.ts";
 import { checkCompliance } from "./monitor/checks/compliance.ts";
-import { COST_DEFAULTS, checkCost } from "./monitor/checks/cost.ts";
+import { COST_DEFAULTS, checkCost, settledCostDate } from "./monitor/checks/cost.ts";
 import { checkDbEvents } from "./monitor/checks/db-events.ts";
 import { checkDrift } from "./monitor/checks/drift.ts";
 import { checkGuardDuty } from "./monitor/checks/guardduty.ts";
@@ -862,7 +862,8 @@ function main(): void {
 		} catch {
 			// digest still ships
 		}
-		const latest = state.latestCost();
+		const spendDate = settledCostDate(new Date());
+		const spendUsd = state.costOn(spendDate);
 		return formatDigest({
 			accountId: ACCOUNT_ID,
 			accountName: ACCOUNT_NAME,
@@ -872,8 +873,9 @@ function main(): void {
 			checkErrorsByCheck: errsByCheck,
 			activeAlarms,
 			scalingTriggersInAlarm,
-			yesterdayUsd: latest?.usd ?? null,
-			baselineUsd: latest ? state.costBaseline(latest.date, 14) : null,
+			spendUsd,
+			spendDate,
+			baselineUsd: spendUsd !== null ? state.costBaseline(spendDate, 14) : null,
 			bundleVersion: await bundleVersion(),
 			suppressedCount: state.journalRows(day, "suppressed_finding").length,
 			notables: notablesFromJournal(findingRows),

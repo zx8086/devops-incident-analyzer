@@ -21,6 +21,10 @@ describe("emphasiseDigest", () => {
 		expect(emphasiseDigest("- spend yesterday: $0.18 vs 14d baseline $1.19")).toBe(
 			"- **spend yesterday:** $0.18 vs 14d baseline $1.19",
 		);
+		// SIO-1923: the settled-day line keeps a letters-only label.
+		expect(emphasiseDigest("- spend: $7.04 on 2026-09-30 (0.8x the 14d baseline of $9.37)")).toBe(
+			"- **spend:** $7.04 on 2026-09-30 (0.8x the 14d baseline of $9.37)",
+		);
 	});
 
 	test("covers every family seen live", () => {
