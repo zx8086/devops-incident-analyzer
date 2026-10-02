@@ -46,17 +46,24 @@ export function jevCitationFeedback(
 	];
 }
 
+// One shared deadline for all of an example's requests. Not a latency budget (an eval is off the
+// critical path) but a hang guard: LangSmith writes scores only after every example finishes, so a
+// stalled TypeSafe connection would cost the whole experiment, not one score.
+export const CITATION_DEADLINE_MS = 15000;
+
 // One request per runbook: the state differs per runbook, and a batch of questions only shares one state.
 export async function jevJudgeCitations(
 	response: string,
 	cited: CitedRunbook[],
 	apiKey: string,
+	signal: AbortSignal = AbortSignal.timeout(CITATION_DEADLINE_MS),
 ): Promise<JevCitationResult> {
 	try {
 		const probabilities = await Promise.all(
 			cited.map(async (c) => {
 				const answer = await askSystemOne({
 					apiKey,
+					signal,
 					state: { report: response, runbook: { filename: c.filename, content: c.content } },
 					questions: { grounded: { type: "noul", instructions: GROUNDED_INSTRUCTIONS } },
 				});

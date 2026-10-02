@@ -1,7 +1,7 @@
 // packages/agent/src/eval/jev-citation-evaluator.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Run } from "langsmith/schemas";
-import { jevCitationFeedback, jevCitationGrounding } from "./jev-citation-evaluator.ts";
+import { jevCitationFeedback, jevCitationGrounding, jevJudgeCitations } from "./jev-citation-evaluator.ts";
 import { jevEvalMetadata } from "./jev-metadata.ts";
 
 describe("jevCitationFeedback", () => {
@@ -74,5 +74,21 @@ describe("jevCitationGrounding evidence parity (SIO-1921)", () => {
 		const run = { outputs: { output: { response } } } as unknown as Run;
 		const [fb] = await jevCitationGrounding(run);
 		expect(fb?.score).toBe(0);
+	});
+});
+
+describe("jevJudgeCitations deadline (SIO-1919)", () => {
+	test("an expired deadline becomes the no-score failure result, not a hang", async () => {
+		const result = await jevJudgeCitations(
+			"report",
+			[{ filename: "a.md", content: "runbook" }],
+			"dummy-key-never-sent",
+			AbortSignal.abort(),
+		);
+		// Assert the REASON: without the signal the dummy key still fails (401 or no network),
+		// which would pass an ok:false check for the wrong reason.
+		expect(result).toEqual({ ok: false, reason: "The operation was aborted." });
+		const [fb] = jevCitationFeedback(result, []);
+		expect(fb?.score).toBeUndefined();
 	});
 });
