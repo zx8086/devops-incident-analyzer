@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Run } from "langsmith/schemas";
 import {
+	citationGrounding,
 	citationJudgeFeedback,
 	deriveTitleFromContent,
 	findCitedRunbooks,
@@ -111,6 +112,26 @@ describe("findUnknownMdCitations", () => {
 		const unknown = findUnknownMdCitations(
 			"See invented-runbook.md for details. Per invented-runbook.md, escalate.",
 			knownFilenames,
+		);
+		expect(unknown).toEqual(["invented-runbook.md"]);
+	});
+
+	// SIO-1921: verbatim from the DEVOPS-1353 smoke run, where both citation evaluators scored 0
+	// on a repository file the GitLab sub-agent reported as touched by an MR.
+	test("does not flag a .md name the sub-agent evidence also contains", () => {
+		const unknown = findUnknownMdCitations(
+			"The last change, MR !392, touched `OptionResponse.java`, `Product.java` and `CHANGELOG.md`.",
+			knownFilenames,
+			"MR !392 changed files: src/OptionResponse.java, src/Product.java, CHANGELOG.md",
+		);
+		expect(unknown).toEqual([]);
+	});
+
+	test("still flags an invented name when the evidence does not contain it", () => {
+		const unknown = findUnknownMdCitations(
+			"Per invented-runbook.md, restart. MR !392 touched CHANGELOG.md.",
+			knownFilenames,
+			"MR !392 changed files: CHANGELOG.md",
 		);
 		expect(unknown).toEqual(["invented-runbook.md"]);
 	});
@@ -303,6 +324,7 @@ describe("readCitationGroundingOutput", () => {
 		expect(readCitationGroundingOutput(run)).toEqual({
 			response: "see database-slow-queries.md",
 			candidates: [{ filename: "database-slow-queries.md", content: "...", title: "Slow Queries" }],
+			evidence: "",
 		});
 	});
 
@@ -322,11 +344,47 @@ describe("readCitationGroundingOutput", () => {
 
 	test("missing knowledgeSnapshot defaults to empty candidates, response still required", () => {
 		const run = { outputs: { output: { response: "no citations here" } } } as unknown as Run;
-		expect(readCitationGroundingOutput(run)).toEqual({ response: "no citations here", candidates: [] });
+		expect(readCitationGroundingOutput(run)).toEqual({ response: "no citations here", candidates: [], evidence: "" });
+	});
+
+	test("subagentReports are joined into evidence", () => {
+		const run = {
+			outputs: { output: { response: "r", subagentReports: { gitlab: "touched CHANGELOG.md", elastic: "no hits" } } },
+		} as unknown as Run;
+		expect(readCitationGroundingOutput(run)?.evidence).toBe("touched CHANGELOG.md\nno hits");
 	});
 
 	test("missing response entirely yields undefined", () => {
 		const run = { outputs: { output: { knowledgeSnapshot: [] } } } as unknown as Run;
 		expect(readCitationGroundingOutput(run)).toBeUndefined();
+	});
+});
+
+// SIO-1921: through the entrypoint, not just the helper -- the false positive lived in how
+// citationGrounding wired its inputs, so the helper test alone would not catch a regression there.
+describe("citationGrounding entrypoint", () => {
+	const knowledgeSnapshot = [
+		{ filename: "high-error-rate.md", content: "# High Error Rate", title: "High Error Rate" },
+	];
+	const response = "The last change, MR !392, touched `Product.java` and `CHANGELOG.md`.";
+
+	test("an evidence-quoted .md file yields no verdict instead of a 0", async () => {
+		const run = {
+			outputs: {
+				output: {
+					response,
+					knowledgeSnapshot,
+					subagentReports: { gitlab: "MR !392 files: Product.java, CHANGELOG.md" },
+				},
+			},
+		} as unknown as Run;
+		expect(await citationGrounding(run)).toEqual([]);
+	});
+
+	test("the same response without that evidence is still flagged", async () => {
+		const run = { outputs: { output: { response, knowledgeSnapshot } } } as unknown as Run;
+		const [fb] = await citationGrounding(run);
+		expect(fb?.score).toBe(0);
+		expect(fb?.comment).toContain("CHANGELOG.md");
 	});
 });
