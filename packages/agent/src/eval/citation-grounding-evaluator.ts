@@ -59,10 +59,15 @@ const MD_FILENAME_PATTERN = /\b[a-zA-Z0-9][a-zA-Z0-9_-]*\.md\b/g;
 // citing a completely invented filename produced no match at all, missing the exact
 // hallucination case this evaluator exists to catch. Scans independently for anything
 // filename-shaped and flags names not in the known set. Deduped, order-independent.
-export function findUnknownMdCitations(response: string, knownFilenames: string[]): string[] {
+//
+// SIO-1921: a name that ALSO appears in the sub-agent evidence is quoted, not invented -- e.g. a
+// report listing the files an MR touched ("...Product.java and CHANGELOG.md") scored 0 here
+// before any judge ran. An invented runbook name has no reason to appear in tool evidence.
+export function findUnknownMdCitations(response: string, knownFilenames: string[], evidence = ""): string[] {
 	const known = new Set(knownFilenames);
 	const found = response.match(MD_FILENAME_PATTERN) ?? [];
-	return [...new Set(found.filter((name) => !known.has(name)))];
+	const inEvidence = new Set(evidence.match(MD_FILENAME_PATTERN) ?? []);
+	return [...new Set(found.filter((name) => !known.has(name) && !inEvidence.has(name)))];
 }
 
 const CitationVerdictSchema = z.object({
@@ -238,16 +243,22 @@ export function buildKnowledgeCandidates(
 const CitationGroundingOutputSchema = z.object({
 	response: z.string(),
 	knowledgeSnapshot: z.array(z.object({ filename: z.string(), content: z.string(), title: z.string() })).optional(),
+	// SIO-1921: recorded on every fixture since the evaluator suite began, so replay-outputs works.
+	subagentReports: z.record(z.string(), z.string()).optional(),
 });
 
 export function readCitationGroundingOutput(
 	run: Run,
-): { response: string; candidates: KnowledgeCitationCandidate[] } | undefined {
+): { response: string; candidates: KnowledgeCitationCandidate[]; evidence: string } | undefined {
 	const output = (run.outputs as { output?: unknown } | undefined)?.output;
 	if (!output || typeof output !== "object") return undefined;
 	const parsed = CitationGroundingOutputSchema.safeParse(output);
 	if (!parsed.success) return undefined;
-	return { response: parsed.data.response, candidates: parsed.data.knowledgeSnapshot ?? [] };
+	return {
+		response: parsed.data.response,
+		candidates: parsed.data.knowledgeSnapshot ?? [],
+		evidence: Object.values(parsed.data.subagentReports ?? {}).join("\n"),
+	};
 }
 
 // LangSmith run-evaluator entrypoint. Reads run.outputs.output.response/knowledgeSnapshot only
@@ -267,6 +278,7 @@ export async function citationGrounding(
 	const unknownFilenames = findUnknownMdCitations(
 		input.response,
 		input.candidates.map((c) => c.filename),
+		input.evidence,
 	);
 	if (cited.length === 0 && unknownFilenames.length === 0) return [];
 
