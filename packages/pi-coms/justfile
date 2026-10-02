@@ -44,10 +44,28 @@ coms first *rest:
           ;;
       esac
     done
+    # SIO-1916: the built-in extensions named below exist from Pi 0.99.0. An older
+    # Pi would fail on them with the adapter already gone, so say what to do.
+    PI_VERSION="$(pi --version 2>/dev/null | tail -1 || true)"
+    if [ "$(printf '%s\n' "0.99.0" "$PI_VERSION" | sort -V | head -1)" != "0.99.0" ]; then
+      echo "just coms needs Pi 0.99.0 or newer (found: ${PI_VERSION:-none}); upgrade: npm install -g @earendil-works/pi-coding-agent" >&2
+      exit 1
+    fi
+    # From Pi 0.99.0 --no-extensions also switches off the BUILT-IN
+    # extensions, so the three that make up Pi's MCP support are named back in
+    # and the console treats ~/.pi/agent/mcp.json exactly as stock Pi does.
+    # builtin:mcp reads the file (it replaced pi-mcp-adapter, SIO-1915). The
+    # other two are how non-direct tools are reached: tool-search for a
+    # "deferred" server, codemode for the default exposure. Pi activates each
+    # only when a connected server uses that exposure; leaving one out makes
+    # that exposure unreachable.
     PI_RESOURCE_FLAGS=(
       --no-extensions
       --no-skills
       --no-prompt-templates
+      -e builtin:mcp
+      -e builtin:tool-search
+      -e builtin:codemode
       -e "$HOME/.pi/agent/extensions/atuin.ts"
       -e "{{justfile_directory()}}/extensions/coms-net.ts"
       -e "$HOME/.pi/agent/npm/node_modules/context-mode/build/adapters/pi/extension.js"
@@ -56,7 +74,6 @@ coms first *rest:
       -e "$HOME/.pi/agent/extensions/model-info"
       -e "$HOME/.pi/agent/extensions/optional-extension-manager"
       -e "$HOME/.pi/agent/npm/node_modules/pi-hunk/dist/pi.js"
-      -e "$HOME/.pi/agent/npm/node_modules/pi-mcp-adapter/index.ts"
       -e "$HOME/.pi/agent/npm/node_modules/pi-web-access/index.ts"
       -e "$HOME/.pi/agent/extensions/summaries"
       -e "$HOME/.pi/agent/extensions/ui-customization"
