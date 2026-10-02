@@ -44,10 +44,17 @@ coms first *rest:
           ;;
       esac
     done
+    # SIO-1916: from Pi 0.99.0 --no-extensions also switches off the BUILT-IN
+    # extensions, so the two this console needs are named back in. builtin:mcp
+    # reads ~/.pi/agent/mcp.json (it replaced pi-mcp-adapter, SIO-1915);
+    # builtin:tool-search is the only way to reach a server whose exposure is
+    # "deferred". codemode is left off on purpose.
     PI_RESOURCE_FLAGS=(
       --no-extensions
       --no-skills
       --no-prompt-templates
+      -e builtin:mcp
+      -e builtin:tool-search
       -e "$HOME/.pi/agent/extensions/atuin.ts"
       -e "{{justfile_directory()}}/extensions/coms-net.ts"
       -e "$HOME/.pi/agent/npm/node_modules/context-mode/build/adapters/pi/extension.js"
@@ -56,7 +63,6 @@ coms first *rest:
       -e "$HOME/.pi/agent/extensions/model-info"
       -e "$HOME/.pi/agent/extensions/optional-extension-manager"
       -e "$HOME/.pi/agent/npm/node_modules/pi-hunk/dist/pi.js"
-      -e "$HOME/.pi/agent/npm/node_modules/pi-mcp-adapter/index.ts"
       -e "$HOME/.pi/agent/npm/node_modules/pi-web-access/index.ts"
       -e "$HOME/.pi/agent/extensions/summaries"
       -e "$HOME/.pi/agent/extensions/ui-customization"
