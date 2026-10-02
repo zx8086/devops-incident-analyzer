@@ -41,10 +41,14 @@ bun run eval:incident-replay -- --sub-agent-model claude-haiku-4-5 --repetitions
 - `runbook_selection_vs_usage` -- deterministic (SIO-1442, OKF audit tier 3): every
   `always_select` runbook reached the run's `selectedRunbooks`; emits no verdict on turns where
   the selector never ran (`selectedRunbooks: null`, e.g. simple turns and pre-SIO-1442 fixtures)
-- `citation_grounding` -- LLM judge (SIO-1442, OKF audit tier 3): claims about cited runbooks
-  match the runbook's real content, graded against a knowledge snapshot taken at RUN time (so
-  replay-outputs re-grades against the content that governed the run, not today's); a
-  hallucinated `.md` filename scores 0 deterministically, no judge call needed
+- `citation_grounding_jev` -- Jev judge (SIO-1442 OKF audit tier 3; Jev since SIO-1935): claims
+  about cited runbooks match the runbook's real content, one Noul per cited runbook, graded
+  against a knowledge snapshot taken at RUN time (so replay-outputs re-grades against the content
+  that governed the run, not today's). A hallucinated `.md` filename scores 0 deterministically,
+  with no Jev call, unless the same name appears in the sub-agent evidence (SIO-1921). Skips
+  without `TYPESAFE_API_KEY`. The older `citation_grounding` key (a gpt-4o-mini judge) was retired
+  in SIO-1935 after catching 1/8 planted contradictions to Jev's 8/8; it survives only in
+  historical experiments
 
 Judge-emitted datasource names are canonicalized (`elasticsearch`->`elastic`,
 `capella`->`couchbase`, ...) before feedback emission (SIO-1378): previously a free-formed name
@@ -387,7 +391,7 @@ It is gate 1 of `docs/development/model-upgrade-checklist.md`; committed output 
 
 Four audit tiers grade the OKF spec layer itself (agent.yaml + SOUL.md + RULES.md +
 knowledge/) rather than the graph's answers. Tier 3 lives inside the incident-replay eval
-above (`runbook_selection_vs_usage` + `citation_grounding`); tier 4's static checks run inside
+above (`runbook_selection_vs_usage` + `citation_grounding_jev`); tier 4's static checks run inside
 tier 1's CLI plus `bun test` (`okf-spec-audit.test.ts`). Tiers 1-2 have their own entrypoints.
 
 ### Tier 1 -- static/semantic spec audit
