@@ -237,49 +237,11 @@ describe("HTTP transport graceful drain (SIO-727)", () => {
 		expect(Date.now() - closeStarted).toBeLessThan(5500);
 	});
 
-	test("shuttingDown gate returns clean JSON-RPC 503 (unit-level, no race)", async () => {
-		// The gate is a closure inside startHttpTransport; we can't poke it
-		// directly, so fire a request right after close() flips shuttingDown.
-		// SIO-1952: stateful mode used to hold close() open (closeAllSessions ran
-		// before the drain), which kept the listener live long enough for the gate
-		// to fire reliably. Stateless close() goes straight to the drain, so the
-		// request can also be refused; both outcomes are accepted below.
-		const { startHttpTransport } = await import("../http.ts");
-		const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-
-		const result = await startHttpTransport(() => new McpServer({ name: "test", version: "0.1.0" }), {
-			...baseConfig,
-			drainTimeoutMs: 5000,
-		});
-		server = result.server;
-
-		// Start close in the background; the shuttingDown flag flips immediately.
-		const closePromise = result.close();
-
-		// Give the close() call a tick to flip the flag, then fire a request.
-		await new Promise((r) => setTimeout(r, 5));
-		const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
-			body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
-		}).catch((err) => err); // connection-refused after stop() is acceptable too
-
-		// If fetch threw (post-stop), that's the racy outcome. The interesting
-		// assertion is when fetch got through: status must be 503 with the
-		// JSON-RPC envelope.
-		if (res instanceof Response && res.status === 503) {
-			const body = (await res.json()) as { jsonrpc: string; error: { code: number; message: string } };
-			expect(body.jsonrpc).toBe("2.0");
-			expect(body.error.code).toBe(-32000);
-			expect(body.error.message).toContain("shutting down");
-			expect(res.headers.get("retry-after")).toBe("30");
-		}
-		// Otherwise (connection refused -- Bun stopped the listener first) the
-		// gate didn't get a chance to fire, which is fine -- the LLM gets a
-		// retryable network error rather than a malformed response.
-		await closePromise;
-	});
-
+	// SIO-1952: the 503 shutdown-gate test was removed with stateful mode. It relied on stateful
+	// close() running closeAllSessions before the drain, which kept the listener open. Stateless
+	// close() stops the listener first: verified over five runs that a new connection after
+	// close() is refused even with a blocking tools/call in flight, and that idle keep-alive
+	// connections are dropped, so a request can reach the gate only inside Bun's stop() window.
 	test("close() resolves within drainTimeoutMs even with no active requests", async () => {
 		const { startHttpTransport } = await import("../http.ts");
 		const result = await startHttpTransport(noopFactory, { ...baseConfig, drainTimeoutMs: 5000 });
