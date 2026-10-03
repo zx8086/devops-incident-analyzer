@@ -6,8 +6,8 @@
 | Umbrella ticket | [SIO-1427](https://linear.app/siobytes/issue/SIO-1427) (Backlog) |
 | Child tickets | SIO-1951 to SIO-1968 (18, all Backlog, unassigned; table in section 3) |
 | Related | [SIO-1426](https://linear.app/siobytes/issue/SIO-1426) (konnect MRTR), [SIO-1439](https://linear.app/siobytes/issue/SIO-1439) (konnect offline by design), [SIO-1438](https://linear.app/siobytes/issue/SIO-1438) (per-tool wrap decision, now contradicted), [SIO-1409](https://linear.app/siobytes/issue/SIO-1409) / [SIO-1435](https://linear.app/siobytes/issue/SIO-1435) (readiness program, Done) |
-| Study | `docs/superpowers/specs/2026-10-03-mcp-spec-2026-07-28-migration-feasibility.md`, on PR [#945](https://github.com/zx8086/devops-incident-analyzer/pull/945) (branch `claude/mcp-spec-migration-study-f845f2`, commit `48e6da7a`). Open and unmerged when this was written. If it is still open, read the file from that branch. |
-| Repo state | `main` at `4b72e7b4` when this handover was written |
+| Study | `docs/superpowers/specs/2026-10-03-mcp-spec-2026-07-28-migration-feasibility.md`. On `main` since PR [#945](https://github.com/zx8086/devops-incident-analyzer/pull/945) merged (squash commit `8c0452d8`). |
+| Repo state | `main` at `8c0452d8` with CI green; no code has been changed for this program yet |
 | Suggested branches | One per ticket, off `origin/main`: `sio-1951-mcp-v2-bump`, `sio-1952-delete-stateful-mode`, `sio-1953-elastic-notification-context`, `sio-1954-shared-seam-sdk-agnostic` |
 
 ## 1. TL;DR
