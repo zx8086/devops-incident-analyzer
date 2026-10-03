@@ -306,7 +306,7 @@ export const registerReindexWithNotifications = (server: McpServer, esClient: Cl
 			title: "Reindex With Notifications",
 
 			description:
-				"Reindex documents from source to destination with comprehensive progress notifications and status updates. Supports both synchronous and asynchronous modes with real-time progress tracking and error reporting.",
+				"Reindex documents from source to destination, synchronously or asynchronously. Progress is logged on the server, not streamed to the caller: a synchronous run returns the totals and failures when it finishes, and an asynchronous run returns a task id to poll with elasticsearch_tasks_get_task.",
 
 			inputSchema: reindexWithNotificationsValidator.shape,
 		},
