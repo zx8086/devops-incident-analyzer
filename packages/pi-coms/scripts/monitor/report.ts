@@ -454,16 +454,18 @@ export function formatSuppressionReview(input: {
 		lines.push("suppression ledger is empty; nothing is being masked.");
 		return lines.join("\n");
 	}
-	lines.push(`- ledger entries: ${input.entries.length}`);
-	for (const e of input.entries) {
-		lines.push(`- ${e.pattern} -- ${e.reason} (since ${e.created_at})`);
+	lines.push(`${input.entries.length} active suppression(s).`);
+	// One block per entry, blank-line separated: the reason is a full sentence
+	// and the sample keys are long, so a single bullet line was unreadable in email.
+	input.entries.forEach((e, i) => {
+		lines.push("", `${i + 1}. ${e.pattern}`, `   Reason: ${e.reason}`, `   Since: ${e.created_at}`);
 		if (e.matches === 0) {
-			lines.push(`  no matches in ${input.windowDays}d; candidate for unsuppress`);
+			lines.push(`   Matches (${input.windowDays}d): 0 -- candidate for unsuppress`);
 		} else {
-			const samples = e.sampleKeys.length > 0 ? `, e.g. ${e.sampleKeys.join(", ")}` : "";
-			lines.push(`  matches last ${input.windowDays}d: ${e.matches}${samples}`);
+			lines.push(`   Matches (${input.windowDays}d): ${e.matches}`);
+			if (e.sampleKeys.length > 0) lines.push("   Examples:", ...e.sampleKeys.map((k) => `     ${k}`));
 		}
-	}
+	});
 	return lines.join("\n");
 }
 

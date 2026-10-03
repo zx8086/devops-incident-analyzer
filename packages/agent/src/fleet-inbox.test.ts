@@ -224,8 +224,11 @@ describe("parseMonitorReport and classifyMessage", () => {
 		const SUPPRESSION = [
 			"[info] aws-111122223333 suppression review (last 7d)",
 			"",
-			"- ledger entries: 1",
-			"- alarm:noisy-alarm -- known flapper (since 2026-09-01T00:00:00Z)",
+			"1 active suppression(s).",
+			"",
+			"1. alarm:noisy-alarm",
+			"   Reason: known flapper",
+			"   Since: 2026-09-01T00:00:00Z",
 		].join("\n");
 
 		// SIO-1832: the same four shapes carrying the friendly account name. Built
