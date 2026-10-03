@@ -17,8 +17,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCachedServerFactory } from "@devops-agent/shared";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../config/schemas.ts";
 import { registerAllTools } from "../tools/register.ts";
@@ -47,10 +46,7 @@ async function captureSnapshot(): Promise<Record<string, SnapshotEntry>> {
 		createBareServer: () => new McpServer({ name: "aws-mcp-server", version: "0.0.0" }),
 		registerAll: (server) => registerAllTools(server, awsConfig),
 	});
-	const server = factory();
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "tools-list-snapshot", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+	const client = await connectV1TestClient(factory, "tools-list-snapshot");
 	const { tools } = await client.listTools();
 	await client.close();
 

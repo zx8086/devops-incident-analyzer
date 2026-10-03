@@ -5,8 +5,7 @@
 // This test locks in replay equivalence -- a replayed server's tool list must match both a
 // second replay and a directly-registered control server built from the same stubs.
 import { describe, expect, mock, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from "../config/index.js";
 import type { GitLabRestClient } from "../gitlab-client/index.js";
@@ -52,10 +51,8 @@ function makeDatasource(discoveredTools: ProxyToolInfo[] | undefined): GitLabDat
 	};
 }
 
-async function toolNames(server: McpServer): Promise<string[]> {
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "gitlab-factory-replay-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connectV1TestClient(serverFactory, "gitlab-factory-replay-test-client");
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name).sort();
@@ -65,8 +62,8 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 	test("replayed servers expose an identical tool list across calls", async () => {
 		const factory = createMcpServerFactory(makeDatasource(fakeDiscoveredTools));
 
-		const namesA = await toolNames(factory());
-		const namesB = await toolNames(factory());
+		const namesA = await toolNames(factory);
+		const namesB = await toolNames(factory);
 
 		expect(namesA).toEqual(namesB);
 		expect(namesA.length).toBeGreaterThan(0);
@@ -75,11 +72,14 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 	test("replayed tool list matches a directly-registered control server, including proxy + code-analysis tools", async () => {
 		const ds = makeDatasource(fakeDiscoveredTools);
 		const factory = createMcpServerFactory(ds);
-		const replayed = await toolNames(factory());
+		const replayed = await toolNames(factory);
 
-		const control = new McpServer({ name: ds.config.application.name, version: ds.config.application.version });
-		registerProxyTools(control, ds.proxy, ds.discoveredTools ?? [], ds.restClient);
-		registerCodeAnalysisTools(control, ds.restClient);
+		const control = () => {
+			const server = new McpServer({ name: ds.config.application.name, version: ds.config.application.version });
+			registerProxyTools(server, ds.proxy, ds.discoveredTools ?? [], ds.restClient);
+			registerCodeAnalysisTools(server, ds.restClient);
+			return server;
+		};
 		const controlNames = await toolNames(control);
 
 		expect(replayed).toEqual(controlNames);
@@ -92,7 +92,7 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 
 	test("discoveredTools: [] skips proxy registration entirely -- replayed server still has code-analysis tools", async () => {
 		const factory = createMcpServerFactory(makeDatasource([]));
-		const names = await toolNames(factory());
+		const names = await toolNames(factory);
 
 		expect(names).not.toContain("gitlab_get_project");
 		expect(names).not.toContain("gitlab_list_issues");
@@ -115,7 +115,7 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 		];
 
 		const factory = createMcpServerFactory(makeDatasource(collidingDiscoveredTools));
-		const names = await toolNames(factory());
+		const names = await toolNames(factory);
 
 		expect(names.filter((n) => n === "gitlab_list_merge_requests")).toHaveLength(1);
 		expect(names).toContain("gitlab_get_project");
@@ -149,11 +149,9 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 			config: fakeConfig,
 			discoveredTools: collidingDiscoveredTools,
 		};
-		const server = createMcpServerFactory(ds)();
+		const serverFactory = createMcpServerFactory(ds);
 
-		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-		const client = new Client({ name: "gitlab-collision-handler-test-client", version: "0.0.0" });
-		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+		const client = await connectV1TestClient(serverFactory, "gitlab-collision-handler-test-client");
 		await client.callTool({ name: "gitlab_list_merge_requests", arguments: { project_id: 42 } });
 		await client.close();
 
@@ -168,7 +166,7 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 	// SIO-1076: Orbit tools register only when config.orbit.enabled is true, and the
 	// tool surface is stable regardless of boot availability (handlers soft-fail).
 	test("orbit tools register when enabled and are absent when disabled", async () => {
-		const disabled = await toolNames(createMcpServerFactory(makeDatasource([]))());
+		const disabled = await toolNames(createMcpServerFactory(makeDatasource([])));
 		expect(disabled).not.toContain("gitlab_blast_radius");
 
 		const enabledDs: GitLabDatasource = {
@@ -182,7 +180,7 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 			// orbitClient omitted on purpose: registration must NOT require a live client.
 			orbitAvailable: false,
 		};
-		const enabled = await toolNames(createMcpServerFactory(enabledDs)());
+		const enabled = await toolNames(createMcpServerFactory(enabledDs));
 		expect(enabled).toContain("gitlab_graph_schema");
 		expect(enabled).toContain("gitlab_blast_radius");
 		expect(enabled).toContain("gitlab_cross_project_callers");

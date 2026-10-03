@@ -8,8 +8,7 @@
 // byte-identical to what toMcp(result) alone would have produced pre-SIO-1422.
 import { afterEach, describe, expect, test } from "bun:test";
 import { CloudWatchClient, DescribeAlarmsCommand } from "@aws-sdk/client-cloudwatch";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { mockClient } from "aws-sdk-client-mock";
 import type { AwsConfig } from "../config/schemas.ts";
@@ -29,11 +28,12 @@ const config: AwsConfig = {
 afterEach(() => _resetClientsForTests());
 
 async function buildClient() {
-	const server = new McpServer({ name: "aws-structured-content-test", version: "0.0.0" });
-	registerCloudWatchTools(server, config);
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "aws-structured-content-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+	const serverFactory = () => {
+		const server = new McpServer({ name: "aws-structured-content-test", version: "0.0.0" });
+		registerCloudWatchTools(server, config);
+		return server;
+	};
+	const client = await connectV1TestClient(serverFactory, "aws-structured-content-test-client");
 	return client;
 }
 

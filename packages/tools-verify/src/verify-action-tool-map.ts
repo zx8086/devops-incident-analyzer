@@ -20,8 +20,7 @@
 import { fileURLToPath } from "node:url";
 import { getAllActionToolNames, loadAgent, type ToolDefinition } from "@devops-agent/gitagent-bridge";
 import { createCachedServerFactory } from "@devops-agent/shared";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 // `bun run --filter` executes with cwd set to this package's directory, not the repo root, so
@@ -45,10 +44,8 @@ interface ServerAdapter {
 	classifyMissing?: (name: string) => string | undefined;
 }
 
-async function toolNames(server: McpServer): Promise<string[]> {
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "verify-action-tool-map", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connectV1TestClient(serverFactory, "verify-action-tool-map");
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name);
@@ -266,7 +263,7 @@ async function main() {
 			continue;
 		}
 
-		const liveNames = new Set(await toolNames(adapter.buildServer()));
+		const liveNames = new Set(await toolNames(adapter.buildServer));
 		const actionMap = toolDef.tool_mapping?.action_tool_map ?? {};
 
 		for (const [action, names] of Object.entries(actionMap)) {

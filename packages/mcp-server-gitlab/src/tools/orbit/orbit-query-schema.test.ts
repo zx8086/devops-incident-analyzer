@@ -8,21 +8,21 @@
 // naming the offending field, and every documented shape must still parse.
 
 import { describe, expect, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerOrbitTools } from "./index.js";
 
 async function orbitToolSchema(): Promise<Record<string, unknown>> {
-	const server = new McpServer({ name: "orbit-schema-test", version: "0.0.0" });
-	registerOrbitTools(server, {
-		client: undefined,
-		available: false,
-		maxQueriesPerRun: 20,
-	} as never);
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "orbit-schema-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+	const serverFactory = () => {
+		const server = new McpServer({ name: "orbit-schema-test", version: "0.0.0" });
+		registerOrbitTools(server, {
+			client: undefined,
+			available: false,
+			maxQueriesPerRun: 20,
+		} as never);
+		return server;
+	};
+	const client = await connectV1TestClient(serverFactory, "orbit-schema-test-client");
 	const { tools } = await client.listTools();
 	await client.close();
 	const tool = tools.find((t) => t.name === "gitlab_orbit_query_graph");

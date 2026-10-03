@@ -5,8 +5,7 @@
 // record.
 import { describe, expect, test } from "bun:test";
 import { createCachedServerFactory } from "@devops-agent/shared";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pkg from "../../package.json" with { type: "json" };
 import type { Config } from "../config.ts";
@@ -37,10 +36,8 @@ const fakeConfig: Config = {
 	clusterDeployments: [],
 };
 
-async function toolNames(server: McpServer): Promise<string[]> {
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "elastic-iac-factory-replay-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connectV1TestClient(serverFactory, "elastic-iac-factory-replay-test-client");
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name).sort();
@@ -50,8 +47,8 @@ describe("SIO-1044: elastic-iac-mcp-server cached factory replay", () => {
 	test("replayed servers expose an identical tool list across calls", async () => {
 		const factory = createMcpServerFactory(fakeConfig);
 
-		const namesA = await toolNames(factory());
-		const namesB = await toolNames(factory());
+		const namesA = await toolNames(factory);
+		const namesB = await toolNames(factory);
 
 		expect(namesA).toEqual(namesB);
 		expect(namesA.length).toBeGreaterThan(0);
@@ -59,9 +56,12 @@ describe("SIO-1044: elastic-iac-mcp-server cached factory replay", () => {
 
 	test("replayed tool list matches the non-cached createServer control", async () => {
 		const factory = createMcpServerFactory(fakeConfig);
-		const replayed = await toolNames(factory());
+		const replayed = await toolNames(factory);
 
-		const control = createServer(fakeConfig);
+		const control = () => {
+			const server = createServer(fakeConfig);
+			return server;
+		};
 		const controlNames = await toolNames(control);
 
 		expect(replayed).toEqual(controlNames);

@@ -22,8 +22,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import type { Config } from "../config/index.js";
 import type { GitLabRestClient } from "../gitlab-client/index.js";
 import type { GitLabMcpProxy, ProxyToolInfo } from "../gitlab-client/proxy.js";
@@ -78,10 +77,7 @@ interface SnapshotEntry {
 
 async function captureSnapshot(): Promise<Record<string, SnapshotEntry>> {
 	const factory = createMcpServerFactory(makeDatasource());
-	const server = factory();
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "tools-list-snapshot", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+	const client = await connectV1TestClient(factory, "tools-list-snapshot");
 	const { tools } = await client.listTools();
 	await client.close();
 

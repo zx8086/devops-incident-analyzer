@@ -7,8 +7,8 @@
 // server, and (2) that every replayed server's closures share the SAME ds.performanceCollector
 // instance rather than each getting its own.
 import { describe, expect, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { KongApi } from "../api/kong-api.js";
 import type { Config } from "../config/index.js";
@@ -34,15 +34,13 @@ function makeDatasource(): KonnectServerDatasource {
 	};
 }
 
-async function connectedClient(server: McpServer): Promise<Client> {
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "konnect-factory-replay-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+async function connectedClient(serverFactory: () => McpServer): Promise<Client> {
+	const client = await connectV1TestClient(serverFactory, "konnect-factory-replay-test-client");
 	return client;
 }
 
-async function toolNames(server: McpServer): Promise<string[]> {
-	const client = await connectedClient(server);
+async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connectedClient(serverFactory);
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name).sort();
@@ -52,8 +50,8 @@ describe("SIO-1044: mcp-server-konnect cached factory replay", () => {
 	test("replayed servers expose an identical tool list across calls", async () => {
 		const factory = createMcpServerFactory(makeDatasource());
 
-		const namesA = await toolNames(factory());
-		const namesB = await toolNames(factory());
+		const namesA = await toolNames(factory);
+		const namesB = await toolNames(factory);
 
 		expect(namesA).toEqual(namesB);
 		expect(namesA.length).toBeGreaterThan(0);
@@ -62,7 +60,7 @@ describe("SIO-1044: mcp-server-konnect cached factory replay", () => {
 	test("replayed tool list matches a directly-registered control server and the full static registry", async () => {
 		const ds = makeDatasource();
 		const factory = createMcpServerFactory(ds);
-		const replayed = await toolNames(factory());
+		const replayed = await toolNames(factory);
 
 		// Control server: register the real static tool set directly (mirrors what registerTools
 		// does internally) rather than importing the internal registerTools function, keeping the
@@ -80,11 +78,8 @@ describe("SIO-1044: mcp-server-konnect cached factory replay", () => {
 		const ds = makeDatasource();
 		const factory = createMcpServerFactory(ds);
 
-		const serverA = factory();
-		const serverB = factory();
-
-		const clientA = await connectedClient(serverA);
-		const clientB = await connectedClient(serverB);
+		const clientA = await connectedClient(factory);
+		const clientB = await connectedClient(factory);
 
 		// analyze_migration_context is a pure-computation tool (contextDetector + MigrationAnalyzer):
 		// it never touches KongApi, so the empty stubApi is safe here. Calling it once through each

@@ -12,8 +12,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { createCachedServerFactory } from "@devops-agent/shared";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { registerPingHandlers } from "../lib/pingHandler.ts";
@@ -43,29 +43,27 @@ function makeDatasource(): CouchbaseServerDatasource {
 	};
 }
 
-async function connectedClient(server: McpServer): Promise<Client> {
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "couchbase-factory-replay-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+async function connectedClient(serverFactory: () => McpServer): Promise<Client> {
+	const client = await connectV1TestClient(serverFactory, "couchbase-factory-replay-test-client");
 	return client;
 }
 
-async function toolNames(server: McpServer): Promise<string[]> {
-	const client = await connectedClient(server);
+async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connectedClient(serverFactory);
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name).sort();
 }
 
-async function resourceUris(server: McpServer): Promise<string[]> {
-	const client = await connectedClient(server);
+async function resourceUris(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connectedClient(serverFactory);
 	const { resources } = await client.listResources();
 	await client.close();
 	return resources.map((r) => r.uri).sort();
 }
 
-async function promptNames(server: McpServer): Promise<string[]> {
-	const client = await connectedClient(server);
+async function promptNames(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connectedClient(serverFactory);
 	const { prompts } = await client.listPrompts();
 	await client.close();
 	return prompts.map((p) => p.name).sort();
@@ -75,8 +73,9 @@ describe("SIO-1044: mcp-server-couchbase cached factory replay", () => {
 	test("replayed servers expose identical tool lists, resource URIs, and prompt names across calls", async () => {
 		const factory = createMcpServerFactory(makeDatasource());
 
-		const serverA = factory();
-		const serverB = factory();
+		// Each request builds its own replayed server, so A and B are two independent factory calls.
+		const serverA = factory;
+		const serverB = factory;
 
 		const [toolsA, toolsB] = await Promise.all([toolNames(serverA), toolNames(serverB)]);
 		expect(toolsA).toEqual(toolsB);
@@ -94,30 +93,33 @@ describe("SIO-1044: mcp-server-couchbase cached factory replay", () => {
 	test("replayed tool/resource/prompt lists match a directly-registered control server", async () => {
 		const ds = makeDatasource();
 		const factory = createMcpServerFactory(ds);
-		const replayedServer = factory();
+		const replayedServer = factory;
 
 		// Control server: register the real registration functions directly (mirrors what
 		// createMcpServerFactory's registerAll does internally), independent of the factory
 		// recording mechanism under test.
-		const control = new McpServer({ name: "couchbase-mcp-server-control", version: "0.0.0" });
-		control.registerResource("test-playbook", "playbook://test.md", {}, async (uri) => ({
-			contents: [{ uri: uri.href, mimeType: "text/markdown", text: "# Test" }],
-		}));
-		registerAllTools(control, ds.bucket);
-		registerSqlppQueryGenerator(control);
-		registerAllResources(control, ds.bucket, ds.playbooks, new ResourceRegistry());
-		registerPingHandlers(control);
-		control.registerTool(
-			"capella_echo",
-			{
-				description: "Echoes back the input parameters for debugging",
-				inputSchema: {},
-				annotations: couchbaseToolAnnotations("capella_echo"),
-			},
-			async (params) => ({
-				content: [{ type: "text" as const, text: JSON.stringify(params) }],
-			}),
-		);
+		const control = () => {
+			const server = new McpServer({ name: "couchbase-mcp-server-control", version: "0.0.0" });
+			server.registerResource("test-playbook", "playbook://test.md", {}, async (uri) => ({
+				contents: [{ uri: uri.href, mimeType: "text/markdown", text: "# Test" }],
+			}));
+			registerAllTools(server, ds.bucket);
+			registerSqlppQueryGenerator(server);
+			registerAllResources(server, ds.bucket, ds.playbooks, new ResourceRegistry());
+			registerPingHandlers(server);
+			server.registerTool(
+				"capella_echo",
+				{
+					description: "Echoes back the input parameters for debugging",
+					inputSchema: {},
+					annotations: couchbaseToolAnnotations("capella_echo"),
+				},
+				async (params) => ({
+					content: [{ type: "text" as const, text: JSON.stringify(params) }],
+				}),
+			);
+			return server;
+		};
 
 		const [replayedTools, controlTools] = await Promise.all([toolNames(replayedServer), toolNames(control)]);
 		expect(replayedTools).toEqual(controlTools);
@@ -140,9 +142,7 @@ describe("SIO-1044: mcp-server-couchbase cached factory replay", () => {
 
 	test("Finding-C regression: capella_list_playbooks resolves real playbook content on a replayed server", async () => {
 		const factory = createMcpServerFactory(makeDatasource());
-		const replayed = factory();
-
-		const client = await connectedClient(replayed);
+		const client = await connectedClient(factory);
 		const result = await client.callTool({ name: "capella_list_playbooks", arguments: {} });
 		await client.close();
 
@@ -220,8 +220,7 @@ describe("SIO-1044: mcp-server-couchbase cached factory replay", () => {
 		expect(registerAllCalls).toBe(1);
 
 		for (let i = 0; i < 3; i++) {
-			const server = factory();
-			const uris = await resourceUris(server);
+			const uris = await resourceUris(factory);
 			expect(uris).toContain("playbook://test1");
 		}
 

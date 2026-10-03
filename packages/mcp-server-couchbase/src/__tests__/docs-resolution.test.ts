@@ -11,8 +11,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { config } from "../config";
@@ -27,10 +27,8 @@ function makePlaybooks(): PlaybookRegistry {
 	return { handler, resourceIds: ["test1"] };
 }
 
-async function connectedClient(server: McpServer): Promise<Client> {
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "couchbase-docs-resolution-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+async function connectedClient(serverFactory: () => McpServer): Promise<Client> {
+	const client = await connectV1TestClient(serverFactory, "couchbase-docs-resolution-test-client");
 	return client;
 }
 
@@ -58,7 +56,7 @@ afterAll(async () => {
 describe("docs:// resolution through a replayed server (SIO-1052)", () => {
 	test("capella_list_documentation (root) returns the real documentation browser content", async () => {
 		const factory = createMcpServerFactory({ bucket: stubBucket, playbooks: makePlaybooks() });
-		const client = await connectedClient(factory());
+		const client = await connectedClient(factory);
 		const result = (await client.callTool({ name: "capella_list_documentation", arguments: {} })) as {
 			isError?: boolean;
 			content?: Array<{ type: string; text?: string }>;
@@ -73,7 +71,7 @@ describe("docs:// resolution through a replayed server (SIO-1052)", () => {
 
 	test("capella_list_documentation (scoped) returns scope documentation, not an error", async () => {
 		const factory = createMcpServerFactory({ bucket: stubBucket, playbooks: makePlaybooks() });
-		const client = await connectedClient(factory());
+		const client = await connectedClient(factory);
 		const result = (await client.callTool({
 			name: "capella_list_documentation",
 			arguments: { scope_name: "inventory-fixture" },
@@ -86,7 +84,7 @@ describe("docs:// resolution through a replayed server (SIO-1052)", () => {
 
 	test("capella_read_documentation returns collection/file documentation content", async () => {
 		const factory = createMcpServerFactory({ bucket: stubBucket, playbooks: makePlaybooks() });
-		const client = await connectedClient(factory());
+		const client = await connectedClient(factory);
 		const result = (await client.callTool({
 			name: "capella_read_documentation",
 			arguments: {
@@ -104,8 +102,8 @@ describe("docs:// resolution through a replayed server (SIO-1052)", () => {
 	test("docs resolution is identical across two replayed servers from the same factory", async () => {
 		const factory = createMcpServerFactory({ bucket: stubBucket, playbooks: makePlaybooks() });
 		const texts: string[] = [];
-		for (const server of [factory(), factory()]) {
-			const client = await connectedClient(server);
+		for (let i = 0; i < 2; i++) {
+			const client = await connectedClient(factory);
 			const result = (await client.callTool({ name: "capella_list_documentation", arguments: {} })) as {
 				content?: Array<{ type: string; text?: string }>;
 			};

@@ -4,8 +4,7 @@
 // directly-registered control server, so nothing is silently dropped or duplicated by the record.
 import { describe, expect, test } from "bun:test";
 import { createCachedServerFactory } from "@devops-agent/shared";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../config/schemas.ts";
 import { registerAllTools } from "../tools/register.ts";
@@ -30,10 +29,8 @@ function buildFactory(): () => McpServer {
 	});
 }
 
-async function toolNames(server: McpServer): Promise<string[]> {
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "aws-factory-replay-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connectV1TestClient(serverFactory, "aws-factory-replay-test-client");
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name).sort();
@@ -43,8 +40,8 @@ describe("SIO-1044: aws-mcp-server cached factory replay", () => {
 	test("replayed servers expose an identical tool list across calls", async () => {
 		const factory = buildFactory();
 
-		const namesA = await toolNames(factory());
-		const namesB = await toolNames(factory());
+		const namesA = await toolNames(factory);
+		const namesB = await toolNames(factory);
 
 		expect(namesA).toEqual(namesB);
 		expect(namesA.length).toBeGreaterThan(0);
@@ -52,10 +49,13 @@ describe("SIO-1044: aws-mcp-server cached factory replay", () => {
 
 	test("replayed tool list matches a directly-registered control server", async () => {
 		const factory = buildFactory();
-		const replayed = await toolNames(factory());
+		const replayed = await toolNames(factory);
 
-		const control = new McpServer({ name: "aws-mcp-server", version: "0.0.0" });
-		registerAllTools(control, awsConfig);
+		const control = () => {
+			const server = new McpServer({ name: "aws-mcp-server", version: "0.0.0" });
+			registerAllTools(server, awsConfig);
+			return server;
+		};
 		const controlNames = await toolNames(control);
 
 		expect(replayed).toEqual(controlNames);
@@ -65,7 +65,7 @@ describe("SIO-1044: aws-mcp-server cached factory replay", () => {
 	// the aws-agent literally cannot inspect route tables / NAT gateways -- the capability gap that
 	// made the localcore incident give up on the network-path investigation.
 	test("exposes the six SIO-1120 network-path EC2 tools via tools/list", async () => {
-		const names = await toolNames(buildFactory()());
+		const names = await toolNames(buildFactory());
 		for (const tool of [
 			"aws_ec2_describe_route_tables",
 			"aws_ec2_describe_nat_gateways",
@@ -82,7 +82,7 @@ describe("SIO-1044: aws-mcp-server cached factory replay", () => {
 	// CIDRs) must be registered and exposed via tools/list, or the aws-agent cannot trace
 	// DNS record -> ALB/NLB -> listener -> target group -> target health for the network map.
 	test("exposes the seven SIO-1205 ingress/network-map tools via tools/list", async () => {
-		const names = await toolNames(buildFactory()());
+		const names = await toolNames(buildFactory());
 		for (const tool of [
 			"aws_elbv2_describe_load_balancers",
 			"aws_elbv2_describe_listeners",
