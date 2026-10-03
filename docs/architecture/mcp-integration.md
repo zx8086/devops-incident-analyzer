@@ -275,6 +275,11 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Purpose:** Read-only access to Couchbase Capella clusters for bucket health, N1QL query execution (reads only by default), index analysis, Search (FTS) index inspection, and system vitals. The count is the number of entries in `packages/mcp-server-couchbase/src/__tests__/tools-list-snapshot.json`.
 
+> **No auto-reload in development (SIO-1931):** unlike the other MCP servers, `bun run dev` here runs without `--hot` or `--watch`; restart it by hand after an edit. The native `couchbase` SDK cannot reload in-process safely:
+> - **`--hot`:** every reload opens a new cluster and abandons the old one with its sockets, threads and health-check timer (24 reloads left 25 live clusters, RSS 111 to 745 MB). Under one-minute reloads the server exited after 8 reloads, unable to reconnect, and a long dev session segfaulted.
+> - **`--watch`:** the restart runs before the async shutdown reaches `cluster.close()`, so the native sockets survive into the restarted process (7 to 190 Capella connections over 12 reloads).
+> - **Without either:** the server held 1 connection and flat RSS over 2 hours of load.
+
 > **SDK v2 dual-era pilot (SIO-1424/1436/1443):** this server carries a second, side-by-side entrypoint (`src/server-v2.ts` / `index-v2.ts`, `src/v2/`) that ports the same tool surface onto MCP SDK v2.0.0, plus its own `ResourceRegistry` (`src/resources/resource-registry.ts`, SIO-1412) that walks its own registered-resource map instead of reaching into the SDK's private `_registeredResources`. The v2 port is a parity pilot — it does not add tools to the agent's connected surface, so the count is unchanged.
 
 **Tool categories:**
