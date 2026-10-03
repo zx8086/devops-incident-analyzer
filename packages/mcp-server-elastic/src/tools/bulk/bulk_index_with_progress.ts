@@ -241,7 +241,7 @@ export const registerBulkIndexWithProgress = (server: McpServer, esClient: Clien
 			title: "Bulk Index With Progress",
 
 			description:
-				"Bulk index multiple documents into Elasticsearch with real-time progress notifications. Processes documents in batches and reports progress for long-running operations. Use for indexing large datasets with progress tracking.",
+				"Bulk index multiple documents into Elasticsearch in batches. Use for indexing large datasets. Progress is logged on the server, not streamed to the caller; the result reports the outcome when indexing finishes.",
 
 			inputSchema: bulkIndexWithProgressValidator.shape,
 		},

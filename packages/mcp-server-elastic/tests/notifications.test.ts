@@ -1,26 +1,9 @@
 /* tests/notifications.test.ts */
 
-import { beforeEach, describe, expect, it, mock } from "bun:test";
-import type {
-	RequestHandlerExtra,
-	ServerNotification,
-	ServerRequest,
-} from "@modelcontextprotocol/sdk/shared/protocol.js";
+import { describe, expect, it } from "bun:test";
 import { NotificationManager, notificationManager } from "../src/utils/notifications.js";
 
 describe("Notification System", () => {
-	let mockSendNotification: ReturnType<typeof mock>;
-	let mockExtra: RequestHandlerExtra<ServerRequest, ServerNotification>;
-
-	beforeEach(() => {
-		mockSendNotification = mock(() => Promise.resolve());
-		mockExtra = {
-			sendNotification: mockSendNotification,
-			signal: new AbortController().signal,
-			requestId: "test-request",
-		} as unknown as RequestHandlerExtra<ServerRequest, ServerNotification>;
-	});
-
 	it("should create notification manager", () => {
 		const manager = new NotificationManager();
 		expect(manager).toBeDefined();
@@ -29,7 +12,6 @@ describe("Notification System", () => {
 
 	it("should track operation IDs", async () => {
 		const manager = new NotificationManager();
-		manager.setRequestContext(mockExtra);
 
 		const operationId = "test-op-123";
 		const progressToken = "progress-123";
@@ -47,31 +29,19 @@ describe("Notification System", () => {
 
 		expect(manager.getActiveOperationsCount()).toBe(0);
 		expect(manager.getActiveOperationIds()).not.toContain(operationId);
-
-		// Verify sendNotification was called for progress notifications
-		expect(mockSendNotification).toHaveBeenCalled();
 	});
 
 	it("should send info notifications (logged locally, not sent to client)", async () => {
 		const manager = new NotificationManager();
-		manager.setRequestContext(mockExtra);
 
-		await manager.sendInfo("Test message", { key: "value" });
-
-		// sendMessage logs locally but does NOT call sendNotification
-		// (most MCP clients don't support notifications/message)
-		expect(mockSendNotification).not.toHaveBeenCalled();
+		await expect(manager.sendInfo("Test message", { key: "value" })).resolves.toBeUndefined();
 	});
 
 	it("should send error notifications (logged locally, not sent to client)", async () => {
 		const manager = new NotificationManager();
-		manager.setRequestContext(mockExtra);
 
 		const error = new Error("Test error");
-		await manager.sendError("Operation failed", error, { context: "test" });
-
-		// sendMessage logs locally but does NOT call sendNotification
-		expect(mockSendNotification).not.toHaveBeenCalled();
+		await expect(manager.sendError("Operation failed", error, { context: "test" })).resolves.toBeUndefined();
 	});
 
 	it("should generate operation and progress tokens", () => {
@@ -92,7 +62,6 @@ describe("Notification System", () => {
 
 	it("should handle operation failures", async () => {
 		const manager = new NotificationManager();
-		manager.setRequestContext(mockExtra);
 
 		const operationId = "test-fail-op";
 		const progressToken = "progress-fail";
@@ -105,28 +74,13 @@ describe("Notification System", () => {
 		await manager.failOperation(operationId, error, "Operation failed");
 
 		expect(manager.getActiveOperationsCount()).toBe(0);
-
-		// sendNotification is called for progress (startOperation sends initial progress),
-		// but NOT for message notifications (failOperation's sendMessage only logs)
-		expect(mockSendNotification).toHaveBeenCalledWith({
-			method: "notifications/progress",
-			params: {
-				progressToken: "progress-fail",
-				progress: 0,
-				total: 100,
-			},
-		});
 	});
 
 	it("should handle progress updates for unknown operations", async () => {
 		const manager = new NotificationManager();
-		manager.setRequestContext(mockExtra);
 
 		// Should not throw error for unknown operation
 		await expect(manager.updateProgress("unknown-op", 50)).resolves.toBeUndefined();
-
-		// sendNotification should not be called for unknown operation
-		expect(mockSendNotification).not.toHaveBeenCalled();
 	});
 
 	it("should work with global notification manager instance", () => {

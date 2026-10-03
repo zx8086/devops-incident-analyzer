@@ -7,7 +7,7 @@ import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sd
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { createProgressTracker, notificationManager, withNotificationContext } from "../../utils/notifications.js";
+import { createProgressTracker, notificationManager } from "../../utils/notifications.js";
 import type { SearchResult } from "../types.js";
 
 const reindexWithNotificationsValidator = z.object({
@@ -306,11 +306,11 @@ export const registerReindexWithNotifications = (server: McpServer, esClient: Cl
 			title: "Reindex With Notifications",
 
 			description:
-				"Reindex documents from source to destination with comprehensive progress notifications and status updates. Supports both synchronous and asynchronous modes with real-time progress tracking and error reporting.",
+				"Reindex documents from source to destination, synchronously or asynchronously. Progress is logged on the server, not streamed to the caller: a synchronous run returns the totals and failures when it finishes, and an asynchronous run returns a task id to poll with elasticsearch_tasks_get_task.",
 
 			inputSchema: reindexWithNotificationsValidator.shape,
 		},
 
-		withNotificationContext(handler),
+		handler,
 	);
 };
