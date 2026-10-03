@@ -102,6 +102,7 @@ describe("SIO-1424: v2 pilot wire protocol (three-era matrix)", () => {
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "tools/call",
 					"Mcp-Name": "capella_ping",
 				},
@@ -161,6 +162,7 @@ describe("SIO-1424: v2 pilot wire protocol (three-era matrix)", () => {
 					headers: {
 						"Content-Type": "application/json",
 						Accept: "application/json, text/event-stream",
+						"MCP-Protocol-Version": "2026-07-28",
 						"Mcp-Method": "server/discover",
 					},
 					body: JSON.stringify({
@@ -206,6 +208,7 @@ describe("SIO-1424: v2 pilot wire protocol (three-era matrix)", () => {
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "tools/call",
 					"Mcp-Name": "capella_ping",
 				},
@@ -260,6 +263,7 @@ describe("SIO-1443 follow-up: capella_read_documentation respects config.documen
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "tools/call",
 					"Mcp-Name": "capella_read_documentation",
 				},
@@ -321,6 +325,7 @@ describe("SIO-1443 follow-up: capella_list_documentation respects config.documen
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "tools/call",
 					"Mcp-Name": "capella_list_documentation",
 				},
@@ -413,6 +418,7 @@ describe("SIO-1443 follow-up: capella_list_playbooks respects the loadPlaybooks 
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "tools/call",
 					"Mcp-Name": "capella_list_playbooks",
 				},
@@ -502,6 +508,7 @@ describe("SIO-1443 Task 9: representative wire-level coverage across the ported 
 					headers: {
 						"Content-Type": "application/json",
 						Accept: "application/json, text/event-stream",
+						"MCP-Protocol-Version": "2026-07-28",
 						"Mcp-Method": "tools/call",
 						"Mcp-Name": "capella_get_buckets",
 					},
@@ -553,6 +560,7 @@ describe("SIO-1443 Task 9: representative wire-level coverage across the ported 
 					headers: {
 						"Content-Type": "application/json",
 						Accept: "application/json, text/event-stream",
+						"MCP-Protocol-Version": "2026-07-28",
 						"Mcp-Method": "tools/call",
 						"Mcp-Name": "capella_get_document_by_id",
 					},
@@ -604,6 +612,7 @@ describe("SIO-1443 Task 9: representative wire-level coverage across the ported 
 					headers: {
 						"Content-Type": "application/json",
 						Accept: "application/json, text/event-stream",
+						"MCP-Protocol-Version": "2026-07-28",
 						"Mcp-Method": "tools/call",
 						"Mcp-Name": "capella_run_sql_plus_plus_query",
 					},
@@ -654,6 +663,7 @@ describe("SIO-1443 Task 9: representative wire-level coverage across the ported 
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "tools/call",
 					"Mcp-Name": "capella_echo",
 				},
@@ -704,6 +714,7 @@ describe("SIO-1443 Task 9: representative wire-level coverage across the ported 
 					headers: {
 						"Content-Type": "application/json",
 						Accept: "application/json, text/event-stream",
+						"MCP-Protocol-Version": "2026-07-28",
 						"Mcp-Method": "resources/read",
 						"Mcp-Name": "database://structure",
 					},
@@ -764,6 +775,7 @@ describe("SIO-1443 Task 9: representative wire-level coverage across the ported 
 					headers: {
 						"Content-Type": "application/json",
 						Accept: "application/json, text/event-stream",
+						"MCP-Protocol-Version": "2026-07-28",
 						"Mcp-Method": "resources/read",
 						"Mcp-Name": uri,
 					},
@@ -812,6 +824,7 @@ describe("SIO-1443 Task 9: representative wire-level coverage across the ported 
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "prompts/get",
 					"Mcp-Name": "generate_sqlpp_query",
 				},
@@ -899,6 +912,7 @@ describe("SIO-1443 Critical fix: documentation resources (resources/read) genuin
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "resources/read",
 					"Mcp-Name": "docs://",
 				},
@@ -951,6 +965,7 @@ describe("SIO-1443 Critical fix: documentation resources (resources/read) genuin
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "resources/read",
 					"Mcp-Name": "scope-documentation://",
 				},
@@ -1003,6 +1018,7 @@ describe("SIO-1443 Critical fix: documentation resources (resources/read) genuin
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "resources/list",
 				},
 				body: JSON.stringify({
@@ -1051,6 +1067,7 @@ describe("SIO-1443 Critical fix: documentation resources (resources/read) genuin
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "resources/list",
 				},
 				body: JSON.stringify({
@@ -1116,6 +1133,7 @@ describe("SIO-1109: v2 KV write tools are gated by readOnlyQueryMode", () => {
 				headers: {
 					"Content-Type": "application/json",
 					Accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2026-07-28",
 					"Mcp-Method": "tools/call",
 					"Mcp-Name": name,
 				},
