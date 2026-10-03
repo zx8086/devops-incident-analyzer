@@ -29,7 +29,6 @@ export interface TransportConfig {
 	port: number;
 	host: string;
 	path: string;
-	sessionMode: "stateless" | "stateful";
 	idleTimeout: number;
 	apiKey?: string;
 	allowedOrigins?: string;
@@ -96,7 +95,6 @@ export async function createTransport(
 			port: config.port,
 			host: config.host,
 			path: config.path,
-			sessionMode: config.sessionMode,
 			idleTimeout: config.idleTimeout,
 			apiKey: config.apiKey || undefined,
 			allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,

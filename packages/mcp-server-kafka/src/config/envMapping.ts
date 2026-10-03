@@ -44,7 +44,6 @@ export const envMapping: Record<string, string> = {
 	MCP_PORT: "transport.port",
 	MCP_HOST: "transport.host",
 	MCP_PATH: "transport.path",
-	MCP_SESSION_MODE: "transport.sessionMode",
 	MCP_API_KEY: "transport.apiKey",
 	MCP_ALLOWED_ORIGINS: "transport.allowedOrigins",
 	MCP_IDLE_TIMEOUT: "transport.idleTimeout",

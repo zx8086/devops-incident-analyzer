@@ -13,7 +13,6 @@ export const defaultConfig: Config = {
 		port: 9080,
 		host: "0.0.0.0",
 		path: "/mcp",
-		sessionMode: "stateless",
 		idleTimeout: 255,
 		maxResponseSizeBytes: 1000000,
 		defaultPageSize: 20,

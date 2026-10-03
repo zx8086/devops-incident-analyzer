@@ -21,7 +21,6 @@ describe("HTTP transport stateless mode", () => {
 				port: 0,
 				host: "127.0.0.1",
 				path: "/mcp",
-				sessionMode: "stateless" as const,
 				idleTimeout: 10,
 			},
 		);
@@ -41,7 +40,6 @@ describe("HTTP transport stateless mode", () => {
 				port: 0,
 				host: "127.0.0.1",
 				path: "/mcp",
-				sessionMode: "stateless" as const,
 				idleTimeout: 10,
 			},
 		);
@@ -61,99 +59,12 @@ describe("HTTP transport stateless mode", () => {
 				port: 0,
 				host: "127.0.0.1",
 				path: "/mcp",
-				sessionMode: "stateless" as const,
 				idleTimeout: 10,
 			},
 		);
 		server = result.server;
 		const res = await fetch(`http://127.0.0.1:${server.port}/unknown`);
 		expect(res.status).toBe(404);
-		await result.close();
-	});
-});
-
-describe("HTTP transport stateful mode", () => {
-	let server: ReturnType<typeof Bun.serve> | null = null;
-
-	afterEach(() => {
-		if (server) {
-			server.stop(true);
-			server = null;
-		}
-	});
-
-	test("GET /mcp returns 400 without session ID in stateful mode", async () => {
-		const { startHttpTransport } = await import("../http.ts");
-		const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-		const result = await startHttpTransport(() => new McpServer({ name: "test", version: "0.1.0" }), {
-			port: 0,
-			host: "127.0.0.1",
-			path: "/mcp",
-			sessionMode: "stateful" as const,
-			idleTimeout: 10,
-		});
-		server = result.server;
-		const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, { method: "GET" });
-		expect(res.status).toBe(400);
-		await result.close();
-	});
-
-	test("DELETE /mcp returns 400 without valid session in stateful mode", async () => {
-		const { startHttpTransport } = await import("../http.ts");
-		const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-		const result = await startHttpTransport(() => new McpServer({ name: "test", version: "0.1.0" }), {
-			port: 0,
-			host: "127.0.0.1",
-			path: "/mcp",
-			sessionMode: "stateful" as const,
-			idleTimeout: 10,
-		});
-		server = result.server;
-		const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
-			method: "DELETE",
-			headers: { "mcp-session-id": "nonexistent-session" },
-		});
-		expect(res.status).toBe(400);
-		await result.close();
-	});
-
-	test("POST /mcp initializes a session in stateful mode", async () => {
-		const { startHttpTransport } = await import("../http.ts");
-		const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-		const result = await startHttpTransport(
-			() => {
-				const s = new McpServer({ name: "test", version: "0.1.0" });
-				return s;
-			},
-			{
-				port: 0,
-				host: "127.0.0.1",
-				path: "/mcp",
-				sessionMode: "stateful" as const,
-				idleTimeout: 10,
-			},
-		);
-		server = result.server;
-		const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Accept: "application/json, text/event-stream",
-			},
-			body: JSON.stringify({
-				jsonrpc: "2.0",
-				id: 1,
-				method: "initialize",
-				params: {
-					protocolVersion: "2025-11-25",
-					capabilities: {},
-					clientInfo: { name: "test-client", version: "0.1.0" },
-				},
-			}),
-		});
-		expect(res.status).toBe(200);
-		const sessionId = res.headers.get("mcp-session-id");
-		expect(sessionId).toBeTruthy();
 		await result.close();
 	});
 });
@@ -178,7 +89,6 @@ describe("HTTP transport /ready (SIO-726)", () => {
 		port: 0,
 		host: "127.0.0.1",
 		path: "/mcp",
-		sessionMode: "stateless" as const,
 		idleTimeout: 10,
 	};
 
@@ -292,7 +202,6 @@ describe("HTTP transport graceful drain (SIO-727)", () => {
 		port: 0,
 		host: "127.0.0.1",
 		path: "/mcp",
-		sessionMode: "stateless" as const,
 		idleTimeout: 10,
 	};
 
@@ -328,66 +237,11 @@ describe("HTTP transport graceful drain (SIO-727)", () => {
 		expect(Date.now() - closeStarted).toBeLessThan(5500);
 	});
 
-	test("shuttingDown gate returns clean JSON-RPC 503 (unit-level, no race)", async () => {
-		// The gate is a closure inside startHttpTransport; we can't poke it
-		// directly. Instead exercise the integration by holding close() open via
-		// a stuck closeAllSessions, then requesting /mcp while shuttingDown=true.
-		// In stateful mode close() calls closeAllSessions BEFORE drainBunServer,
-		// so a slow closeAll keeps the gate open and the listener live.
-		const { startHttpTransport } = await import("../http.ts");
-		const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-
-		const result = await startHttpTransport(() => new McpServer({ name: "test", version: "0.1.0" }), {
-			...baseConfig,
-			sessionMode: "stateful" as const,
-			drainTimeoutMs: 5000,
-		});
-		server = result.server;
-
-		// Initialize a session so closeAllSessions has work to do (and therefore
-		// can be observed mid-close).
-		await fetch(`http://127.0.0.1:${server.port}/mcp`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
-			body: JSON.stringify({
-				jsonrpc: "2.0",
-				id: 1,
-				method: "initialize",
-				params: {
-					protocolVersion: "2025-11-25",
-					capabilities: {},
-					clientInfo: { name: "test", version: "0.1.0" },
-				},
-			}),
-		});
-
-		// Start close in the background; the shuttingDown flag flips immediately.
-		const closePromise = result.close();
-
-		// Give the close() call a tick to flip the flag, then fire a request.
-		await new Promise((r) => setTimeout(r, 5));
-		const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
-			body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
-		}).catch((err) => err); // connection-refused after stop() is acceptable too
-
-		// If fetch threw (post-stop), that's the racy outcome. The interesting
-		// assertion is when fetch got through: status must be 503 with the
-		// JSON-RPC envelope.
-		if (res instanceof Response && res.status === 503) {
-			const body = (await res.json()) as { jsonrpc: string; error: { code: number; message: string } };
-			expect(body.jsonrpc).toBe("2.0");
-			expect(body.error.code).toBe(-32000);
-			expect(body.error.message).toContain("shutting down");
-			expect(res.headers.get("retry-after")).toBe("30");
-		}
-		// Otherwise (connection refused -- Bun stopped the listener first) the
-		// gate didn't get a chance to fire, which is fine -- the LLM gets a
-		// retryable network error rather than a malformed response.
-		await closePromise;
-	});
-
+	// SIO-1952: the 503 shutdown-gate test was removed with stateful mode. It relied on stateful
+	// close() running closeAllSessions before the drain, which kept the listener open. Stateless
+	// close() stops the listener first: verified over five runs that a new connection after
+	// close() is refused even with a blocking tools/call in flight, and that idle keep-alive
+	// connections are dropped, so a request can reach the gate only inside Bun's stop() window.
 	test("close() resolves within drainTimeoutMs even with no active requests", async () => {
 		const { startHttpTransport } = await import("../http.ts");
 		const result = await startHttpTransport(noopFactory, { ...baseConfig, drainTimeoutMs: 5000 });

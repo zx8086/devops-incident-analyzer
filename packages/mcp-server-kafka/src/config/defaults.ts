@@ -67,7 +67,6 @@ export const defaults = {
 		port: 9081,
 		host: "127.0.0.1",
 		path: "/mcp",
-		sessionMode: "stateless" as const,
 		apiKey: "",
 		allowedOrigins: "",
 		idleTimeout: 120,

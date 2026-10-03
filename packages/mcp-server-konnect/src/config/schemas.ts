@@ -80,7 +80,6 @@ export const ConfigSchema = z.object({
 			port: z.number().int().min(1024).max(65535).describe("HTTP server port"),
 			host: z.string().describe("HTTP server host"),
 			path: z.string().startsWith("/").describe("MCP endpoint path"),
-			sessionMode: z.enum(["stateless", "stateful"]).describe("HTTP session mode"),
 			idleTimeout: z.number().int().min(10).max(255).describe("Idle timeout in seconds"),
 			apiKey: z.string().describe("API key for authentication"),
 			allowedOrigins: z.string().describe("Comma-separated allowed origins"),

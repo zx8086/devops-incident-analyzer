@@ -15,7 +15,6 @@ const TransportConfigSchema = z.object({
 	port: z.number().min(1).max(65535).default(9082),
 	host: z.string().min(1).default("0.0.0.0"),
 	path: z.string().min(1).default("/mcp"),
-	sessionMode: z.enum(["stateless", "stateful"]).default("stateless"),
 	idleTimeout: z.number().min(1).default(255),
 	apiKey: z.string().optional(),
 	allowedOrigins: z.string().optional(),

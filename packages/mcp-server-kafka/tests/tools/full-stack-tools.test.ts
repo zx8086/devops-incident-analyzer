@@ -34,7 +34,6 @@ function buildFullStackConfig(kafkaOverrides: Partial<AppConfig["kafka"]> = {}):
 			port: 3000,
 			host: "127.0.0.1",
 			path: "/mcp",
-			sessionMode: "stateless",
 			apiKey: "",
 			allowedOrigins: "",
 			idleTimeout: 120,

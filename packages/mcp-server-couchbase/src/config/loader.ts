@@ -47,15 +47,11 @@ export function loadConfigFromEnv(): Partial<Config> {
 
 	// Load transport config
 	const transportMode = parseEnvVar(Bun.env[envVarMapping.transport.mode], "string") as string | undefined;
-	const transportSessionMode = parseEnvVar(Bun.env[envVarMapping.transport.sessionMode], "string") as
-		| string
-		| undefined;
 	config.transport = {
 		mode: (transportMode as "stdio" | "http" | "both") || defaultConfig.transport.mode,
 		port: (parseEnvVar(Bun.env[envVarMapping.transport.port], "number") as number) || defaultConfig.transport.port,
 		host: (parseEnvVar(Bun.env[envVarMapping.transport.host], "string") as string) || defaultConfig.transport.host,
 		path: (parseEnvVar(Bun.env[envVarMapping.transport.path], "string") as string) || defaultConfig.transport.path,
-		sessionMode: (transportSessionMode as "stateless" | "stateful") || defaultConfig.transport.sessionMode,
 		idleTimeout:
 			(parseEnvVar(Bun.env[envVarMapping.transport.idleTimeout], "number") as number) ||
 			defaultConfig.transport.idleTimeout,
