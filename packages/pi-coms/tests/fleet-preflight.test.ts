@@ -308,8 +308,12 @@ describe("hub expectations and rollout commands", () => {
 	});
 
 	test("a normal rollout uses pi-coms-update (it writes the reload sentinel); a token change re-runs the bootstrap with the sentinel touched", () => {
-		expect(rolloutCommands({ tokenChanged: false })).toEqual(["/usr/local/bin/pi-coms-update"]);
+		expect(rolloutCommands({ tokenChanged: false })).toEqual([
+			"flock -w 900 /run/pi-coms-update.lock /usr/local/bin/pi-coms-update",
+		]);
 		expect(rolloutCommands({ tokenChanged: true })[0]).toBe("touch /home/piagent/.pi-agent-reload");
-		expect(rolloutCommands({ tokenChanged: true })[2]).toBe("bash /var/lib/cloud/instance/user-data.txt");
+		expect(rolloutCommands({ tokenChanged: true })[2]).toBe(
+			"flock -w 900 /run/pi-coms-update.lock bash /var/lib/cloud/instance/user-data.txt",
+		);
 	});
 });

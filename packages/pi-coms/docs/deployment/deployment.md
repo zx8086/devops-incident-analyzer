@@ -213,7 +213,7 @@ below), and hosts converge from inside the network:
 | Publish | `./deploy/publish-fleet.sh pi-coms-dist-<account> <profile>` uploads the archive + vendored deps next to a `version` file. The archive is `git archive HEAD:packages/pi-coms`, so `packages/pi-coms/.gitattributes` decides what ships: `.pi` is `export-ignore` (SIO-1733) because a project `.pi/` dir makes Pi on every spoke stop at "Trust project folder?" with nobody to answer. Check with `git archive HEAD:packages/pi-coms \| tar t \| grep '^\.pi'` (must print nothing). |
 | Authorize | Bucket policy scoped with `aws:PrincipalOrgID`; hosts read via an S3 gateway endpoint (no internet path for code) |
 | Converge | A State Manager association runs `pi-coms-update` every 30 min, comparing the S3 `version` to the local `.bundle-version` and swapping + restarting services on change |
-| Immediate rollout | `aws ssm send-command ... --parameters 'commands=["/usr/local/bin/pi-coms-update"]'` per host |
+| Immediate rollout | `aws ssm send-command ... --parameters 'commands=["flock -w 900 /run/pi-coms-update.lock /usr/local/bin/pi-coms-update"]'` per host. Always through the lock (SIO-1948): the association takes it too, and two unlocked runs swap the bundle over each other's half-extracted tree |
 
 `pi-coms-update` restarts `pi-monitor` (and `coms-hub` on the hub host) but
 leaves a live registered Pi agent alone. When `extensions/` changed, follow
