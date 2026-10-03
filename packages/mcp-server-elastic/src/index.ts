@@ -110,7 +110,6 @@ if (import.meta.main) {
 					port: config.server.port,
 					host: config.server.host ?? "0.0.0.0",
 					path: config.server.path ?? "/mcp",
-					sessionMode: (config.server.sessionMode ?? "stateless") as "stateless" | "stateful",
 					idleTimeout: config.server.idleTimeout ?? 255,
 					apiKey: config.server.apiKey,
 					allowedOrigins: config.server.allowedOrigins,

@@ -37,11 +37,6 @@ describe("transport config", () => {
 		expect(config.transport.path).toBe("/mcp");
 	});
 
-	test("defaults to stateless session mode", () => {
-		const config = getConfig();
-		expect(config.transport.sessionMode).toBe("stateless");
-	});
-
 	test("defaults to 120s idle timeout", () => {
 		const config = getConfig();
 		expect(config.transport.idleTimeout).toBe(120);

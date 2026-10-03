@@ -38,9 +38,6 @@ function loadConfigFromEnv(): Partial<Config> {
 		port: (parseEnvVar(Bun.env[envVarMapping.server.port], "number") as number) || defaultConfig.server.port,
 		host: (parseEnvVar(Bun.env[envVarMapping.server.host], "string") as string) || defaultConfig.server.host,
 		path: (parseEnvVar(Bun.env[envVarMapping.server.path], "string") as string) || defaultConfig.server.path,
-		sessionMode:
-			(parseEnvVar(Bun.env[envVarMapping.server.sessionMode], "string") as "stateless" | "stateful") ||
-			defaultConfig.server.sessionMode,
 		idleTimeout:
 			(parseEnvVar(Bun.env[envVarMapping.server.idleTimeout], "number") as number) || defaultConfig.server.idleTimeout,
 		apiKey: parseEnvVar(Bun.env[envVarMapping.server.apiKey], "string") as string | undefined,

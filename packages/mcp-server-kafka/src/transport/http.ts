@@ -18,7 +18,6 @@ interface HttpTransportConfig {
 	port: number;
 	host: string;
 	path: string;
-	sessionMode: "stateless" | "stateful";
 	idleTimeout: number;
 	apiKey?: string;
 	allowedOrigins?: string[];
@@ -36,11 +35,6 @@ interface HttpTransportConfig {
 
 type ServerFactory = () => McpServer;
 
-interface SessionEntry {
-	transport: WebStandardStreamableHTTPServerTransport;
-	server: McpServer;
-}
-
 export interface HttpTransportResult {
 	server: ReturnType<typeof Bun.serve>;
 	close(): Promise<void>;
@@ -51,10 +45,6 @@ function methodNotAllowed(): Response {
 		{ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null },
 		{ status: 405, headers: { Allow: "POST" } },
 	);
-}
-
-function badRequest(message: string): Response {
-	return Response.json({ jsonrpc: "2.0", error: { code: -32000, message }, id: null }, { status: 400 });
 }
 
 function createStatelessHandler(serverFactory: ServerFactory) {
@@ -83,113 +73,19 @@ function createStatelessHandler(serverFactory: ServerFactory) {
 	};
 }
 
-function createStatefulHandlers(serverFactory: ServerFactory) {
-	const sessions = new Map<string, SessionEntry>();
-
-	async function handlePost(req: Request): Promise<Response> {
-		const sessionId = req.headers.get("mcp-session-id");
-
-		// Existing session: delegate to its transport
-		const existingSession = sessionId ? sessions.get(sessionId) : undefined;
-		if (existingSession) {
-			return existingSession.transport.handleRequest(req);
-		}
-
-		// New session: create transport and server
-		const transport = new WebStandardStreamableHTTPServerTransport({
-			sessionIdGenerator: () => crypto.randomUUID(),
-			onsessioninitialized: (id) => {
-				log.info({ sessionId: id }, "Session initialized");
-			},
-		});
-
-		const server = serverFactory();
-		await server.connect(transport);
-
-		transport.onclose = () => {
-			if (transport.sessionId) {
-				sessions.delete(transport.sessionId);
-				log.info({ sessionId: transport.sessionId }, "Session closed");
-			}
-		};
-
-		const response = await transport.handleRequest(req);
-
-		if (transport.sessionId) {
-			sessions.set(transport.sessionId, { transport, server });
-		}
-
-		return response;
-	}
-
-	async function handleGet(req: Request): Promise<Response> {
-		const sessionId = req.headers.get("mcp-session-id");
-		const session = sessionId ? sessions.get(sessionId) : undefined;
-		if (!session) {
-			return badRequest("Bad request: no valid session");
-		}
-		return session.transport.handleRequest(req);
-	}
-
-	async function handleDelete(req: Request): Promise<Response> {
-		const sessionId = req.headers.get("mcp-session-id");
-		const session = sessionId ? sessions.get(sessionId) : undefined;
-		if (!session || !sessionId) {
-			return badRequest("Bad request: no valid session");
-		}
-		await session.transport.close();
-		await session.server.close();
-		sessions.delete(sessionId);
-		return new Response(null, { status: 200 });
-	}
-
-	async function closeAll(): Promise<void> {
-		const count = sessions.size;
-		for (const [id, session] of sessions) {
-			try {
-				await session.transport.close();
-				await session.server.close();
-			} catch {
-				// Best effort cleanup
-			}
-			sessions.delete(id);
-		}
-		if (count > 0) {
-			log.info({ count }, "All sessions closed");
-		}
-	}
-
-	return { handlePost, handleGet, handleDelete, closeAll };
-}
-
 export async function startHttpTransport(
 	serverFactory: ServerFactory,
 	config: HttpTransportConfig,
 ): Promise<HttpTransportResult> {
-	const isStateful = config.sessionMode === "stateful";
-
 	// SIO-727: shared shuttingDown flag. close() flips it before starting the
 	// drain so any request that races in during the brief window between SIGTERM
 	// and Bun.serve().stop() refusing new connections gets a clean JSON-RPC 503
 	// envelope instead of an ECONNRESET. The LLM transcript stays interpretable.
 	let shuttingDown = false;
 
-	let postHandler: (req: Request) => Promise<Response>;
-	let getHandler: (req: Request) => Promise<Response> | Response;
-	let deleteHandler: (req: Request) => Promise<Response> | Response;
-	let closeAllSessions: (() => Promise<void>) | undefined;
-
-	if (isStateful) {
-		const handlers = createStatefulHandlers(serverFactory);
-		postHandler = handlers.handlePost;
-		getHandler = handlers.handleGet;
-		deleteHandler = handlers.handleDelete;
-		closeAllSessions = handlers.closeAll;
-	} else {
-		postHandler = createStatelessHandler(serverFactory);
-		getHandler = methodNotAllowed;
-		deleteHandler = methodNotAllowed;
-	}
+	const postHandler = createStatelessHandler(serverFactory);
+	const getHandler = methodNotAllowed;
+	const deleteHandler = methodNotAllowed;
 
 	// SIO-727: wrap each MCP-path handler so post-SIGTERM requests get a clean
 	// JSON-RPC 503 envelope. Health and ready endpoints are NOT wrapped --
@@ -295,9 +191,8 @@ export async function startHttpTransport(
 	log.info(
 		{
 			url: `http://${config.host}:${httpServer.port}${config.path}`,
-			sessionMode: config.sessionMode,
 		},
-		`MCP server started (HTTP ${config.sessionMode} mode)`,
+		"MCP server started (HTTP stateless mode)",
 	);
 
 	const drainTimeoutMs = config.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
@@ -306,13 +201,9 @@ export async function startHttpTransport(
 		server: httpServer,
 		async close() {
 			// SIO-727: flip the gate BEFORE draining so requests that race in get
-			// the clean 503 envelope. Then close stateful sessions (no in-flight
-			// drain at this layer; SDK handles it). Then await drainBunServer to
-			// wait for active connections to finish, with a bounded deadline.
+			// the clean 503 envelope, then await drainBunServer to wait for active
+			// connections to finish, with a bounded deadline.
 			shuttingDown = true;
-			if (closeAllSessions) {
-				await closeAllSessions();
-			}
 			await drainBunServer(httpServer, drainTimeoutMs, createBootstrapAdapter(log));
 			log.info("HTTP transport closed");
 		},

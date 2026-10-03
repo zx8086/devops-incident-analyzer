@@ -45,7 +45,6 @@ export const configDefaults = {
 		port: "9083",
 		host: "0.0.0.0",
 		path: "/mcp",
-		sessionMode: "stateless",
 		idleTimeout: "255",
 		apiKey: "",
 		allowedOrigins: "",

@@ -13,7 +13,6 @@ export const envVarMapping = {
 		port: "MCP_PORT",
 		host: "MCP_HOST",
 		path: "MCP_PATH",
-		sessionMode: "MCP_SESSION_MODE",
 		idleTimeout: "MCP_IDLE_TIMEOUT",
 		apiKey: "MCP_API_KEY",
 		allowedOrigins: "MCP_ALLOWED_ORIGINS",

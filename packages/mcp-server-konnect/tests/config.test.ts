@@ -83,7 +83,6 @@ describe("Configuration System", () => {
 					port: 3000,
 					host: "127.0.0.1",
 					path: "/mcp",
-					sessionMode: "stateless" as const,
 					idleTimeout: 60,
 					apiKey: "test-key",
 					allowedOrigins: "*",

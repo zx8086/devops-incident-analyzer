@@ -73,10 +73,6 @@ export class ConfigurationManager {
 				port: parseInt(getEnvVarWithDefault("MCP_PORT", configDefaults.transport.port), 10),
 				host: getEnvVarWithDefault("MCP_HOST", configDefaults.transport.host),
 				path: getEnvVarWithDefault("MCP_PATH", configDefaults.transport.path),
-				sessionMode: getEnvVarWithDefault(
-					"MCP_SESSION_MODE",
-					configDefaults.transport.sessionMode,
-				) as Config["transport"]["sessionMode"],
 				idleTimeout: parseInt(getEnvVarWithDefault("MCP_IDLE_TIMEOUT", configDefaults.transport.idleTimeout), 10),
 				apiKey: getEnvVarWithDefault("MCP_API_KEY", configDefaults.transport.apiKey),
 				allowedOrigins: getEnvVarWithDefault("MCP_ALLOWED_ORIGINS", configDefaults.transport.allowedOrigins),

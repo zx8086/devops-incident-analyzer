@@ -15,7 +15,6 @@ export const defaultConfig: Config = {
 		port: 9082,
 		host: "0.0.0.0",
 		path: "/mcp",
-		sessionMode: "stateless",
 		idleTimeout: 255,
 	},
 	database: {

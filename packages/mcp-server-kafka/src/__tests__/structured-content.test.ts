@@ -43,7 +43,6 @@ const config: AppConfig = {
 		port: 9081,
 		host: "0.0.0.0",
 		path: "/mcp",
-		sessionMode: "stateless",
 		apiKey: "",
 		allowedOrigins: "",
 		idleTimeout: 30,

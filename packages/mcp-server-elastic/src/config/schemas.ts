@@ -12,7 +12,6 @@ export const ServerConfigSchema = z.object({
 	port: z.number(),
 	host: z.string(),
 	path: z.string().startsWith("/"),
-	sessionMode: z.enum(["stateless", "stateful"]),
 	idleTimeout: z.number().int().min(10).max(255),
 	apiKey: z.string().optional(),
 	allowedOrigins: z.string().optional(),

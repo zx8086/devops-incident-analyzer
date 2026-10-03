@@ -453,7 +453,6 @@ GitLabConfig
     port: number (1024-65535)
     host: string
     path: string (starts with "/")
-    sessionMode: "stateless" | "stateful"
     idleTimeout: number (10-255)
     apiKey: string
     allowedOrigins: string

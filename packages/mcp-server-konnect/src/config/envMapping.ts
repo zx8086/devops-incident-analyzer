@@ -80,7 +80,6 @@ export const envMapping: readonly EnvMappingEntry[] = [
 	{ configPath: "transport.port", envVar: "MCP_PORT", default: configDefaults.transport.port },
 	{ configPath: "transport.host", envVar: "MCP_HOST", default: configDefaults.transport.host },
 	{ configPath: "transport.path", envVar: "MCP_PATH", default: configDefaults.transport.path },
-	{ configPath: "transport.sessionMode", envVar: "MCP_SESSION_MODE", default: configDefaults.transport.sessionMode },
 	{ configPath: "transport.idleTimeout", envVar: "MCP_IDLE_TIMEOUT", default: configDefaults.transport.idleTimeout },
 	{ configPath: "transport.apiKey", envVar: "MCP_API_KEY", default: configDefaults.transport.apiKey },
 	{
