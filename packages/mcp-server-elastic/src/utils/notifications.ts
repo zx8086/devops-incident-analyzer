@@ -1,8 +1,5 @@
 /* src/utils/notifications.ts */
 
-import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
-import { getCurrentRunTree, withRunTree } from "langsmith/traceable";
 import { logger } from "./logger.js";
 
 export interface ProgressNotification {
@@ -26,7 +23,6 @@ export interface GeneralNotification {
 }
 
 export class NotificationManager {
-	private requestContext: RequestHandlerExtra<ServerRequest, ServerNotification> | null = null;
 	private activeOperations: Map<
 		string,
 		{
@@ -36,80 +32,18 @@ export class NotificationManager {
 		}
 	> = new Map();
 
-	setRequestContext(context: RequestHandlerExtra<ServerRequest, ServerNotification>): void {
-		this.requestContext = context;
-		logger.debug("Notification manager request context set");
-	}
-
-	clearRequestContext(): void {
-		this.requestContext = null;
-		logger.debug("Notification manager request context cleared");
-	}
-
+	// SIO-1953: progress is log-only. It used to go out through a request context parked on this
+	// process-global singleton, so concurrent tool calls overwrote and cleared each other's context.
+	// The tokens are server-invented (createProgressTracker), so no client could correlate them anyway.
 	async sendProgress(notification: ProgressNotification): Promise<void> {
-		if (!this.requestContext?.sendNotification) {
-			logger.debug(
-				{
-					token: notification.progressToken,
-					progress: notification.progress,
-					total: notification.total,
-				},
-				"No request context available for progress notification",
-			);
-			return;
-		}
-
-		// CRITICAL: Safely get trace context without throwing errors
-		let currentTrace: ReturnType<typeof getCurrentRunTree> | null = null;
-		try {
-			currentTrace = getCurrentRunTree(true); // Allow absent run tree
-		} catch (_error) {
-			// No tracing context available - this is fine
-			currentTrace = null;
-		}
-
-		const sendNotificationSafely = async () => {
-			try {
-				// Use the sendNotification function from RequestHandlerExtra
-				await this.requestContext?.sendNotification({
-					method: "notifications/progress",
-					params: {
-						progressToken: notification.progressToken,
-						progress: notification.progress,
-						total: notification.total,
-					},
-				});
-
-				logger.debug(
-					{
-						token: notification.progressToken,
-						progress: notification.progress,
-						total: notification.total,
-						hasTraceContext: !!currentTrace,
-					},
-					"Progress notification sent successfully",
-				);
-			} catch (error) {
-				// Log but don't throw - progress notifications are optional
-				logger.warn(
-					{
-						error: error instanceof Error ? error.message : String(error),
-						token: notification.progressToken,
-						progress: notification.progress,
-						total: notification.total,
-						hasTraceContext: !!currentTrace,
-					},
-					"Progress notification failed (non-critical)",
-				);
-			}
-		};
-
-		// Execute with preserved trace context if available
-		if (currentTrace) {
-			await withRunTree(currentTrace, sendNotificationSafely);
-		} else {
-			await sendNotificationSafely();
-		}
+		logger.debug(
+			{
+				token: notification.progressToken,
+				progress: notification.progress,
+				total: notification.total,
+			},
+			"Progress update",
+		);
 	}
 
 	async sendMessage(notification: GeneralNotification): Promise<void> {
@@ -352,23 +286,6 @@ export class NotificationManager {
 
 // Global notification manager instance
 export const notificationManager = new NotificationManager();
-
-export function withNotificationContext<TArgs, TResult>(
-	handler: (args: TArgs, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => Promise<TResult>,
-): (args: TArgs, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => Promise<TResult> {
-	return async (args: TArgs, extra: RequestHandlerExtra<ServerRequest, ServerNotification>): Promise<TResult> => {
-		// Set the request context so notifications can be sent
-		notificationManager.setRequestContext(extra);
-
-		try {
-			const result = await handler(args, extra);
-			return result;
-		} finally {
-			// Always clear the context after execution
-			notificationManager.clearRequestContext();
-		}
-	};
-}
 
 export function withNotifications<T extends unknown[], R>(
 	toolName: string,

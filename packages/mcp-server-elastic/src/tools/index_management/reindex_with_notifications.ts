@@ -7,7 +7,7 @@ import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sd
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { createProgressTracker, notificationManager, withNotificationContext } from "../../utils/notifications.js";
+import { createProgressTracker, notificationManager } from "../../utils/notifications.js";
 import type { SearchResult } from "../types.js";
 
 const reindexWithNotificationsValidator = z.object({
@@ -311,6 +311,6 @@ export const registerReindexWithNotifications = (server: McpServer, esClient: Cl
 			inputSchema: reindexWithNotificationsValidator.shape,
 		},
 
-		withNotificationContext(handler),
+		handler,
 	);
 };

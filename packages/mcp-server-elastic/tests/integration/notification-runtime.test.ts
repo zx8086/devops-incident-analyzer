@@ -35,33 +35,4 @@ describe.skipIf(shouldSkipIntegrationTests())("Notification Runtime Integration"
 		expect(server.server.notification).toBeDefined();
 		expect(typeof server.server.notification).toBe("function");
 	});
-
-	test("should validate notification manager integration", async () => {
-		const { notificationManager, withNotificationContext } = await import("../../src/utils/notifications.js");
-
-		const capturedNotifications: unknown[] = [];
-		const mockExtra = {
-			sendNotification: async (notification: unknown) => {
-				capturedNotifications.push(notification);
-			},
-			signal: new AbortController().signal,
-			requestId: "direct-test-request",
-		};
-
-		// Test wrapper function
-		const testHandler = withNotificationContext(async (_args: unknown, _extra: unknown) => {
-			// sendInfo logs locally but doesn't call sendNotification (by design)
-			await notificationManager.sendInfo("Test notification from wrapped handler");
-			// sendProgress DOES call sendNotification
-			await notificationManager.sendProgress({ progressToken: "test-token", progress: 50, total: 100 });
-			return { success: true };
-		});
-
-		await testHandler({ test: "data" }, mockExtra);
-
-		// Only progress notifications are sent to the client
-		const progressNotifications = capturedNotifications.filter((n) => n.method === "notifications/progress");
-		expect(progressNotifications.length).toBeGreaterThan(0);
-		expect(progressNotifications[0].params.progress).toBe(50);
-	});
 });

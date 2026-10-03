@@ -8,7 +8,7 @@ import { z } from "zod";
 import { classifyElasticError, classifyShardFailureReason, esStatusCode } from "../../lib/classifyElasticError.js";
 import { validateRangeQuery } from "../../lib/validateRangeQuery.js";
 import { logger } from "../../utils/logger.js";
-import { createProgressTracker, notificationManager, withNotificationContext } from "../../utils/notifications.js";
+import { createProgressTracker, notificationManager } from "../../utils/notifications.js";
 import { getSearchRequestOptions } from "../../utils/searchRequestOptions.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 import { notFoundWildcardAdvice } from "./search-index-shape.js";
@@ -792,6 +792,6 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 				"Search Elasticsearch with natural Query DSL parameters. Supports both document search and analytics. Parameters: query (filter), size (document count), from (pagination), sort, aggs (analytics), _source (fields), highlight. Use size=0 for pure analytics, size=10+ for documents. Both documents and aggregations can be returned together. Performance: narrow the index pattern as much as possible (`traces-apm-7.17.0-default-000123` or a date suffix like `traces-apm-*-2026.05.10` is far cheaper than `traces-apm*` on multi-billion-doc clusters); prefer the smallest time window that answers your question (`now-24h` over `now-7d` when possible); project only the fields you need via `_source` (array of field names) or `fields` to avoid loading multi-KB documents per hit; for high-cardinality aggregations (cardinality, percentiles, terms with many buckets), use a single agg per call rather than fanning out parallel calls. Example: {index: 'logs-*', query: {range: {'@timestamp': {gte: 'now-24h'}}}, size: 50, aggs: {hourly: {date_histogram: {field: '@timestamp', fixed_interval: '1h'}}}}",
 			inputSchema: SearchParams.shape,
 		},
-		withNotificationContext(searchHandler),
+		searchHandler,
 	);
 };
