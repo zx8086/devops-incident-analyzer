@@ -22,8 +22,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import type { Bucket } from "couchbase";
 import { config } from "../config";
 import { PlaybookHandler, type PlaybookRegistry } from "../resources/playbookResource.ts";
@@ -62,10 +61,7 @@ async function captureSnapshot(): Promise<Snapshot> {
 	config.server.readOnlyQueryMode = true;
 	try {
 		const factory = createMcpServerFactory({ bucket: stubBucket, playbooks: makePlaybooks() });
-		const server = factory();
-		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-		const client = new Client({ name: "tools-list-snapshot", version: "0.0.0" });
-		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+		const client = await connectV1TestClient(factory, "tools-list-snapshot");
 		const { tools } = await client.listTools();
 		const { resources } = await client.listResources();
 		const { resourceTemplates } = await client.listResourceTemplates();

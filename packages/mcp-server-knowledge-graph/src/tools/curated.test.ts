@@ -7,18 +7,19 @@
 // config), NOT a per-call process.env read.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { registerCuratedTools } from "./curated.ts";
 
 async function connectedClient(enabled = true): Promise<Client> {
-	const server = new McpServer({ name: "test", version: "0.0.0" });
-	registerCuratedTools(server, enabled);
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "test-client", version: "0.0.0" });
-	await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+	const serverFactory = () => {
+		const server = new McpServer({ name: "test", version: "0.0.0" });
+		registerCuratedTools(server, enabled);
+		return server;
+	};
+	const client = await connectV1TestClient(serverFactory, "test-client");
 	return client;
 }
 

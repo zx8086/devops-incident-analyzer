@@ -5,8 +5,8 @@
 // by the record.
 import { describe, expect, test } from "bun:test";
 import { createCachedServerFactory } from "@devops-agent/shared";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import pkg from "../../package.json" with { type: "json" };
@@ -25,15 +25,13 @@ const fakeConfig: Config = {
 	allowCypher: true,
 };
 
-async function connect(server: McpServer): Promise<Client> {
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "kg-factory-replay-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+async function connect(serverFactory: () => McpServer): Promise<Client> {
+	const client = await connectV1TestClient(serverFactory, "kg-factory-replay-test-client");
 	return client;
 }
 
-async function toolNames(server: McpServer): Promise<string[]> {
-	const client = await connect(server);
+async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connect(serverFactory);
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name).sort();
@@ -43,8 +41,8 @@ describe("SIO-1044: knowledge-graph-mcp-server cached factory replay", () => {
 	test("replayed servers expose an identical tool list across calls", async () => {
 		const factory = createMcpServerFactory(fakeConfig);
 
-		const namesA = await toolNames(factory());
-		const namesB = await toolNames(factory());
+		const namesA = await toolNames(factory);
+		const namesB = await toolNames(factory);
 
 		expect(namesA).toEqual(namesB);
 		expect(namesA).toContain("kg_deployments_running_stack");
@@ -52,9 +50,12 @@ describe("SIO-1044: knowledge-graph-mcp-server cached factory replay", () => {
 
 	test("replayed tool list matches the non-cached createServer control", async () => {
 		const factory = createMcpServerFactory(fakeConfig);
-		const replayed = await toolNames(factory());
+		const replayed = await toolNames(factory);
 
-		const control = createServer(fakeConfig);
+		const control = () => {
+			const server = createServer(fakeConfig);
+			return server;
+		};
 		const controlNames = await toolNames(control);
 
 		expect(replayed).toEqual(controlNames);
@@ -86,7 +87,7 @@ describe("SIO-1044: knowledge-graph-mcp-server cached factory replay", () => {
 	// so this exercises a real tools/call on a replayed server without requiring a live store.
 	test("a replayed server's tools/call executes the recorded handler (graph disabled -- loud-fail path)", async () => {
 		const factory = createMcpServerFactory(fakeConfig);
-		const client = await connect(factory());
+		const client = await connect(factory);
 
 		const result = (await client.callTool({
 			name: "kg_deployments_running_stack",

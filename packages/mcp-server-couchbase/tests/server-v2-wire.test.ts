@@ -13,8 +13,7 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { config } from "../src/config/index.ts";
@@ -26,11 +25,12 @@ import { buildServerFactory } from "../src/server-v2.ts";
 // test instead of silently passing. Mirrors the existing v1 test pattern in
 // src/__tests__/docs-resolution.test.ts.
 async function callV1PingHandler(): Promise<string | undefined> {
-	const server = new McpServer({ name: "couchbase-v1-ping-probe", version: "0.0.0" });
-	registerPingHandlers(server);
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "couchbase-v1-ping-probe-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+	const serverFactory = () => {
+		const server = new McpServer({ name: "couchbase-v1-ping-probe", version: "0.0.0" });
+		registerPingHandlers(server);
+		return server;
+	};
+	const client = await connectV1TestClient(serverFactory, "couchbase-v1-ping-probe-client");
 	const result = (await client.callTool({ name: "capella_ping", arguments: {} })) as {
 		content?: Array<{ text?: string }>;
 	};

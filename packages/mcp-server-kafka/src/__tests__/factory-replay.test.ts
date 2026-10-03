@@ -7,8 +7,7 @@
 // strict subset of a gated-on replay, and stay stable/equal to its own control across replays.
 import { describe, expect, test } from "bun:test";
 import { createCachedServerFactory } from "@devops-agent/shared";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AppConfig } from "../config/schemas.ts";
 import type { ConnectService } from "../services/connect-service.ts";
@@ -120,10 +119,8 @@ function buildFactory(config: AppConfig, toolOptions: ToolRegistrationOptions): 
 	});
 }
 
-async function toolNames(server: McpServer): Promise<string[]> {
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "kafka-factory-replay-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connectV1TestClient(serverFactory, "kafka-factory-replay-test-client");
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name).sort();
@@ -133,8 +130,8 @@ describe("SIO-1044: kafka-mcp-server cached factory replay", () => {
 	test("replayed servers expose an identical tool list across calls (gates enabled)", async () => {
 		const factory = buildFactory(gatesEnabledConfig, gatesEnabledToolOptions);
 
-		const namesA = await toolNames(factory());
-		const namesB = await toolNames(factory());
+		const namesA = await toolNames(factory);
+		const namesB = await toolNames(factory);
 
 		expect(namesA).toEqual(namesB);
 		expect(namesA.length).toBeGreaterThan(0);
@@ -142,10 +139,13 @@ describe("SIO-1044: kafka-mcp-server cached factory replay", () => {
 
 	test("replayed tool list matches a directly-registered control server (gates enabled)", async () => {
 		const factory = buildFactory(gatesEnabledConfig, gatesEnabledToolOptions);
-		const replayed = await toolNames(factory());
+		const replayed = await toolNames(factory);
 
-		const control = new McpServer({ name: "@devops-agent/mcp-server-kafka", version: "0.0.0" });
-		registerAllTools(control, kafkaService, gatesEnabledConfig, gatesEnabledToolOptions);
+		const control = () => {
+			const server = new McpServer({ name: "@devops-agent/mcp-server-kafka", version: "0.0.0" });
+			registerAllTools(server, kafkaService, gatesEnabledConfig, gatesEnabledToolOptions);
+			return server;
+		};
 		const controlNames = await toolNames(control);
 
 		expect(replayed).toEqual(controlNames);
@@ -154,22 +154,25 @@ describe("SIO-1044: kafka-mcp-server cached factory replay", () => {
 	test("gates disabled: replayed set is smaller than gates-enabled and consistent across replays", async () => {
 		const factory = buildFactory(gatesDisabledConfig, gatesDisabledToolOptions);
 
-		const namesA = await toolNames(factory());
-		const namesB = await toolNames(factory());
+		const namesA = await toolNames(factory);
+		const namesB = await toolNames(factory);
 
 		expect(namesA).toEqual(namesB);
 
 		const enabledFactory = buildFactory(gatesEnabledConfig, gatesEnabledToolOptions);
-		const enabledNames = await toolNames(enabledFactory());
+		const enabledNames = await toolNames(enabledFactory);
 		expect(namesA.length).toBeLessThan(enabledNames.length);
 	});
 
 	test("gates disabled: replayed tool list matches a directly-registered control server", async () => {
 		const factory = buildFactory(gatesDisabledConfig, gatesDisabledToolOptions);
-		const replayed = await toolNames(factory());
+		const replayed = await toolNames(factory);
 
-		const control = new McpServer({ name: "@devops-agent/mcp-server-kafka", version: "0.0.0" });
-		registerAllTools(control, kafkaService, gatesDisabledConfig, gatesDisabledToolOptions);
+		const control = () => {
+			const server = new McpServer({ name: "@devops-agent/mcp-server-kafka", version: "0.0.0" });
+			registerAllTools(server, kafkaService, gatesDisabledConfig, gatesDisabledToolOptions);
+			return server;
+		};
 		const controlNames = await toolNames(control);
 
 		expect(replayed).toEqual(controlNames);

@@ -5,8 +5,7 @@
 // This test locks in replay equivalence -- a replayed server's tool list must match both a
 // second replay and a directly-registered control server built from the same stubs.
 import { describe, expect, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AtlassianMcpProxy, ProxyToolInfo } from "../atlassian-client/index.js";
 import type { Config } from "../config/index.js";
@@ -50,10 +49,8 @@ function makeDatasource(discoveredTools: ProxyToolInfo[]): AtlassianDatasource {
 	};
 }
 
-async function toolNames(server: McpServer): Promise<string[]> {
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "atlassian-factory-replay-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connectV1TestClient(serverFactory, "atlassian-factory-replay-test-client");
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name).sort();
@@ -63,8 +60,8 @@ describe("SIO-1044: atlassian-mcp-server cached factory replay", () => {
 	test("replayed servers expose an identical tool list across calls", async () => {
 		const factory = createMcpServerFactory(makeDatasource(fakeDiscoveredTools));
 
-		const namesA = await toolNames(factory());
-		const namesB = await toolNames(factory());
+		const namesA = await toolNames(factory);
+		const namesB = await toolNames(factory);
 
 		expect(namesA).toEqual(namesB);
 		expect(namesA.length).toBeGreaterThan(0);
@@ -73,14 +70,17 @@ describe("SIO-1044: atlassian-mcp-server cached factory replay", () => {
 	test("replayed tool list matches a directly-registered control server, including proxy + custom tools", async () => {
 		const ds = makeDatasource(fakeDiscoveredTools);
 		const factory = createMcpServerFactory(ds);
-		const replayed = await toolNames(factory());
+		const replayed = await toolNames(factory);
 
-		const control = new McpServer({ name: ds.config.application.name, version: ds.config.application.version });
-		registerProxyTools(control, ds.proxy, ds.discoveredTools, { readOnly: ds.config.atlassian.readOnly });
-		registerCustomTools(control, ds.proxy, {
-			incidentProjects: ds.config.atlassian.incidentProjects,
-			siteUrl: ds.siteUrl,
-		});
+		const control = () => {
+			const server = new McpServer({ name: ds.config.application.name, version: ds.config.application.version });
+			registerProxyTools(server, ds.proxy, ds.discoveredTools, { readOnly: ds.config.atlassian.readOnly });
+			registerCustomTools(server, ds.proxy, {
+				incidentProjects: ds.config.atlassian.incidentProjects,
+				siteUrl: ds.siteUrl,
+			});
+			return server;
+		};
 		const controlNames = await toolNames(control);
 
 		expect(replayed).toEqual(controlNames);
@@ -94,7 +94,7 @@ describe("SIO-1044: atlassian-mcp-server cached factory replay", () => {
 
 	test("discoveredTools: [] still yields the custom tools (proxy tools are simply absent)", async () => {
 		const factory = createMcpServerFactory(makeDatasource([]));
-		const names = await toolNames(factory());
+		const names = await toolNames(factory);
 
 		expect(names).not.toContain("atlassian_getIssue");
 		expect(names).not.toContain("atlassian_searchIssues");

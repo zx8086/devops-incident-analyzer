@@ -7,8 +7,7 @@
 //
 // This asserts the schema the MODEL actually receives over tools/list.
 import { describe, expect, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { GitLabRestClient } from "../gitlab-client/index.js";
 import type { GitLabMcpProxy, ProxyToolInfo } from "../gitlab-client/proxy.js";
@@ -41,12 +40,12 @@ const GET_MERGE_REQUEST: ProxyToolInfo = {
 };
 
 async function inputSchemaOf(tool: ProxyToolInfo): Promise<Record<string, unknown>> {
-	const server = new McpServer({ name: "gitlab-mcp-server", version: "0.0.0" });
-	registerProxyTools(server, stubProxy, [tool], stubRestClient);
-
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "proxy-caps-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+	const serverFactory = () => {
+		const server = new McpServer({ name: "gitlab-mcp-server", version: "0.0.0" });
+		registerProxyTools(server, stubProxy, [tool], stubRestClient);
+		return server;
+	};
+	const client = await connectV1TestClient(serverFactory, "proxy-caps-test-client");
 	const { tools } = await client.listTools();
 	await client.close();
 

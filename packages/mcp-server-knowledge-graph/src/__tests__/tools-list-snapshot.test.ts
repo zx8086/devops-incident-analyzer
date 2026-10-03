@@ -16,8 +16,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import type { Config } from "../config.ts";
 import { createMcpServerFactory } from "../server.ts";
 
@@ -38,10 +37,8 @@ interface SnapshotEntry {
 }
 
 async function captureSnapshot(): Promise<Record<string, SnapshotEntry>> {
-	const server = createMcpServerFactory(fakeConfig)();
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "tools-list-snapshot", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+	const serverFactory = createMcpServerFactory(fakeConfig);
+	const client = await connectV1TestClient(serverFactory, "tools-list-snapshot");
 	const { tools } = await client.listTools();
 	await client.close();
 

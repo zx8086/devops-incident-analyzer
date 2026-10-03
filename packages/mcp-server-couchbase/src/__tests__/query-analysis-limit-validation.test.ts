@@ -7,8 +7,7 @@
 // LLM-visible surface change -- the snapshot fixture was regenerated in this PR.
 
 import { describe, expect, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import type { Bucket } from "couchbase";
 import { createMcpServerFactory } from "../server.ts";
 import { COMPLETED_REQUESTS_DEFAULT_LIMIT, DEFAULT_ANALYSIS_LIMIT } from "../tools/queryAnalysis/analysisQueries.ts";
@@ -38,10 +37,7 @@ const VALIDATION_TEXT_RE = /Input validation error|Invalid arguments/i;
 
 async function callTool(name: string, args: Record<string, unknown>) {
 	const factory = createMcpServerFactory({ bucket: throwingBucket, playbooks: null });
-	const server = factory();
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "limit-validation-test", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+	const client = await connectV1TestClient(factory, "limit-validation-test");
 	const result = (await client.callTool({ name, arguments: args })) as {
 		isError?: boolean;
 		content?: Array<{ type: string; text?: string }>;

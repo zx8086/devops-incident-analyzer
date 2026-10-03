@@ -2,11 +2,11 @@
 // SIO-1041: record-once / replay-many factory must produce identical tool surfaces per request
 // without re-running the (expensive) registerAll on every request.
 import { describe, expect, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createCachedServerFactory } from "../cached-server-factory.ts";
+import { connectV1TestClient } from "../testing/mcp-test-client.ts";
 
 function bareServer(): McpServer {
 	return new McpServer(
@@ -15,15 +15,13 @@ function bareServer(): McpServer {
 	);
 }
 
-async function connectedClient(server: McpServer): Promise<Client> {
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+async function connectedClient(serverFactory: () => McpServer): Promise<Client> {
+	const client = await connectV1TestClient(serverFactory, "test-client");
 	return client;
 }
 
-async function toolNames(server: McpServer): Promise<string[]> {
-	const client = await connectedClient(server);
+async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
+	const client = await connectedClient(serverFactory);
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name).sort();
@@ -60,8 +58,8 @@ describe("createCachedServerFactory", () => {
 			},
 		});
 
-		const namesA = await toolNames(factory());
-		const namesB = await toolNames(factory());
+		const namesA = await toolNames(factory);
+		const namesB = await toolNames(factory);
 		expect(namesA).toEqual(["alpha", "beta"]);
 		expect(namesB).toEqual(namesA);
 	});
@@ -77,7 +75,7 @@ describe("createCachedServerFactory", () => {
 				);
 			},
 		});
-		const client = await connectedClient(factory());
+		const client = await connectedClient(factory);
 		const result = (await client.callTool({ name: "echo", arguments: { msg: "hi" } })) as {
 			content: Array<{ type: string; text: string }>;
 		};
@@ -112,10 +110,10 @@ describe("createCachedServerFactory", () => {
 		});
 
 		// Two independent replays must both run the wrapper (proving the wrapped handler was recorded).
-		const client1 = await connectedClient(factory());
+		const client1 = await connectedClient(factory);
 		await client1.callTool({ name: "wrapped-tool", arguments: {} });
 		await client1.close();
-		const client2 = await connectedClient(factory());
+		const client2 = await connectedClient(factory);
 		await client2.callTool({ name: "wrapped-tool", arguments: {} });
 		await client2.close();
 		expect(marker).toEqual(["wrapped:wrapped-tool", "wrapped:wrapped-tool"]);
@@ -133,7 +131,7 @@ describe("createCachedServerFactory", () => {
 				}));
 			},
 		});
-		const client = await connectedClient(factory());
+		const client = await connectedClient(factory);
 		const { prompts } = await client.listPrompts();
 		const { resources } = await client.listResources();
 		await client.close();
@@ -155,10 +153,10 @@ describe("createCachedServerFactory", () => {
 			},
 		});
 
-		const namesA = await toolNames(factory());
+		const namesA = await toolNames(factory);
 		expect(namesA).toContain("legacy-echo");
 
-		const client = await connectedClient(factory());
+		const client = await connectedClient(factory);
 		const result = (await client.callTool({ name: "legacy-echo", arguments: { msg: "hi" } })) as {
 			content: Array<{ type: string; text: string }>;
 		};
@@ -178,7 +176,7 @@ describe("createCachedServerFactory", () => {
 				}));
 			},
 		});
-		const client = await connectedClient(factory());
+		const client = await connectedClient(factory);
 		const { prompts } = await client.listPrompts();
 		const { resources } = await client.listResources();
 		await client.close();
@@ -199,21 +197,24 @@ describe("createCachedServerFactory", () => {
 		});
 
 		// Control server: same registrations run directly, without going through the factory.
-		const control = bareServer();
-		control.tool("z-legacy", async () => ({ content: [{ type: "text", text: "z" }] }));
-		control.registerTool("y-modern", { description: "y", inputSchema: z.object({}).shape }, async () => ({
-			content: [{ type: "text", text: "y" }],
-		}));
-		control.tool("x-legacy", async () => ({ content: [{ type: "text", text: "x" }] }));
+		const control = () => {
+			const server = bareServer();
+			server.tool("z-legacy", async () => ({ content: [{ type: "text", text: "z" }] }));
+			server.registerTool("y-modern", { description: "y", inputSchema: z.object({}).shape }, async () => ({
+				content: [{ type: "text", text: "y" }],
+			}));
+			server.tool("x-legacy", async () => ({ content: [{ type: "text", text: "x" }] }));
+			return server;
+		};
 
-		async function unsortedToolNames(server: McpServer): Promise<string[]> {
-			const client = await connectedClient(server);
+		async function unsortedToolNames(serverFactory: () => McpServer): Promise<string[]> {
+			const client = await connectedClient(serverFactory);
 			const { tools } = await client.listTools();
 			await client.close();
 			return tools.map((t) => t.name);
 		}
 
-		const replayedOrder = await unsortedToolNames(factory());
+		const replayedOrder = await unsortedToolNames(factory);
 		const controlOrder = await unsortedToolNames(control);
 		expect(replayedOrder).toEqual(controlOrder);
 		expect(replayedOrder).toEqual(["z-legacy", "y-modern", "x-legacy"]);
@@ -242,10 +243,10 @@ describe("createCachedServerFactory", () => {
 			},
 		});
 
-		const client1 = await connectedClient(factory());
+		const client1 = await connectedClient(factory);
 		await client1.callTool({ name: "wrapped-legacy-tool", arguments: {} });
 		await client1.close();
-		const client2 = await connectedClient(factory());
+		const client2 = await connectedClient(factory);
 		await client2.callTool({ name: "wrapped-legacy-tool", arguments: {} });
 		await client2.close();
 		expect(marker).toEqual(["wrapped:wrapped-legacy-tool", "wrapped:wrapped-legacy-tool"]);

@@ -6,8 +6,7 @@
 // the schema matches the real payload shape. Also asserts content[0].text stays exactly what
 // ResponseBuilder.success would have produced pre-SIO-1422 (byte-identical LLM-visible output).
 import { describe, expect, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AppConfig } from "../config/schemas.ts";
 import type { KafkaService } from "../services/kafka-service.ts";
@@ -51,12 +50,13 @@ const config: AppConfig = {
 };
 
 async function buildClient(service: KafkaService) {
-	const server = new McpServer({ name: "kafka-structured-content-test", version: "0.0.0" });
-	registerReadTools(server, service, config);
-	registerExtendedReadTools(server, service, config);
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: "kafka-structured-content-test-client", version: "0.0.0" });
-	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+	const serverFactory = () => {
+		const server = new McpServer({ name: "kafka-structured-content-test", version: "0.0.0" });
+		registerReadTools(server, service, config);
+		registerExtendedReadTools(server, service, config);
+		return server;
+	};
+	const client = await connectV1TestClient(serverFactory, "kafka-structured-content-test-client");
 	return client;
 }
 

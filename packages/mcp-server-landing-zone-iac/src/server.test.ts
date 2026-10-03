@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
 import type { Config } from "./config.ts";
 import { createServer } from "./server.ts";
 import type { GitLabReadClient } from "./tools/repositories.ts";
@@ -23,10 +22,8 @@ function baseConfig(): Config {
 }
 
 async function listedTools(config: Config, writeClient?: GitLabWriteClient) {
-	const server = createServer(config, {} as GitLabReadClient, writeClient);
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const mcpClient = new Client({ name: "landing-zone-surface-test", version: "0.0.0" });
-	await Promise.all([mcpClient.connect(clientTransport), server.connect(serverTransport)]);
+	const serverFactory = () => createServer(config, {} as GitLabReadClient, writeClient);
+	const mcpClient = await connectV1TestClient(serverFactory, "landing-zone-surface-test");
 	const result = await mcpClient.listTools();
 	await mcpClient.close();
 	return result.tools;
@@ -120,10 +117,8 @@ describe("Landing Zone MCP server", () => {
 				return "Plan: 1 to add, 0 to change, 0 to destroy.";
 			},
 		} as unknown as GitLabReadClient;
-		const server = createServer(enabledConfig(), readClient, {} as GitLabWriteClient);
-		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-		const mcpClient = new Client({ name: "landing-zone-watch-test", version: "0.0.0" });
-		await Promise.all([mcpClient.connect(clientTransport), server.connect(serverTransport)]);
+		const serverFactory = () => createServer(enabledConfig(), readClient, {} as GitLabWriteClient);
+		const mcpClient = await connectV1TestClient(serverFactory, "landing-zone-watch-test");
 
 		const result = await mcpClient.callTool({
 			name: "lz_watch_pipeline",
