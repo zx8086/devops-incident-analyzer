@@ -1,7 +1,7 @@
 // src/transport/__tests__/agentcore.test.ts
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { type BootstrapLogger, startAgentCoreTransport } from "@devops-agent/shared";
+import { type BootstrapLogger, startAgentCoreTransport, v1StatelessHandler } from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 const noopLogger: BootstrapLogger = {
@@ -9,6 +9,8 @@ const noopLogger: BootstrapLogger = {
 	error: () => {},
 	warn: () => {},
 };
+
+const handler = (factory: () => McpServer) => v1StatelessHandler(factory, noopLogger);
 
 describe("AgentCore transport", () => {
 	let server: ReturnType<typeof Bun.serve> | null = null;
@@ -21,10 +23,14 @@ describe("AgentCore transport", () => {
 	});
 
 	test("GET /ping returns 200 with status ok", async () => {
-		const result = await startAgentCoreTransport(() => new McpServer({ name: "test", version: "0.1.0" }), noopLogger, {
-			port: 0,
-			host: "127.0.0.1",
-		});
+		const result = await startAgentCoreTransport(
+			handler(() => new McpServer({ name: "test", version: "0.1.0" })),
+			noopLogger,
+			{
+				port: 0,
+				host: "127.0.0.1",
+			},
+		);
 		server = result.server;
 		const res = await fetch(`http://127.0.0.1:${server.port}/ping`);
 		expect(res.status).toBe(200);
@@ -34,10 +40,14 @@ describe("AgentCore transport", () => {
 	});
 
 	test("GET /health returns 200", async () => {
-		const result = await startAgentCoreTransport(() => new McpServer({ name: "test", version: "0.1.0" }), noopLogger, {
-			port: 0,
-			host: "127.0.0.1",
-		});
+		const result = await startAgentCoreTransport(
+			handler(() => new McpServer({ name: "test", version: "0.1.0" })),
+			noopLogger,
+			{
+				port: 0,
+				host: "127.0.0.1",
+			},
+		);
 		server = result.server;
 		const res = await fetch(`http://127.0.0.1:${server.port}/health`);
 		expect(res.status).toBe(200);
@@ -46,9 +56,9 @@ describe("AgentCore transport", () => {
 
 	test("GET /mcp returns 405", async () => {
 		const result = await startAgentCoreTransport(
-			() => {
+			handler(() => {
 				throw new Error("should not create server for GET");
-			},
+			}),
 			noopLogger,
 			{ port: 0, host: "127.0.0.1" },
 		);
@@ -60,7 +70,7 @@ describe("AgentCore transport", () => {
 
 	test("POST /mcp with initialize returns serverInfo", async () => {
 		const result = await startAgentCoreTransport(
-			() => new McpServer({ name: "test-agentcore", version: "0.1.0" }),
+			handler(() => new McpServer({ name: "test-agentcore", version: "0.1.0" })),
 			noopLogger,
 			{ port: 0, host: "127.0.0.1" },
 		);
@@ -91,10 +101,14 @@ describe("AgentCore transport", () => {
 	});
 
 	test("unknown path returns 404", async () => {
-		const result = await startAgentCoreTransport(() => new McpServer({ name: "test", version: "0.1.0" }), noopLogger, {
-			port: 0,
-			host: "127.0.0.1",
-		});
+		const result = await startAgentCoreTransport(
+			handler(() => new McpServer({ name: "test", version: "0.1.0" })),
+			noopLogger,
+			{
+				port: 0,
+				host: "127.0.0.1",
+			},
+		);
 		server = result.server;
 		const res = await fetch(`http://127.0.0.1:${server.port}/nonexistent`);
 		expect(res.status).toBe(404);
@@ -106,11 +120,15 @@ describe("AgentCore transport", () => {
 	// and /health must stay live during drain because they ARE the AgentCore
 	// framework's liveness surface.
 	test("close() completes quickly with no active requests", async () => {
-		const result = await startAgentCoreTransport(() => new McpServer({ name: "test", version: "0.1.0" }), noopLogger, {
-			port: 0,
-			host: "127.0.0.1",
-			drainTimeoutMs: 5000,
-		});
+		const result = await startAgentCoreTransport(
+			handler(() => new McpServer({ name: "test", version: "0.1.0" })),
+			noopLogger,
+			{
+				port: 0,
+				host: "127.0.0.1",
+				drainTimeoutMs: 5000,
+			},
+		);
 		server = result.server;
 		const started = Date.now();
 		await result.close();
@@ -118,11 +136,15 @@ describe("AgentCore transport", () => {
 	});
 
 	test("drainTimeoutMs=0 short-circuits to immediate force-close", async () => {
-		const result = await startAgentCoreTransport(() => new McpServer({ name: "test", version: "0.1.0" }), noopLogger, {
-			port: 0,
-			host: "127.0.0.1",
-			drainTimeoutMs: 0,
-		});
+		const result = await startAgentCoreTransport(
+			handler(() => new McpServer({ name: "test", version: "0.1.0" })),
+			noopLogger,
+			{
+				port: 0,
+				host: "127.0.0.1",
+				drainTimeoutMs: 0,
+			},
+		);
 		server = result.server;
 		const started = Date.now();
 		await result.close();
@@ -130,11 +152,15 @@ describe("AgentCore transport", () => {
 	});
 
 	test("post-shutdown /mcp request returns JSON-RPC 503 envelope when gate catches it", async () => {
-		const result = await startAgentCoreTransport(() => new McpServer({ name: "test", version: "0.1.0" }), noopLogger, {
-			port: 0,
-			host: "127.0.0.1",
-			drainTimeoutMs: 5000,
-		});
+		const result = await startAgentCoreTransport(
+			handler(() => new McpServer({ name: "test", version: "0.1.0" })),
+			noopLogger,
+			{
+				port: 0,
+				host: "127.0.0.1",
+				drainTimeoutMs: 5000,
+			},
+		);
 		server = result.server;
 
 		// Start close in the background -- shuttingDown flips synchronously.

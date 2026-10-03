@@ -250,4 +250,32 @@ describe("createCachedServerFactory", () => {
 		await client2.close();
 		expect(marker).toEqual(["wrapped:wrapped-legacy-tool", "wrapped:wrapped-legacy-tool"]);
 	});
+
+	// SIO-1954: the v2 McpServer exposes registerTool/registerResource/registerPrompt only. Binding
+	// the missing tool/resource/prompt sugar used to throw at boot; it must be skipped instead.
+	test("a server without the legacy sugar methods records and replays registerTool", () => {
+		class SugarlessServer {
+			readonly server = {};
+			readonly registered: string[] = [];
+			registerTool(name: string): void {
+				this.registered.push(name);
+			}
+			registerResource(): void {}
+			registerPrompt(): void {}
+		}
+
+		const factory = createCachedServerFactory({
+			createBareServer: () => new SugarlessServer(),
+			registerAll: (server) => {
+				server.registerTool("only-tool");
+			},
+		});
+
+		const first = factory();
+		const second = factory();
+		expect(first).not.toBe(second);
+		expect(first.registered).toEqual(["only-tool"]);
+		expect(second.registered).toEqual(["only-tool"]);
+		expect("tool" in first).toBe(false);
+	});
 });

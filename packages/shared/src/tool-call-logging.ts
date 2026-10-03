@@ -11,7 +11,6 @@
 // SIO-1407: the wrap additionally stamps a { _error: { kind: "bad-input" } }
 // envelope onto argument-validation rejections (see stampArgValidationEnvelope)
 // -- the one result mutation it performs, gated on an unambiguous signature.
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
 	ARG_VALIDATION_TEXT_RE,
 	classifyFailureText,
@@ -113,7 +112,7 @@ function stampArgValidationEnvelope(result: unknown): void {
 // see createMcpApplication for the ordering. A `now` injection point keeps the wrap testable
 // without the Date.now() ban in some environments.
 export function installToolCallLogging(
-	server: McpServer,
+	server: { readonly server: unknown },
 	logger: ToolCallLogger,
 	now: () => number = () => Date.now(),
 	// SIO-1400: optional per-call sink (SQLite usage counters). Invoked on every

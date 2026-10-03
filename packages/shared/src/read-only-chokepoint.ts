@@ -3,7 +3,6 @@
 // Replaces per-tool decorators by wrapping the underlying Server's
 // "tools/call" request handler once, after the consumer factory has
 // finished registering tools.
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export interface ReadOnlyCheck {
 	allowed: boolean;
@@ -40,7 +39,7 @@ interface InternalServerHandlers {
 // Replaces the existing "tools/call" handler on the McpServer's underlying
 // Server with one that consults the read-only manager before delegating.
 // Must be called AFTER tool registration so the original handler exists.
-export function installReadOnlyChokepoint(server: McpServer, manager: ReadOnlyManagerLike): void {
+export function installReadOnlyChokepoint(server: { readonly server: unknown }, manager: ReadOnlyManagerLike): void {
 	const internal = server.server as unknown as InternalServerHandlers;
 	const handlers = internal._requestHandlers;
 	if (!handlers || typeof handlers.get !== "function") {

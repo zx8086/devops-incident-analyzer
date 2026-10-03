@@ -22,12 +22,40 @@ export interface AgentCoreTransportResult {
 	close(): Promise<void>;
 }
 
+// SIO-1954: today's per-request v1 body. The transport takes a fetch-style handler so a server
+// migrated to SDK v2 can pass its createMcpHandler(...).fetch without shared importing v2.
+export function v1StatelessHandler(
+	serverFactory: () => McpServer,
+	logger: BootstrapLogger,
+): (req: Request) => Promise<Response> {
+	return async (req: Request): Promise<Response> => {
+		const server = serverFactory();
+		const transport = new WebStandardStreamableHTTPServerTransport({
+			sessionIdGenerator: undefined,
+		});
+
+		await server.connect(transport);
+
+		try {
+			return await transport.handleRequest(req);
+		} catch (error) {
+			logger.error("AgentCore MCP request error", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return Response.json(
+				{ jsonrpc: "2.0", error: { code: -32000, message: "Internal server error" }, id: null },
+				{ status: 500 },
+			);
+		}
+	};
+}
+
 // AgentCore Runtime expects:
 //   GET  /ping  -> 200 OK (health check)
 //   POST /mcp   -> Stateless streamable-HTTP MCP endpoint
 // Port 8000, host 0.0.0.0, stateless mode (AgentCore manages sessions in microVMs)
 export async function startAgentCoreTransport(
-	serverFactory: () => McpServer,
+	handleMcp: (req: Request) => Promise<Response>,
 	logger: BootstrapLogger,
 	config: AgentCoreTransportConfig = {},
 ): Promise<AgentCoreTransportResult> {
@@ -51,24 +79,7 @@ export async function startAgentCoreTransport(
 			);
 		}
 
-		const server = serverFactory();
-		const transport = new WebStandardStreamableHTTPServerTransport({
-			sessionIdGenerator: undefined,
-		});
-
-		await server.connect(transport);
-
-		try {
-			return await transport.handleRequest(req);
-		} catch (error) {
-			logger.error("AgentCore MCP request error", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-			return Response.json(
-				{ jsonrpc: "2.0", error: { code: -32000, message: "Internal server error" }, id: null },
-				{ status: 500 },
-			);
-		}
+		return handleMcp(req);
 	};
 
 	const httpServer = Bun.serve({
