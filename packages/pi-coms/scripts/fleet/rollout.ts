@@ -20,10 +20,11 @@ const UPDATE_LOCK = "flock -w 900 /run/pi-coms-update.lock";
 
 export function rolloutCommands(opts: { tokenChanged: boolean }): string[] {
 	if (opts.tokenChanged) {
+		// The sentinel is written inside the lock: written before it, a run that
+		// already holds the lock would consume it, and this bootstrap would then
+		// leave the old agent process running.
 		return [
-			"touch /home/piagent/.pi-agent-reload",
-			"chown piagent:piagent /home/piagent/.pi-agent-reload || true",
-			`${UPDATE_LOCK} bash /var/lib/cloud/instance/user-data.txt`,
+			`${UPDATE_LOCK} bash -c 'touch /home/piagent/.pi-agent-reload && (chown piagent:piagent /home/piagent/.pi-agent-reload || true) && bash /var/lib/cloud/instance/user-data.txt'`,
 		];
 	}
 	return [`${UPDATE_LOCK} /usr/local/bin/pi-coms-update`];

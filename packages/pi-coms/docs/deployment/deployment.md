@@ -326,7 +326,7 @@ Re-run the whole bootstrap idempotently on a live host via SSM:
 ```bash
 aws ssm send-command --instance-ids <id> --region <region> --profile <name> \
   --document-name AWS-RunShellScript \
-  --parameters 'commands=["bash /var/lib/cloud/instance/user-data.txt"]'
+  --parameters 'commands=["flock -w 900 /run/pi-coms-update.lock bash /var/lib/cloud/instance/user-data.txt"]'
 ```
 
 Hosts pull this repository's **default branch** bundle: changes must be
@@ -359,7 +359,7 @@ merged to `main` and published before a boot or re-run picks them up.
    `pi-coms-update` exits early when the S3 `version` equals the local
    `.bundle-version`, so a change to `~/.coms-env.local` (for example
    `CTX_MODE_ENABLED=false`) does nothing until the next bundle, or until you
-   re-run `bash /var/lib/cloud/instance/user-data.txt` on the host.
+   re-run `flock -w 900 /run/pi-coms-update.lock bash /var/lib/cloud/instance/user-data.txt` on the host.
 8. **`systemctl restart pi-agent` does not relaunch Pi.** The registry guard
    keeps the herdr agent; `touch /home/piagent/.pi-agent-reload` first (the
    sentinel `pi-coms-update` writes), then restart.

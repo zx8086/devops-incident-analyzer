@@ -104,7 +104,7 @@ remove an entry when the underlying behavior changes.
 - `CTX_MODE_ENABLED=false` (or any other `~/.coms-env.local` change) lands at
   the NEXT convergence: `pi-coms-update` returns early when the S3 `version`
   matches `.bundle-version`. Force it with
-  `bash /var/lib/cloud/instance/user-data.txt` over SSM.
+  `flock -w 900 /run/pi-coms-update.lock bash /var/lib/cloud/instance/user-data.txt` over SSM (through the lock, SIO-1948).
 - To relaunch Pi by hand: `touch /home/piagent/.pi-agent-reload` first, then
   `systemctl restart pi-agent`. Without the sentinel the registry guard keeps
   the running herdr agent and the restart is a no-op.
