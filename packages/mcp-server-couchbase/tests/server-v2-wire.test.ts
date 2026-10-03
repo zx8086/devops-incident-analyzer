@@ -141,15 +141,51 @@ describe("SIO-1424: v2 pilot wire protocol (three-era matrix)", () => {
 		expect(body.result?.isError).not.toBe(true);
 	});
 
+	// SIO-1951: 2.3.0 requires MCP-Protocol-Version on every modern request; a body that names
+	// 2026-07-28 without the header is refused rather than silently served.
+	test("stateless 2026-07-28 era: a modern request without MCP-Protocol-Version is rejected", async () => {
+		const handler = buildHandler();
+		const response = await handler.fetch(
+			new Request("http://localhost/mcp", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "tools/call",
+					"Mcp-Name": "capella_ping",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 4,
+					method: "tools/call",
+					params: {
+						name: "capella_ping",
+						arguments: {},
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
+			}),
+		);
+		await handler.close();
+
+		expect(response.status).toBe(400);
+		const body = (await parseJsonRpcBody(response)) as { error?: { code?: number; message?: string } };
+		expect(body.error?.code).toBe(-32020);
+		expect(body.error?.message).toContain("MCP-Protocol-Version");
+	});
+
 	// SIO-1436: resolved. SIO-1424's original -32601 repro sent a bare
 	// {jsonrpc, id, method: "server/discover", params: {}} with no envelope claim -- that
 	// classifies as LEGACY at the HTTP routing layer (classifyRequestBody, installed
 	// @modelcontextprotocol/server bundle dist/src-CX2iR2pK.mjs:5101-5140; confirmed by the public
 	// isLegacyRequest doc comment at dist/index.mjs:1152-1155), so it never reached the modern
-	// dispatch path where _ondiscover lives. A second, independent gate also had to be closed:
-	// McpServer only self-registers server/discover when its _supportedProtocolVersions includes a
-	// modern (2026-07-28+) entry (dist/mcp-DXXb3Vv3.mjs:733), which the SDK's default
-	// SUPPORTED_PROTOCOL_VERSIONS does not -- fixed in server-v2.ts's McpServer construction. This
+	// dispatch path where _ondiscover lives. On 2.0.0 a second gate needed a
+	// supportedProtocolVersions override on the McpServer; SIO-1951 removed it because 2.3.0's
+	// createMcpHandler installs the modern-only handlers itself (installModernOnlyHandlers). This
 	// test now sends the same full _meta envelope trio the passing tools/call test above uses, plus
 	// Mcp-Method: server/discover (server/discover carries no params.name/uri, so it is NOT in
 	// MCP_NAME_HEADER_SOURCE and needs no Mcp-Name header -- dist/src-CX2iR2pK.mjs:4990-4993).
@@ -185,12 +221,16 @@ describe("SIO-1424: v2 pilot wire protocol (three-era matrix)", () => {
 				jsonrpc: string;
 				id: number;
 				error?: unknown;
-				result?: unknown;
+				result?: { supportedVersions?: string[]; capabilities?: Record<string, unknown> };
 			};
 			expect(body.jsonrpc).toBe("2.0");
 			expect(body.id).toBe(3);
 			expect(body.error).toBeUndefined();
-			expect(body.result).toBeDefined();
+			// SIO-1951: on 2.3.0 the server/discover handler and the modern version come from
+			// createMcpHandler, not from a supportedProtocolVersions override on the McpServer.
+			// Pin what a negotiating client reads, so losing either fails here.
+			expect(body.result?.supportedVersions).toEqual(["2026-07-28"]);
+			expect(Object.keys(body.result?.capabilities ?? {}).sort()).toEqual(["prompts", "resources", "tools"]);
 		} finally {
 			await handler.close();
 		}
