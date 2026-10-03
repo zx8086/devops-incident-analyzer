@@ -108,7 +108,9 @@ rm -rf "$HOME/.bun/install/global/node_modules/@mariozechner/pi-coding-agent"
 # node:module enableCompileCache; the wrapper below keeps running the unbundled
 # dist/cli.js, which is still shipped and starts on Bun 1.4.2. MCP is built in
 # from 0.99.0, so pi-mcp-adapter is gone (see the ctx block below).
-bun install -g @earendil-works/pi-coding-agent@0.99.2
+# 1.0.1 (SIO-1942): dist/cli.js still shipped; the TUI now defaults to
+# fullscreen, so the launcher pins --tui-mode regular (see herdr agent start).
+bun install -g @earendil-works/pi-coding-agent@1.0.1
 
 # `bun install -g` leaves a `#!/usr/bin/env node` shebang on the pi symlink, and
 # these hosts have no (or too old a) Node -- pi-tui needs the regex `v` flag.
@@ -668,6 +670,10 @@ if [ -n "PI_PROVIDER_PLACEHOLDER" ]; then
   PROVIDER_ARGS=(--provider "PI_PROVIDER_PLACEHOLDER")
 fi
 
+# Pi 1.0 defaults the TUI to fullscreen (alternate screen). Herdr readiness and
+# the read-only observers (SIO-1762) were proven against the regular screen, so
+# pin it (SIO-1942).
+#
 # Extensions are repeatable (-e/--extension). coms-net is the only one loaded
 # by flag; the ctx tools come from Pi's built-in MCP support (SIO-1915).
 EXT_ARGS=(-e extensions/coms-net.ts)
@@ -699,6 +705,7 @@ fi
 
 herdr agent start "AGENT_NAME_PLACEHOLDER" --kind pi --pane "$PANE_ID" --timeout 15000 -- \
   "${EXT_ARGS[@]}" \
+  --tui-mode regular \
   --model "PI_MODEL_PLACEHOLDER" \
   "${PROVIDER_ARGS[@]}" \
   --cname "AGENT_NAME_PLACEHOLDER" \

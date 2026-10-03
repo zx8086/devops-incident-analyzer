@@ -251,9 +251,9 @@ above). Anything sized to a context window, such as
 `PI_COMS_NET_COMPACT_ABOVE_TOKENS`, is per model too.
 
 The Pi version is pinned in two places that must move together (SIO-1763):
-`bun install -g @earendil-works/pi-coding-agent@0.99.2` in
+`bun install -g @earendil-works/pi-coding-agent@1.0.1` in
 `deploy/bootstrap/agent-bootstrap.sh`, which is what the spoke runs, and the
-`0.99.2` devDependency pins in `package.json` (`pi-coding-agent`, `pi-tui`, and
+`1.0.1` devDependency pins in `package.json` (`pi-coding-agent`, `pi-tui`, and
 `typebox` at the version that Pi release depends on), which are what typecheck
 resolves types from. Bump both in one change and ship it with a bundle
 publish; an unpinned install once picked up a release mid-rollout that did not
