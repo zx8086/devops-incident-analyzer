@@ -24,11 +24,11 @@
 // reordering tools/list for any mixed-API package.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-export interface CachedServerFactoryOptions {
-	createBareServer: () => McpServer;
+export interface CachedServerFactoryOptions<S extends object = McpServer> {
+	createBareServer: () => S;
 	// Run ONCE at factory creation (boot). Must be synchronous to match the createServerFactory
 	// contract in bootstrap.ts (createServerFactory returns a sync () => McpServer).
-	registerAll: (server: McpServer) => void;
+	registerAll: (server: S) => void;
 }
 
 // registerTool/registerResource/registerPrompt (and their legacy tool/resource/prompt counterparts)
@@ -49,7 +49,7 @@ type RecordedCall = {
 // Recording the shared config/handler references across instances is safe: Zod schemas are
 // stateless validators, deployment routing is per-request AsyncLocalStorage, the ES client is a
 // singleton proxy, and RegisteredTool.update() is never called here.
-export function createCachedServerFactory(opts: CachedServerFactoryOptions): () => McpServer {
+export function createCachedServerFactory<S extends object = McpServer>(opts: CachedServerFactoryOptions<S>): () => S {
 	const template = opts.createBareServer();
 
 	const recorded: RecordedCall[] = [];
@@ -58,8 +58,12 @@ export function createCachedServerFactory(opts: CachedServerFactoryOptions): () 
 	// own wrapper on top (e.g. couchbase's toolRegistry.ts patches server.tool after registerAll
 	// starts) -- the consumer's wrapper binds our recorder as its delegate, so the recorded tuple is
 	// the FINAL wrapped version, and the recorder itself always calls the ORIGINAL SDK method.
+	const methods = template as unknown as Record<RecordedMethod, VariadicRegistrar | undefined>;
 	for (const method of RECORDED_METHODS) {
-		const bound = (template[method] as VariadicRegistrar).bind(template);
+		const original = methods[method];
+		// SIO-1954: the v2 McpServer has no tool/resource/prompt sugar; skip what is not there.
+		if (typeof original !== "function") continue;
+		const bound = original.bind(template);
 		(template as unknown as Record<RecordedMethod, VariadicRegistrar>)[method] = (...args: unknown[]) => {
 			recorded.push({ method, args });
 			return bound(...args);
@@ -73,7 +77,9 @@ export function createCachedServerFactory(opts: CachedServerFactoryOptions): () 
 	return () => {
 		const server = opts.createBareServer();
 		for (const { method, args } of recorded) {
-			(server[method] as VariadicRegistrar).bind(server)(...args);
+			((server as unknown as Record<RecordedMethod, VariadicRegistrar>)[method] as VariadicRegistrar).bind(server)(
+				...args,
+			);
 		}
 		return server;
 	};

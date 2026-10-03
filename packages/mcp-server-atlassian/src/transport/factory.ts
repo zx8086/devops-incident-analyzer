@@ -1,7 +1,12 @@
 // src/transport/factory.ts
 
 import type { IdentityCard, ReadinessSnapshot, TransportListenInfo } from "@devops-agent/shared";
-import { type AgentCoreTransportResult, createBootstrapAdapter, startAgentCoreTransport } from "@devops-agent/shared";
+import {
+	type AgentCoreTransportResult,
+	createBootstrapAdapter,
+	startAgentCoreTransport,
+	v1StatelessHandler,
+} from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TransportConfig } from "../config/index.js";
 import { createContextLogger, logger } from "../utils/logger.js";
@@ -63,11 +68,16 @@ export async function createTransport(
 	};
 
 	if (useAgentCore) {
-		result.agentcore = await startAgentCoreTransport(serverFactory, createBootstrapAdapter(logger), {
-			port: config.port,
-			host: config.host,
-			path: config.path,
-		});
+		const agentcoreLogger = createBootstrapAdapter(logger);
+		result.agentcore = await startAgentCoreTransport(
+			v1StatelessHandler(serverFactory, agentcoreLogger),
+			agentcoreLogger,
+			{
+				port: config.port,
+				host: config.host,
+				path: config.path,
+			},
+		);
 	}
 
 	if (useHttp) {

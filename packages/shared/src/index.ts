@@ -476,6 +476,7 @@ export {
 	type AgentCoreTransportConfig,
 	type AgentCoreTransportResult,
 	startAgentCoreTransport,
+	v1StatelessHandler,
 } from "./transport/agentcore.ts";
 export { createAgentCoreProxyTransport } from "./transport/agentcore-proxy.ts";
 export { drainBunServer } from "./transport/drain-helper.ts";

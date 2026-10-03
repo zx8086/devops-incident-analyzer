@@ -45,16 +45,18 @@ export interface BootstrapTransportResult {
 	closeAll(): Promise<void>;
 }
 
-export interface McpApplicationOptions<T> {
+// SIO-1954: S is the server type the factory builds. It defaults to the v1 McpServer so unmigrated
+// callers need no edit; a server ported to SDK v2 names its own McpServer here.
+export interface McpApplicationOptions<T, S extends { readonly server: unknown } = McpServer> {
 	name: string;
 	logger: BootstrapLogger;
 	initTracing: () => void;
 	telemetry: TelemetryConfig;
 	initDatasource: () => Promise<T>;
 	mode?: "server" | "proxy";
-	createServerFactory?: (datasource: T) => () => McpServer;
+	createServerFactory?: (datasource: T) => () => S;
 	createTransport: (
-		serverFactory: (() => McpServer) | undefined,
+		serverFactory: (() => S) | undefined,
 		datasource: T,
 		identityCard: IdentityCard,
 	) => Promise<BootstrapTransportResult>;
@@ -84,7 +86,9 @@ export interface McpApplication<T> {
 	shutdown: () => Promise<void>;
 }
 
-export async function createMcpApplication<T>(options: McpApplicationOptions<T>): Promise<McpApplication<T>> {
+export async function createMcpApplication<T, S extends { readonly server: unknown } = McpServer>(
+	options: McpApplicationOptions<T, S>,
+): Promise<McpApplication<T>> {
 	const { logger, name } = options;
 
 	// Process-level error handlers install BEFORE any startup await -- a background
@@ -128,7 +132,7 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		// SIO-974: every server gets tools/call lifecycle logging; read-only enforcement is
 		// still opt-in. Install order matters: read-only INNER, logging OUTER, so a blocked
 		// call (read-only handler short-circuits) is still logged by the outer wrap.
-		const serverFactory: (() => McpServer) | undefined = innerFactory
+		const serverFactory: (() => S) | undefined = innerFactory
 			? () => {
 					const server = innerFactory();
 					if (readOnlyConfig) installReadOnlyChokepoint(server, readOnlyConfig.manager);
