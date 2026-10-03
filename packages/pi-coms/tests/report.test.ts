@@ -690,9 +690,12 @@ describe("suppression review", () => {
 		expect(text.split("\n")[0]).toBe("[info] aws-111122223333 suppression review (last 7d)");
 		expect(text).toContain("alarm:%-Utilization-Low-20:%");
 		expect(text).toContain("accepted dev rightsizing noise");
-		expect(text).toContain("matches last 7d: 43");
-		expect(text).toContain("alarm:kong:ALARM");
-		expect(text).toContain("no matches in 7d; candidate for unsuppress");
+		expect(text).toContain("Matches (7d): 43");
+		expect(text).toContain("     alarm:kong:ALARM");
+		expect(text).toContain("Matches (7d): 0 -- candidate for unsuppress");
+		// Entries are separate paragraphs, not adjacent bullet lines.
+		expect(text).toContain("\n\n1. alarm:%-Utilization-Low-20:%\n   Reason: accepted dev rightsizing noise");
+		expect(text).toContain("\n\n2. logs:/aws/msk/brokers:%");
 	});
 
 	test("formatter renders an explicit nothing-masked line for an empty ledger", () => {
