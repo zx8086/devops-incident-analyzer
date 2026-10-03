@@ -10,7 +10,6 @@ import {
 	McpServer,
 	type McpServerFactory,
 	type RegisteredTool,
-	SUPPORTED_PROTOCOL_VERSIONS,
 	type ToolAnnotations,
 } from "@modelcontextprotocol/server";
 import { z } from "zod";
@@ -48,19 +47,11 @@ const ALWAYS_ALLOW_MANAGER = {
 // registered tool via the v2 public per-tool seam (RegisteredTool.update()).
 export function buildServerFactory(logger: ToolCallLogger): McpServerFactory {
 	return async () => {
-		// SIO-1436: the SDK's default SUPPORTED_PROTOCOL_VERSIONS has no 2026-07-28 entry, so
-		// without this override the modern-only handlers (e.g. server/discover's _ondiscover) are
-		// never registered on this instance -- createMcpHandler's HTTP router still classifies a
-		// fully-claimed modern request correctly, but dispatch then hits a genuinely-unregistered
-		// method and returns -32601. Root-caused via the installed @modelcontextprotocol/server
-		// bundle: dist/mcp-DXXb3Vv3.mjs:733 (Server constructor's conditional registration) and
-		// dist/src-CX2iR2pK.mjs:6157 / @modelcontextprotocol/core's auth-CUe6YdwF.mjs:6-12 (the
-		// version list itself). See server-v2-wire.test.ts's server/discover test for the wire-level
-		// proof.
-		const server = new McpServer(
-			{ name: "mcp-server-couchbase-v2", version: "0.1.0-pilot" },
-			{ supportedProtocolVersions: [...SUPPORTED_PROTOCOL_VERSIONS, "2026-07-28"] },
-		);
+		// SIO-1951: no supportedProtocolVersions override. SDK 2.3.0 installs the modern-only
+		// handlers (server/discover) itself via createMcpHandler / serveStdio
+		// (installModernOnlyHandlers), so the SIO-1436 workaround for 2.0.0 is no longer needed;
+		// the server/discover wire test proves it.
+		const server = new McpServer({ name: "mcp-server-couchbase-v2", version: "0.1.0-pilot" });
 
 		const tools = new Map<string, RegisteredTool>();
 

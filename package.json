@@ -13,6 +13,7 @@
 			"@langchain/aws": "^1.4.3",
 			"@langchain/core": "^1.1.40",
 			"@modelcontextprotocol/sdk": "^1.30.0",
+			"@modelcontextprotocol/server": "2.3.0",
 			"zod": "^4.4.3",
 			"yaml": "^2.6.0",
 			"pino": "^10.3.1",
