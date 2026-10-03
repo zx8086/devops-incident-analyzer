@@ -31,7 +31,8 @@ const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 interface ServerAdapter {
 	mcpServer: string;
-	buildServer: () => McpServer;
+	// SIO-1957: returns the cached factory; build it once and let the test client call it per request.
+	buildFactory: () => () => McpServer;
 	// Applied ONLY to names absent from the live set (a present name is always checked as a
 	// pass, never skipped) -- classifies why an absent name is not a failure, e.g. (a)
 	// upstream-proxy servers whose full tool set is only discoverable via a live network call
@@ -71,7 +72,7 @@ async function buildAdapters(): Promise<ServerAdapter[]> {
 	return [
 		{
 			mcpServer: "atlassian",
-			buildServer: () =>
+			buildFactory: () =>
 				atlassian.createMcpServerFactory({
 					proxy: stubProxy as never,
 					config: {
@@ -80,7 +81,7 @@ async function buildAdapters(): Promise<ServerAdapter[]> {
 					} as never,
 					discoveredTools: [],
 					siteUrl: "https://example.atlassian.net",
-				})(),
+				}),
 			// Real proxied names are discovered remotely at boot; discoveredTools: [] above
 			// means none register here. A present name is proof it's a real local (custom)
 			// tool; an ABSENT atlassian_* name is ambiguous (could be a real proxy tool this
@@ -89,13 +90,13 @@ async function buildAdapters(): Promise<ServerAdapter[]> {
 		},
 		{
 			mcpServer: "gitlab",
-			buildServer: () =>
+			buildFactory: () =>
 				gitlab.createMcpServerFactory({
 					proxy: stubProxy as never,
 					restClient: {} as never,
 					config: { application: { name: "gitlab-mcp-server", version: "0.0.0" } } as never,
 					discoveredTools: [],
-				})(),
+				}),
 			// gitlab's proxy AND custom/code-analysis/Orbit tools share the gitlab_* prefix, so a
 			// present name is proof it's real; an absent gitlab_* name is ambiguous the same way
 			// as atlassian above.
@@ -103,15 +104,15 @@ async function buildAdapters(): Promise<ServerAdapter[]> {
 		},
 		{
 			mcpServer: "couchbase",
-			buildServer: () =>
+			buildFactory: () =>
 				couchbase.createMcpServerFactory({
 					bucket: {} as never,
 					playbooks: null as never,
-				})(),
+				}),
 		},
 		{
 			mcpServer: "kafka",
-			buildServer: () =>
+			buildFactory: () =>
 				createCachedServerFactory({
 					createBareServer: () => new McpServer({ name: "@devops-agent/mcp-server-kafka", version: "0.0.0" }),
 					registerAll: (server) =>
@@ -155,11 +156,11 @@ async function buildAdapters(): Promise<ServerAdapter[]> {
 								restProxyService: {} as never,
 							},
 						),
-				})(),
+				}),
 		},
 		{
 			mcpServer: "elastic",
-			buildServer: () =>
+			buildFactory: () =>
 				elastic.createMcpServerFactory(
 					{ server: { name: "verify-action-tool-map", version: "0.0.0", readOnlyMode: false } } as never,
 					{} as never,
@@ -168,21 +169,21 @@ async function buildAdapters(): Promise<ServerAdapter[]> {
 					// only closes over the client for later handler use, never calls it, so an inert
 					// stub is enough to include those 16 tools in the checked set here.
 					{} as never,
-				)(),
+				),
 		},
 		{
 			mcpServer: "konnect",
-			buildServer: () =>
+			buildFactory: () =>
 				konnect.createMcpServerFactory({
 					api: {} as never,
 					config: { application: { name: "kong-konnect-mcp", version: "2.0.0" } } as never,
 					performanceCollector: new konnectTracer.ToolPerformanceCollector(),
 					elicitationOps: new konnectElicitation.ElicitationOperations(),
-				} as never)(),
+				} as never),
 		},
 		{
 			mcpServer: "aws",
-			buildServer: () =>
+			buildFactory: () =>
 				createCachedServerFactory({
 					createBareServer: () => new McpServer({ name: "aws-mcp-server", version: "0.0.0" }),
 					registerAll: (server) =>
@@ -195,11 +196,11 @@ async function buildAdapters(): Promise<ServerAdapter[]> {
 								},
 							},
 						} as never),
-				})(),
+				}),
 		},
 		{
 			mcpServer: "elastic-iac",
-			buildServer: () =>
+			buildFactory: () =>
 				elasticIac.createMcpServerFactory({
 					transport: { mode: "http", port: 0, host: "127.0.0.1", path: "/mcp" },
 					repository: {
@@ -213,7 +214,7 @@ async function buildAdapters(): Promise<ServerAdapter[]> {
 					elasticCloudApiKey: undefined,
 					elasticCloudBaseUrl: "https://api.elastic-cloud.com",
 					clusterDeployments: [],
-				} as never)(),
+				} as never),
 			// SIO-967 (see the YAML's own tool_mapping comment): kg_* tools are served by the
 			// separate in-process knowledge-graph MCP server, not elastic-iac's own server --
 			// bound directly via packages/agent/src/iac/nodes.ts's infoTools(), outside
@@ -263,7 +264,7 @@ async function main() {
 			continue;
 		}
 
-		const liveNames = new Set(await toolNames(adapter.buildServer));
+		const liveNames = new Set(await toolNames(adapter.buildFactory()));
 		const actionMap = toolDef.tool_mapping?.action_tool_map ?? {};
 
 		for (const [action, names] of Object.entries(actionMap)) {
