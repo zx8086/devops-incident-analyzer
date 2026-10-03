@@ -308,8 +308,19 @@ describe("hub expectations and rollout commands", () => {
 	});
 
 	test("a normal rollout uses pi-coms-update (it writes the reload sentinel); a token change re-runs the bootstrap with the sentinel touched", () => {
-		expect(rolloutCommands({ tokenChanged: false })).toEqual(["/usr/local/bin/pi-coms-update"]);
-		expect(rolloutCommands({ tokenChanged: true })[0]).toBe("touch /home/piagent/.pi-agent-reload");
-		expect(rolloutCommands({ tokenChanged: true })[2]).toBe("bash /var/lib/cloud/instance/user-data.txt");
+		expect(rolloutCommands({ tokenChanged: false })).toEqual([
+			"flock -w 900 /run/pi-coms-update.lock /usr/local/bin/pi-coms-update",
+		]);
+		// SIO-1948: one command, so the sentinel is written inside the lock that
+		// the bootstrap runs under; outside it, a run already holding the lock
+		// could consume the sentinel first.
+		const token = rolloutCommands({ tokenChanged: true });
+		expect(token).toHaveLength(1);
+		const cmd = token[0] ?? "";
+		expect(cmd.startsWith("flock -w 900 /run/pi-coms-update.lock bash -c '")).toBe(true);
+		expect(cmd.indexOf("touch /home/piagent/.pi-agent-reload")).toBeLessThan(
+			cmd.indexOf("bash /var/lib/cloud/instance/user-data.txt"),
+		);
+		expect(Bun.spawnSync(["bash", "-n", "-c", cmd]).exitCode).toBe(0);
 	});
 });

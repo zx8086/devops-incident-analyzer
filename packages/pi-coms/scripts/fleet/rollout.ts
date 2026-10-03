@@ -13,15 +13,21 @@ export const AGENT_INSTANCE_TAG = "pi-agent-agent";
 // (it already said hub, and the module appends the component).
 export const HUB_INSTANCE_TAG = "pi-coms-hub";
 
+// SIO-1948: the same lock the State Manager association takes. -w, not -n: a
+// rollout that lands on a scheduled run waits for it, then finds the version
+// current and exits, instead of swapping the bundle under it.
+const UPDATE_LOCK = "flock -w 900 /run/pi-coms-update.lock";
+
 export function rolloutCommands(opts: { tokenChanged: boolean }): string[] {
 	if (opts.tokenChanged) {
+		// The sentinel is written inside the lock: written before it, a run that
+		// already holds the lock would consume it, and this bootstrap would then
+		// leave the old agent process running.
 		return [
-			"touch /home/piagent/.pi-agent-reload",
-			"chown piagent:piagent /home/piagent/.pi-agent-reload || true",
-			"bash /var/lib/cloud/instance/user-data.txt",
+			`${UPDATE_LOCK} bash -c 'touch /home/piagent/.pi-agent-reload && (chown piagent:piagent /home/piagent/.pi-agent-reload || true) && bash /var/lib/cloud/instance/user-data.txt'`,
 		];
 	}
-	return ["/usr/local/bin/pi-coms-update"];
+	return [`${UPDATE_LOCK} /usr/local/bin/pi-coms-update`];
 }
 
 export async function triggerRollout(

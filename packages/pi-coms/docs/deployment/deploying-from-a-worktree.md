@@ -100,7 +100,7 @@ ships dead. Correct order:
 |---|---|---|
 | 1. IAM / bucket policy | `terraform apply -target=module.agent.aws_iam_role_policy.agent_secrets` | No |
 | 2. Publish | `./deploy/publish-fleet.sh <bucket> <profile>` | No |
-| 3. Converge | `aws ssm send-command ... /usr/local/bin/pi-coms-update` | No |
+| 3. Converge | `aws ssm send-command ... flock -w 900 /run/pi-coms-update.lock /usr/local/bin/pi-coms-update` | No |
 | 4. Verify | checkpoint command, confirm the S3 object | No |
 | 5. Replace | full `terraform apply` | **Yes** |
 
@@ -188,7 +188,7 @@ cd <repo-root>
 aws ssm send-command --profile eu-oit-dev --region eu-central-1 \
   --targets Key=tag:Project,Values=pi-coms-net \
   --document-name AWS-RunShellScript \
-  --parameters 'commands=["/usr/local/bin/pi-coms-update"]'
+  --parameters 'commands=["flock -w 900 /run/pi-coms-update.lock /usr/local/bin/pi-coms-update"]'
 ```
 
 Hosts are in **eu-central-1**, not eu-west-1. Check with

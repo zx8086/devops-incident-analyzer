@@ -64,7 +64,12 @@ remove an entry when the underlying behavior changes.
 
 - Order: publish the bundle (`deploy/publish-fleet.sh`), then either wait
   for the 30-minute State Manager convergence or run
-  `/usr/local/bin/pi-coms-update` per host via SSM.
+  `flock -w 900 /run/pi-coms-update.lock /usr/local/bin/pi-coms-update` per host via SSM.
+- Never run a bare `pi-coms-update` (SIO-1948). The association runs it under
+  `flock -n /run/pi-coms-update.lock`, and an unlocked manual run that overlaps
+  it swaps the bundle over the other run's half-extracted tree: on 2026-10-03
+  the dev hub lost `scripts/coms-net-server.ts` and crash-looped for 7 minutes.
+  `just fleet rollout` and the `publish-fleet.sh` hint already take the lock.
 - `pi-coms-update` restarts `pi-monitor` (and `coms-hub` on the hub host)
   and signals the Herdr-hosted agent to relaunch. If an agent does not pick
   up new `extensions/` code: `pkill -TERM -u piagent -f cli.js`, wait for
@@ -99,7 +104,7 @@ remove an entry when the underlying behavior changes.
 - `CTX_MODE_ENABLED=false` (or any other `~/.coms-env.local` change) lands at
   the NEXT convergence: `pi-coms-update` returns early when the S3 `version`
   matches `.bundle-version`. Force it with
-  `bash /var/lib/cloud/instance/user-data.txt` over SSM.
+  `flock -w 900 /run/pi-coms-update.lock bash /var/lib/cloud/instance/user-data.txt` over SSM (through the lock, SIO-1948).
 - To relaunch Pi by hand: `touch /home/piagent/.pi-agent-reload` first, then
   `systemctl restart pi-agent`. Without the sentinel the registry guard keeps
   the running herdr agent and the restart is a no-op.

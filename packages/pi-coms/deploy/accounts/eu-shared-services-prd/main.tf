@@ -348,6 +348,9 @@ module "agent" {
 
 // Every 30 minutes each tagged host compares its bundle version against S3 and
 // re-bootstraps on change; `just fleet rollout` triggers the same command now.
+// SIO-1948: every caller takes /run/pi-coms-update.lock. Two overlapping runs
+// swap the bundle over each other's half-extracted tree (the dev hub lost
+// scripts/coms-net-server.ts on 2026-10-03). -n: a busy host is picked up next tick.
 resource "aws_ssm_association" "fleet_update" {
   name             = "AWS-RunShellScript"
   association_name = "pi-coms-fleet-update"
@@ -360,7 +363,7 @@ resource "aws_ssm_association" "fleet_update" {
   schedule_expression = "rate(30 minutes)"
 
   parameters = {
-    commands = "[ -x /usr/local/bin/pi-coms-update ] && /usr/local/bin/pi-coms-update || true"
+    commands = "[ -x /usr/local/bin/pi-coms-update ] && flock -n /run/pi-coms-update.lock /usr/local/bin/pi-coms-update || true"
   }
 }
 
