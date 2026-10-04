@@ -293,4 +293,45 @@ describe("installToolCallLogging", () => {
 		const sinkWarn = lines.find((l) => l.message === "tools/call outcome sink failed");
 		expect(sinkWarn?.meta?.error).toBe("sink exploded");
 	});
+
+	// SIO-1958: SDK v2 throws an unknown tool name as a JSON-RPC -32602 error instead of resolving
+	// it to an isError result, so the dispatch-error path must still count it as unknown-tool.
+	// Shared must not import the v2 SDK, so this drives the dispatcher shape the wrap relies on.
+	function serverThrowing(error: Error) {
+		const handlers = new Map<string, (req: unknown, extra: unknown) => Promise<unknown>>([
+			[
+				"tools/call",
+				async () => {
+					throw error;
+				},
+			],
+		]);
+		return { server: { _requestHandlers: handlers } };
+	}
+
+	async function outcomeOfThrow(error: Error): Promise<ToolCallOutcome | undefined> {
+		const fake = serverThrowing(error);
+		const outcomes: ToolCallOutcome[] = [];
+		installToolCallLogging(
+			fake,
+			recordingLogger().logger,
+			() => 0,
+			(o) => outcomes.push(o),
+		);
+		const wrapped = fake.server._requestHandlers.get("tools/call");
+		await expect(
+			wrapped?.({ method: "tools/call", params: { name: "lz_no_such_tool", arguments: {} } }, {}),
+		).rejects.toThrow(error.message);
+		return outcomes[0];
+	}
+
+	test("a thrown v2 unknown-tool error is classified unknown-tool", async () => {
+		const outcome = await outcomeOfThrow(Object.assign(new Error("Tool lz_no_such_tool not found"), { code: -32602 }));
+		expect(outcome).toEqual({ tool: "lz_no_such_tool", ok: false, durationMs: 0, failureClass: "unknown-tool" });
+	});
+
+	test("any other dispatch error stays unclassified", async () => {
+		const outcome = await outcomeOfThrow(new Error("socket hang up"));
+		expect(outcome).toEqual({ tool: "lz_no_such_tool", ok: false, durationMs: 0 });
+	});
 });

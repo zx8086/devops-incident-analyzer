@@ -4,9 +4,8 @@ import {
 	isBenignStreamCancel,
 	type ReadinessSnapshot,
 } from "@devops-agent/shared";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { createMcpHandler, type McpServer } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { Config } from "./config.ts";
 import { createContextLogger } from "./logger.ts";
 
@@ -23,6 +22,16 @@ function startHttp(
 	dependencies: TransportDependencies,
 ): BootstrapTransportResult {
 	const { port, host, path } = config.transport;
+	// SIO-1958: one handler per process. It builds a fresh server per request and serves both the
+	// 2025-era protocol (legacy: "stateless") and 2026-07-28 from the same endpoint.
+	const mcpHandler = createMcpHandler(serverFactory, {
+		legacy: "stateless",
+		onerror: (error: Error) => {
+			const detail = { error: error.message };
+			if (isBenignStreamCancel(error)) log.warn(detail, "benign stream cancel");
+			else log.error(detail, "transport stream error");
+		},
+	});
 	const server = Bun.serve({
 		port,
 		hostname: host,
@@ -42,16 +51,8 @@ function startHttp(
 			}
 			if (url.pathname !== path) return new Response("Not found", { status: 404 });
 
-			const mcp = serverFactory();
-			const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-			transport.onerror = (error: unknown) => {
-				const detail = { error: error instanceof Error ? error.message : String(error) };
-				if (isBenignStreamCancel(error)) log.warn(detail, "benign stream cancel");
-				else log.error(detail, "transport stream error");
-			};
-			await mcp.connect(transport);
 			try {
-				return await transport.handleRequest(request);
+				return await mcpHandler.fetch(request);
 			} catch (error) {
 				log.error({ error: error instanceof Error ? error.message : String(error) }, "MCP request failed");
 				return Response.json(
@@ -66,18 +67,17 @@ function startHttp(
 		listen: { mode: "http", port: server.port, url: `http://${host}:${server.port}${path}` },
 		async closeAll() {
 			await server.stop(true);
+			await mcpHandler.close();
 		},
 	};
 }
 
-async function startStdio(serverFactory: () => McpServer): Promise<BootstrapTransportResult> {
-	const mcp = serverFactory();
-	const transport = new StdioServerTransport();
-	await mcp.connect(transport);
+function startStdio(serverFactory: () => McpServer): BootstrapTransportResult {
+	const handle = serveStdio(serverFactory);
 	return {
 		listen: { mode: "stdio" },
 		async closeAll() {
-			await transport.close();
+			await handle.close();
 		},
 	};
 }
@@ -87,6 +87,6 @@ export function createTransport(
 	config: Config,
 	dependencies: TransportDependencies,
 ): Promise<BootstrapTransportResult> {
-	if (config.transport.mode === "stdio") return startStdio(serverFactory);
+	if (config.transport.mode === "stdio") return Promise.resolve(startStdio(serverFactory));
 	return Promise.resolve(startHttp(serverFactory, config, dependencies));
 }
