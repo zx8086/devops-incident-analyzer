@@ -226,6 +226,7 @@
       "dependencies": {
         "@devops-agent/shared": "workspace:*",
         "@modelcontextprotocol/sdk": "catalog:",
+        "@modelcontextprotocol/server": "catalog:",
         "@opentelemetry/api": "^1.9.0",
         "pino": "catalog:",
         "zod": "catalog:",
@@ -434,6 +435,7 @@
         "@devops-agent/mcp-server-konnect": "workspace:*",
         "@devops-agent/shared": "workspace:*",
         "@modelcontextprotocol/sdk": "catalog:",
+        "@modelcontextprotocol/server": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:dev",

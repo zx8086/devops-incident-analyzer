@@ -1,5 +1,5 @@
 // src/tools/elastic.ts
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { ClusterDeployment, Config } from "../config.ts";
 import { text } from "./shared.ts";

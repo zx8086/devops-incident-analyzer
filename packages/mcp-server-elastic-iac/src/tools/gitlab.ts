@@ -1,6 +1,6 @@
 // src/tools/gitlab.ts
 import { readPositiveIntEnv, readPositiveMsEnv } from "@devops-agent/shared";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Config } from "../config.ts";
 import { createContextLogger } from "../logger.ts";

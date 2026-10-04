@@ -20,8 +20,10 @@
 import { fileURLToPath } from "node:url";
 import { getAllActionToolNames, loadAgent, type ToolDefinition } from "@devops-agent/gitagent-bridge";
 import { createCachedServerFactory } from "@devops-agent/shared";
-import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
+import { connectTestClient, type McpFetchHandler } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
+import { v1StatelessHandler } from "@devops-agent/shared/src/transport/agentcore.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createMcpHandler } from "@modelcontextprotocol/server";
 
 // `bun run --filter` executes with cwd set to this package's directory, not the repo root, so
 // agent YAML paths are resolved relative to this file instead of assuming a repo-root cwd.
@@ -31,8 +33,10 @@ const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 interface ServerAdapter {
 	mcpServer: string;
-	// SIO-1957: returns the cached factory; build it once and let the test client call it per request.
-	buildFactory: () => () => McpServer;
+	// SIO-1957: returns the /mcp fetch handler over the cached factory; built once per adapter, the
+	// test client calls it per request. SIO-1960: a v1 server wraps its factory with v1Handler, a
+	// server ported to SDK v2 with createMcpHandler.
+	buildHandler: () => McpFetchHandler;
 	// Applied ONLY to names absent from the live set (a present name is always checked as a
 	// pass, never skipped) -- classifies why an absent name is not a failure, e.g. (a)
 	// upstream-proxy servers whose full tool set is only discoverable via a live network call
@@ -45,8 +49,11 @@ interface ServerAdapter {
 	classifyMissing?: (name: string) => string | undefined;
 }
 
-async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
-	const client = await connectV1TestClient(serverFactory, "verify-action-tool-map");
+const silentLogger = { info: () => {}, warn: () => {}, error: () => {} };
+const v1Handler = (factory: () => McpServer): McpFetchHandler => v1StatelessHandler(factory, silentLogger);
+
+async function toolNames(handleMcp: McpFetchHandler): Promise<string[]> {
+	const client = await connectTestClient(handleMcp, "verify-action-tool-map");
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name);
@@ -72,16 +79,18 @@ async function buildAdapters(): Promise<ServerAdapter[]> {
 	return [
 		{
 			mcpServer: "atlassian",
-			buildFactory: () =>
-				atlassian.createMcpServerFactory({
-					proxy: stubProxy as never,
-					config: {
-						application: { name: "atlassian-mcp-server", version: "0.0.0" },
-						atlassian: { readOnly: true, incidentProjects: ["INC"] },
-					} as never,
-					discoveredTools: [],
-					siteUrl: "https://example.atlassian.net",
-				}),
+			buildHandler: () =>
+				v1Handler(
+					atlassian.createMcpServerFactory({
+						proxy: stubProxy as never,
+						config: {
+							application: { name: "atlassian-mcp-server", version: "0.0.0" },
+							atlassian: { readOnly: true, incidentProjects: ["INC"] },
+						} as never,
+						discoveredTools: [],
+						siteUrl: "https://example.atlassian.net",
+					}),
+				),
 			// Real proxied names are discovered remotely at boot; discoveredTools: [] above
 			// means none register here. A present name is proof it's a real local (custom)
 			// tool; an ABSENT atlassian_* name is ambiguous (could be a real proxy tool this
@@ -90,13 +99,15 @@ async function buildAdapters(): Promise<ServerAdapter[]> {
 		},
 		{
 			mcpServer: "gitlab",
-			buildFactory: () =>
-				gitlab.createMcpServerFactory({
-					proxy: stubProxy as never,
-					restClient: {} as never,
-					config: { application: { name: "gitlab-mcp-server", version: "0.0.0" } } as never,
-					discoveredTools: [],
-				}),
+			buildHandler: () =>
+				v1Handler(
+					gitlab.createMcpServerFactory({
+						proxy: stubProxy as never,
+						restClient: {} as never,
+						config: { application: { name: "gitlab-mcp-server", version: "0.0.0" } } as never,
+						discoveredTools: [],
+					}),
+				),
 			// gitlab's proxy AND custom/code-analysis/Orbit tools share the gitlab_* prefix, so a
 			// present name is proof it's real; an absent gitlab_* name is ambiguous the same way
 			// as atlassian above.
@@ -104,117 +115,129 @@ async function buildAdapters(): Promise<ServerAdapter[]> {
 		},
 		{
 			mcpServer: "couchbase",
-			buildFactory: () =>
-				couchbase.createMcpServerFactory({
-					bucket: {} as never,
-					playbooks: null as never,
-				}),
+			buildHandler: () =>
+				v1Handler(
+					couchbase.createMcpServerFactory({
+						bucket: {} as never,
+						playbooks: null as never,
+					}),
+				),
 		},
 		{
 			mcpServer: "kafka",
-			buildFactory: () =>
-				createCachedServerFactory({
-					createBareServer: () => new McpServer({ name: "@devops-agent/mcp-server-kafka", version: "0.0.0" }),
-					registerAll: (server) =>
-						kafka.registerAllTools(
-							server,
-							{} as never,
-							{
-								kafka: {
-									provider: "local",
-									clientId: "verify-action-tool-map",
-									allowWrites: true,
-									allowDestructive: true,
-									consumeMaxMessages: 100,
-									consumeTimeoutMs: 5000,
-									toolTimeoutMs: 5000,
+			buildHandler: () =>
+				v1Handler(
+					createCachedServerFactory({
+						createBareServer: () => new McpServer({ name: "@devops-agent/mcp-server-kafka", version: "0.0.0" }),
+						registerAll: (server) =>
+							kafka.registerAllTools(
+								server,
+								{} as never,
+								{
+									kafka: {
+										provider: "local",
+										clientId: "verify-action-tool-map",
+										allowWrites: true,
+										allowDestructive: true,
+										consumeMaxMessages: 100,
+										consumeTimeoutMs: 5000,
+										toolTimeoutMs: 5000,
+									},
+									msk: { bootstrapBrokers: "", clusterArn: "", region: "", authMode: "iam" },
+									confluent: { bootstrapServers: "", apiKey: "", apiSecret: "", restEndpoint: "", clusterId: "" },
+									local: { bootstrapServers: "localhost:9092" },
+									schemaRegistry: { enabled: true, url: "http://schema-registry:8081", apiKey: "", apiSecret: "" },
+									ksql: { enabled: true, endpoint: "http://ksql-server:8088", apiKey: "", apiSecret: "" },
+									connect: { enabled: true, url: "http://connect:8083", apiKey: "", apiSecret: "" },
+									restproxy: { enabled: true, url: "http://kafka-rest:8082", apiKey: "", apiSecret: "" },
+									logging: { level: "silent", backend: "pino" },
+									telemetry: { enabled: false, serviceName: "kafka-mcp-server", mode: "console", otlpEndpoint: "" },
+									transport: {
+										mode: "stdio",
+										port: 9081,
+										host: "0.0.0.0",
+										path: "/mcp",
+										apiKey: "",
+										allowedOrigins: "",
+										idleTimeout: 30,
+										drainTimeoutMs: 0,
+									},
+								} as never,
+								{
+									schemaRegistryService: {} as never,
+									ksqlService: {} as never,
+									connectService: {} as never,
+									restProxyService: {} as never,
 								},
-								msk: { bootstrapBrokers: "", clusterArn: "", region: "", authMode: "iam" },
-								confluent: { bootstrapServers: "", apiKey: "", apiSecret: "", restEndpoint: "", clusterId: "" },
-								local: { bootstrapServers: "localhost:9092" },
-								schemaRegistry: { enabled: true, url: "http://schema-registry:8081", apiKey: "", apiSecret: "" },
-								ksql: { enabled: true, endpoint: "http://ksql-server:8088", apiKey: "", apiSecret: "" },
-								connect: { enabled: true, url: "http://connect:8083", apiKey: "", apiSecret: "" },
-								restproxy: { enabled: true, url: "http://kafka-rest:8082", apiKey: "", apiSecret: "" },
-								logging: { level: "silent", backend: "pino" },
-								telemetry: { enabled: false, serviceName: "kafka-mcp-server", mode: "console", otlpEndpoint: "" },
-								transport: {
-									mode: "stdio",
-									port: 9081,
-									host: "0.0.0.0",
-									path: "/mcp",
-									apiKey: "",
-									allowedOrigins: "",
-									idleTimeout: 30,
-									drainTimeoutMs: 0,
-								},
-							} as never,
-							{
-								schemaRegistryService: {} as never,
-								ksqlService: {} as never,
-								connectService: {} as never,
-								restProxyService: {} as never,
-							},
-						),
-				}),
+							),
+					}),
+				),
 		},
 		{
 			mcpServer: "elastic",
-			buildFactory: () =>
-				elastic.createMcpServerFactory(
-					{ server: { name: "verify-action-tool-map", version: "0.0.0", readOnlyMode: false } } as never,
-					{} as never,
-					// Cloud + billing tools (16, e.g. elasticsearch_cloud_*, elasticsearch_billing_*)
-					// register only when this arg is truthy (real boot: EC_API_KEY set). Registration
-					// only closes over the client for later handler use, never calls it, so an inert
-					// stub is enough to include those 16 tools in the checked set here.
-					{} as never,
+			buildHandler: () =>
+				v1Handler(
+					elastic.createMcpServerFactory(
+						{ server: { name: "verify-action-tool-map", version: "0.0.0", readOnlyMode: false } } as never,
+						{} as never,
+						// Cloud + billing tools (16, e.g. elasticsearch_cloud_*, elasticsearch_billing_*)
+						// register only when this arg is truthy (real boot: EC_API_KEY set). Registration
+						// only closes over the client for later handler use, never calls it, so an inert
+						// stub is enough to include those 16 tools in the checked set here.
+						{} as never,
+					),
 				),
 		},
 		{
 			mcpServer: "konnect",
-			buildFactory: () =>
-				konnect.createMcpServerFactory({
-					api: {} as never,
-					config: { application: { name: "kong-konnect-mcp", version: "2.0.0" } } as never,
-					performanceCollector: new konnectTracer.ToolPerformanceCollector(),
-					elicitationOps: new konnectElicitation.ElicitationOperations(),
-				} as never),
+			buildHandler: () =>
+				v1Handler(
+					konnect.createMcpServerFactory({
+						api: {} as never,
+						config: { application: { name: "kong-konnect-mcp", version: "2.0.0" } } as never,
+						performanceCollector: new konnectTracer.ToolPerformanceCollector(),
+						elicitationOps: new konnectElicitation.ElicitationOperations(),
+					} as never),
+				),
 		},
 		{
 			mcpServer: "aws",
-			buildFactory: () =>
-				createCachedServerFactory({
-					createBareServer: () => new McpServer({ name: "aws-mcp-server", version: "0.0.0" }),
-					registerAll: (server) =>
-						aws.registerAllTools(server, {
-							region: "eu-central-1",
-							estates: {
-								prod: {
-									assumedRoleArn: "arn:aws:iam::000000000000:role/DevOpsAgentReadOnly",
-									externalId: "verify-action-tool-map",
+			buildHandler: () =>
+				v1Handler(
+					createCachedServerFactory({
+						createBareServer: () => new McpServer({ name: "aws-mcp-server", version: "0.0.0" }),
+						registerAll: (server) =>
+							aws.registerAllTools(server, {
+								region: "eu-central-1",
+								estates: {
+									prod: {
+										assumedRoleArn: "arn:aws:iam::000000000000:role/DevOpsAgentReadOnly",
+										externalId: "verify-action-tool-map",
+									},
 								},
-							},
-						} as never),
-				}),
+							} as never),
+					}),
+				),
 		},
 		{
 			mcpServer: "elastic-iac",
-			buildFactory: () =>
-				elasticIac.createMcpServerFactory({
-					transport: { mode: "http", port: 0, host: "127.0.0.1", path: "/mcp" },
-					repository: {
-						gitlabBaseUrl: "https://gitlab.example.com",
-						projectId: "1",
-						workspaceDir: "/tmp/verify-action-tool-map",
-					},
-					gitops: { baseUrl: "https://gitlab.example.com", project: "example/elastic-iac", token: undefined },
-					taskBin: "task",
-					gitlabToken: undefined,
-					elasticCloudApiKey: undefined,
-					elasticCloudBaseUrl: "https://api.elastic-cloud.com",
-					clusterDeployments: [],
-				} as never),
+			buildHandler: () =>
+				createMcpHandler(
+					elasticIac.createMcpServerFactory({
+						transport: { mode: "http", port: 0, host: "127.0.0.1", path: "/mcp" },
+						repository: {
+							gitlabBaseUrl: "https://gitlab.example.com",
+							projectId: "1",
+							workspaceDir: "/tmp/verify-action-tool-map",
+						},
+						gitops: { baseUrl: "https://gitlab.example.com", project: "example/elastic-iac", token: undefined },
+						taskBin: "task",
+						gitlabToken: undefined,
+						elasticCloudApiKey: undefined,
+						elasticCloudBaseUrl: "https://api.elastic-cloud.com",
+						clusterDeployments: [],
+					} as never),
+				).fetch,
 			// SIO-967 (see the YAML's own tool_mapping comment): kg_* tools are served by the
 			// separate in-process knowledge-graph MCP server, not elastic-iac's own server --
 			// bound directly via packages/agent/src/iac/nodes.ts's infoTools(), outside
@@ -264,7 +287,7 @@ async function main() {
 			continue;
 		}
 
-		const liveNames = new Set(await toolNames(adapter.buildFactory()));
+		const liveNames = new Set(await toolNames(adapter.buildHandler()));
 		const actionMap = toolDef.tool_mapping?.action_tool_map ?? {};
 
 		for (const [action, names] of Object.entries(actionMap)) {

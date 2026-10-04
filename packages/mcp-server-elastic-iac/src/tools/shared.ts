@@ -1,6 +1,6 @@
 // src/tools/shared.ts
 import { readPositiveIntEnv } from "@devops-agent/shared";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 
 export function text(body: string): CallToolResult {
 	return { content: [{ type: "text", text: body }] };

@@ -5,8 +5,8 @@
 // record.
 import { describe, expect, test } from "bun:test";
 import { createCachedServerFactory } from "@devops-agent/shared";
-import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { connectTestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import pkg from "../../package.json" with { type: "json" };
 import type { Config } from "../config.ts";
 import { createMcpServerFactory, createServer } from "../server.ts";
@@ -37,7 +37,10 @@ const fakeConfig: Config = {
 };
 
 async function toolNames(serverFactory: () => McpServer): Promise<string[]> {
-	const client = await connectV1TestClient(serverFactory, "elastic-iac-factory-replay-test-client");
+	const client = await connectTestClient(
+		createMcpHandler(serverFactory).fetch,
+		"elastic-iac-factory-replay-test-client",
+	);
 	const { tools } = await client.listTools();
 	await client.close();
 	return tools.map((t) => t.name).sort();

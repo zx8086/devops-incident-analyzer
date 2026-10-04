@@ -7,7 +7,7 @@
 // HINTS for clients; enforcement stays in the tool surface itself (mutating
 // verbs are simply not registered -- see iac.ts / server description).
 import { deriveToolAnnotations } from "@devops-agent/shared";
-import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import type { ToolAnnotations } from "@modelcontextprotocol/server";
 
 const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	// elastic.ts -- Elastic Cloud control-plane + cluster data-plane GETs; _simulate

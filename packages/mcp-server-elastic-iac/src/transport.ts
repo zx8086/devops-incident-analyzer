@@ -5,9 +5,8 @@ import {
 	isBenignStreamCancel,
 	type ReadinessSnapshot,
 } from "@devops-agent/shared";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { createMcpHandler, type McpServer } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { Config } from "./config.ts";
 import { createContextLogger } from "./logger.ts";
 
@@ -23,6 +22,18 @@ interface TransportDeps {
 // per request, matching the stateless pattern used by the other servers.
 function startHttp(serverFactory: () => McpServer, config: Config, deps: TransportDeps): BootstrapTransportResult {
 	const { port, host, path } = config.transport;
+	// SIO-1960: one handler per process, building a fresh server per request. It serves the
+	// 2025-era protocol (legacy: "stateless") and 2026-07-28 from the same endpoint.
+	// SIO-869: a client that disconnects mid-stream cancels the response reader (benign
+	// AbortError); route it to warn and keep genuine transport failures at error.
+	const mcpHandler = createMcpHandler(serverFactory, {
+		legacy: "stateless",
+		onerror: (err: Error) => {
+			const detail = { error: err.message };
+			if (isBenignStreamCancel(err)) log.warn(detail, "benign stream cancel");
+			else log.error(detail, "transport stream error");
+		},
+	});
 	const server = Bun.serve({
 		port,
 		hostname: host,
@@ -44,21 +55,8 @@ function startHttp(serverFactory: () => McpServer, config: Config, deps: Transpo
 				return Response.json(snapshot, { status: snapshot.ready ? 200 : 503 });
 			}
 			if (url.pathname === path) {
-				const mcp = serverFactory();
-				const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-				// SIO-869: a client that disconnects mid-stream cancels the response reader
-				// (benign AbortError). Log it here rather than letting it bubble to the global
-				// unhandledRejection handler, which would otherwise exit the whole server.
-				transport.onerror = (err: unknown) => {
-					// SIO-869: route the benign mid-stream cancel to warn; surface genuine
-					// transport failures at error so they are not hidden behind a warning.
-					const detail = { error: err instanceof Error ? err.message : String(err) };
-					if (isBenignStreamCancel(err)) log.warn(detail, "benign stream cancel");
-					else log.error(detail, "transport stream error");
-				};
-				await mcp.connect(transport);
 				try {
-					return await transport.handleRequest(req);
+					return await mcpHandler.fetch(req);
 				} catch (error) {
 					log.error({ error: error instanceof Error ? error.message : String(error) }, "MCP request failed");
 					return Response.json(
@@ -75,18 +73,17 @@ function startHttp(serverFactory: () => McpServer, config: Config, deps: Transpo
 		listen: { mode: "http", port: server.port, url: `http://${host}:${server.port}${path}` },
 		async closeAll() {
 			await server.stop(true);
+			await mcpHandler.close();
 		},
 	};
 }
 
-async function startStdio(serverFactory: () => McpServer): Promise<BootstrapTransportResult> {
-	const mcp = serverFactory();
-	const transport = new StdioServerTransport();
-	await mcp.connect(transport);
+function startStdio(serverFactory: () => McpServer): BootstrapTransportResult {
+	const handle = serveStdio(serverFactory);
 	return {
 		listen: { mode: "stdio" },
 		async closeAll() {
-			await transport.close();
+			await handle.close();
 		},
 	};
 }
@@ -96,6 +93,6 @@ export function createTransport(
 	config: Config,
 	deps: TransportDeps,
 ): Promise<BootstrapTransportResult> {
-	if (config.transport.mode === "stdio") return startStdio(serverFactory);
+	if (config.transport.mode === "stdio") return Promise.resolve(startStdio(serverFactory));
 	return Promise.resolve(startHttp(serverFactory, config, deps));
 }

@@ -21,7 +21,8 @@
 		"@devops-agent/mcp-server-kafka": "workspace:*",
 		"@devops-agent/mcp-server-konnect": "workspace:*",
 		"@devops-agent/shared": "workspace:*",
-		"@modelcontextprotocol/sdk": "catalog:"
+		"@modelcontextprotocol/sdk": "catalog:",
+		"@modelcontextprotocol/server": "catalog:"
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:dev",

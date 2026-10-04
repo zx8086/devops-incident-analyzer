@@ -1,6 +1,6 @@
 // src/server.ts
 import { createCachedServerFactory } from "@devops-agent/shared";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import pkg from "../package.json" with { type: "json" };
 import type { Config } from "./config.ts";
 import { registerElasticTools } from "./tools/elastic.ts";
