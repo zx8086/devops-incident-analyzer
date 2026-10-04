@@ -174,9 +174,16 @@ export function installToolCallLogging(
 				error: error instanceof Error ? error.message : String(error),
 			});
 			// SIO-1402: dispatch-level rejections are transport failures, not tool
-			// semantics -- unclassified. (An unknown tool name does NOT land here:
-			// measured SDK behavior resolves it to an isError result, classified above.)
-			emitOutcome({ tool, ok: false, durationMs });
+			// semantics -- unclassified. SIO-1958: except an unknown tool name. SDK v1
+			// resolves it to an isError result (classified above); SDK v2 throws it as a
+			// JSON-RPC -32602 error, so the same text is classified here.
+			const message = error instanceof Error ? error.message : String(error);
+			emitOutcome({
+				tool,
+				ok: false,
+				durationMs,
+				...(classifyFailureText(message) === "unknown-tool" && { failureClass: "unknown-tool" as const }),
+			});
 			throw error;
 		}
 	};

@@ -3,7 +3,7 @@
 // the agent speaks today (legacy: "stateless") and the 2026-07-28 protocol, and the dispatch-level
 // logging wrap that createMcpApplication installs must still stamp validation failures on v2.
 import { describe, expect, test } from "bun:test";
-import { installToolCallLogging } from "@devops-agent/shared";
+import { installToolCallLogging, type ToolCallOutcome } from "@devops-agent/shared";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import type { Config } from "./config.ts";
 import { createMcpServerFactory } from "./server.ts";
@@ -11,6 +11,7 @@ import type { GitLabReadClient } from "./tools/repositories.ts";
 
 const MODERN = "2026-07-28";
 const silent = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+const outcomes: ToolCallOutcome[] = [];
 
 function config(): Config {
 	return {
@@ -26,7 +27,7 @@ function handler() {
 	return createMcpHandler(
 		() => {
 			const server = inner();
-			installToolCallLogging(server, silent);
+			installToolCallLogging(server, silent, undefined, (outcome) => outcomes.push(outcome));
 			return server;
 		},
 		{ legacy: "stateless" },
@@ -131,9 +132,14 @@ describe("SIO-1958: landing-zone-iac wire protocol on SDK v2", () => {
 		});
 
 		test(`${era} era: an unknown tool is a JSON-RPC -32602 error, not an isError result`, async () => {
+			outcomes.length = 0;
 			const { body } = await call("lz_no_such_tool", {});
 			expect((body as CallBody).result).toBeUndefined();
 			expect((body as CallBody).error?.code).toBe(-32602);
+			// The metric that catches stale or hallucinated tool names must still see it.
+			expect(outcomes).toEqual([
+				{ tool: "lz_no_such_tool", ok: false, durationMs: expect.any(Number), failureClass: "unknown-tool" },
+			]);
 		});
 	}
 });
