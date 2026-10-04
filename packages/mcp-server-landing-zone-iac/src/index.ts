@@ -5,6 +5,7 @@ import {
 	createMcpApplication,
 	createReadinessProbe,
 } from "@devops-agent/shared";
+import type { McpServer } from "@modelcontextprotocol/server";
 import pkg from "../package.json" with { type: "json" };
 import { type Config, loadConfig } from "./config.ts";
 import { logger } from "./logger.ts";
@@ -12,7 +13,7 @@ import { createMcpServerFactory } from "./server.ts";
 import { createTransport } from "./transport.ts";
 
 if (import.meta.main) {
-	createMcpApplication<Config>({
+	createMcpApplication<Config, McpServer>({
 		name: "landing-zone-iac-mcp-server",
 		logger: createBootstrapAdapter(logger),
 		initTracing: () => {},

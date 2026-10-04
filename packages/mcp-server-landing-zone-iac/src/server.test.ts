@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { connectV1TestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
+import { connectTestClient } from "@devops-agent/shared/src/testing/mcp-test-client.ts";
+import { createMcpHandler } from "@modelcontextprotocol/server";
 import type { Config } from "./config.ts";
 import { createServer } from "./server.ts";
 import type { GitLabReadClient } from "./tools/repositories.ts";
@@ -23,7 +24,7 @@ function baseConfig(): Config {
 
 async function listedTools(config: Config, writeClient?: GitLabWriteClient) {
 	const serverFactory = () => createServer(config, {} as GitLabReadClient, writeClient);
-	const mcpClient = await connectV1TestClient(serverFactory, "landing-zone-surface-test");
+	const mcpClient = await connectTestClient(createMcpHandler(serverFactory).fetch, "landing-zone-surface-test");
 	const result = await mcpClient.listTools();
 	await mcpClient.close();
 	return result.tools;
@@ -118,7 +119,7 @@ describe("Landing Zone MCP server", () => {
 			},
 		} as unknown as GitLabReadClient;
 		const serverFactory = () => createServer(enabledConfig(), readClient, {} as GitLabWriteClient);
-		const mcpClient = await connectV1TestClient(serverFactory, "landing-zone-watch-test");
+		const mcpClient = await connectTestClient(createMcpHandler(serverFactory).fetch, "landing-zone-watch-test");
 
 		const result = await mcpClient.callTool({
 			name: "lz_watch_pipeline",

@@ -1,6 +1,5 @@
 import { createCachedServerFactory } from "@devops-agent/shared";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import { type CallToolResult, McpServer, type ToolAnnotations } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import pkg from "../package.json" with { type: "json" };
 import type { Config } from "./config.ts";
