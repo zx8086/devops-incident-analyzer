@@ -281,9 +281,32 @@ function injectElasticHeaders(): { headers: Record<string, string> } | undefined
 	return Object.keys(headers).length > 0 ? { headers } : undefined;
 }
 
-export async function createMcpClient(config: McpClientConfig): Promise<void> {
+// One adapter client per server, shared by boot connect and reconnect so both stay identical.
+async function newServerClient(name: string, url: string) {
 	const { MultiServerMCPClient } = await import("@langchain/mcp-adapters");
+	const beforeToolCall = name === "elastic-mcp" ? injectElasticHeaders : injectTraceHeaders;
+	// SIO-893: elastic-iac drift tools poll a CI pipeline well past the 60s
+	// adapter default; set a per-server tool timeout above their internal budget.
+	const toolTimeout = toolTimeoutFor(name);
+	return new MultiServerMCPClient({
+		beforeToolCall: () => beforeToolCall(),
+		// SIO-1955: adapter 2.0 prefixes tool names with the server name by default. Tool YAML,
+		// action-driven selection and prompts key on the bare MCP names, so keep 1.x naming.
+		prefixToolNameWithServerName: false,
+		mcpServers: {
+			[name]: {
+				transport: "http",
+				url,
+				// SIO-1955: stay on the 2025-era protocol until each server is ported and proven
+				// (kafka and aws also need the AgentCore proxy to forward the new headers, SIO-1956).
+				mode: "legacy",
+				...(toolTimeout !== undefined && { defaultToolTimeout: toolTimeout }),
+			},
+		},
+	});
+}
 
+export async function createMcpClient(config: McpClientConfig): Promise<void> {
 	activeToolMiddleware = config.toolMiddleware;
 
 	const serverEntries: Array<{ name: string; url: string }> = [];
@@ -341,20 +364,7 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 			// services present only outside it as "absent"). One client per server here, so
 			// top-level == per-server scope. The old `as never` cast was masking exactly this
 			// shape mismatch; it is no longer needed.
-			const beforeToolCall = name === "elastic-mcp" ? injectElasticHeaders : injectTraceHeaders;
-			// SIO-893: elastic-iac drift tools poll a CI pipeline well past the 60s
-			// adapter default; set a per-server tool timeout above their internal budget.
-			const toolTimeout = toolTimeoutFor(name);
-			const client = new MultiServerMCPClient({
-				beforeToolCall: () => beforeToolCall(),
-				mcpServers: {
-					[name]: {
-						transport: "http",
-						url,
-						...(toolTimeout !== undefined && { defaultToolTimeout: toolTimeout }),
-					},
-				},
-			});
+			const client = await newServerClient(name, url);
 			const tools = await withTimeout(client.getTools(), connectTimeoutFor(name), `MCP connect to '${name}' (${url})`);
 			return { name, tools };
 		}),
@@ -736,24 +746,9 @@ export async function getGitlabSemanticSearchStatus(): Promise<EmbeddingsNotRead
 type ReconnectToolLoader = (name: string, mcpUrl: string) => Promise<StructuredToolInterface[]>;
 
 async function loadReconnectTools(name: string, mcpUrl: string): Promise<StructuredToolInterface[]> {
-	const { MultiServerMCPClient } = await import("@langchain/mcp-adapters");
-	// SIO-649: Keep elastic reconnects on injectElasticHeaders so deployment routing survives.
-	// SIO-1086: beforeToolCall is a TOP-LEVEL config field, not per-server (see createMcpClient).
-	const beforeToolCall = name === "elastic-mcp" ? injectElasticHeaders : injectTraceHeaders;
-	// SIO-893/SIO-1086: mirror createMcpClient and preserve the per-server tool timeout on
-	// reconnect too -- without it, elastic-iac drift tools (which poll CI well past the 60s
-	// adapter default) fall back to that default and start timing out after any reconnect.
-	const toolTimeout = toolTimeoutFor(name);
-	const client = new MultiServerMCPClient({
-		beforeToolCall: () => beforeToolCall(),
-		mcpServers: {
-			[name]: {
-				transport: "http",
-				url: mcpUrl,
-				...(toolTimeout !== undefined && { defaultToolTimeout: toolTimeout }),
-			},
-		},
-	});
+	// SIO-649/SIO-893/SIO-1086: the same client as boot connect, so elastic reconnects keep
+	// injectElasticHeaders and every server keeps its per-server tool timeout.
+	const client = await newServerClient(name, mcpUrl);
 	return withTimeout(client.getTools(), connectTimeoutFor(name), `MCP reconnect to '${name}' (${mcpUrl})`);
 }
 
