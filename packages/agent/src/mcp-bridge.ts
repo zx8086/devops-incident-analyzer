@@ -307,7 +307,6 @@ async function newServerClient(name: string, url: string) {
 }
 
 export async function createMcpClient(config: McpClientConfig): Promise<void> {
-
 	activeToolMiddleware = config.toolMiddleware;
 
 	const serverEntries: Array<{ name: string; url: string }> = [];
